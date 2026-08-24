@@ -102,6 +102,23 @@ public sealed class PowerLookupTests
     }
 
     [Fact]
+    public void GetWatts_skips_a_fallback_candidate_whose_key_is_unrecognized_on_the_other_axis()
+    {
+        var model = ModelFixtures.ForeignSchemaModel();
+
+        // Needs the ("-1:1", "30:60") corner. The model has no exact band there, and among the
+        // same-gradient candidates one has an unrecognized DurationKey ("legacy-duration-key") that
+        // isn't in PowerModelBands.Duration. Resolving this corner must not throw when indexing that
+        // band's duration anchor - it should be skipped, falling through to the recognized
+        // ("-1:1", "0:30") band (180W) instead.
+        var estimate = new PowerLookup(model).GetWatts(0.015, TimeSpan.FromMinutes(40));
+
+        Assert.InRange(estimate.Watts, 264, 266);
+        Assert.True(estimate.Extrapolated);
+        Assert.Equal(ConfidenceLevel.High, estimate.Confidence);
+    }
+
+    [Fact]
     public void GetWatts_returns_global_typical_watts_for_an_empty_model()
     {
         var model = new PowerModel([], 215);

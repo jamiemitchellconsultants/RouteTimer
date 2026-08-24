@@ -93,28 +93,59 @@ public sealed class PowerLookup
 
     /// <summary>
     /// Resolves an effective (Watts, Confidence, WasFallback) for one grid corner from the (possibly
-    /// sparse) model, in priority order: exact cell, same-gradient/nearest-duration, same-duration/
-    /// nearest-gradient, then GlobalTypicalWatts as the last resort.
+    /// sparse, possibly foreign-schema) model, in priority order: exact cell, same-gradient/nearest-
+    /// duration, same-duration/nearest-gradient, then GlobalTypicalWatts as the last resort.
     /// </summary>
     private (double Watts, ConfidenceLevel Confidence, bool WasFallback) ResolveCorner(GradientBand gradeBand, DurationBand durationBand)
     {
         if (_exact.TryGetValue((gradeBand.Key, durationBand.Key), out var exact)) return (exact.TypicalWatts, exact.Confidence, false);
 
-        var sameGrade = _byGradeKey[gradeBand.Key].ToList();
-        if (sameGrade.Count > 0)
-        {
-            var nearest = sameGrade.MinBy(band => Math.Abs((_durationBandsByKey[band.DurationKey].Anchor - durationBand.Anchor).Ticks));
-            return (nearest!.TypicalWatts, nearest.Confidence, true);
-        }
+        var sameGradeNearest = NearestByDurationAnchor(_byGradeKey[gradeBand.Key], durationBand.Anchor);
+        if (sameGradeNearest is not null) return (sameGradeNearest.TypicalWatts, sameGradeNearest.Confidence, true);
 
-        var sameDuration = _byDurationKey[durationBand.Key].ToList();
-        if (sameDuration.Count > 0)
-        {
-            var nearest = sameDuration.MinBy(band => Math.Abs(_gradientBandsByKey[band.GradeKey].Anchor - gradeBand.Anchor));
-            return (nearest!.TypicalWatts, nearest.Confidence, true);
-        }
+        var sameDurationNearest = NearestByGradientAnchor(_byDurationKey[durationBand.Key], gradeBand.Anchor);
+        if (sameDurationNearest is not null) return (sameDurationNearest.TypicalWatts, sameDurationNearest.Confidence, true);
 
         return (_model.GlobalTypicalWatts, ConfidenceLevel.Low, true);
+    }
+
+    /// <summary>
+    /// Among <paramref name="candidates"/> (all sharing a gradient key), finds the one whose duration
+    /// band anchor is closest to <paramref name="targetAnchor"/>. A candidate whose DurationKey isn't
+    /// in the current canonical band set (e.g. a band persisted by an older schema version) is skipped
+    /// rather than throwing, so <see cref="ResolveCorner"/> can fall through to its next tier.
+    /// </summary>
+    private PowerBand? NearestByDurationAnchor(IEnumerable<PowerBand> candidates, TimeSpan targetAnchor)
+    {
+        PowerBand? nearest = null;
+        var nearestDistance = TimeSpan.MaxValue;
+        foreach (var candidate in candidates)
+        {
+            if (!_durationBandsByKey.TryGetValue(candidate.DurationKey, out var durationBand)) continue;
+            var distance = (durationBand.Anchor - targetAnchor).Duration();
+            if (nearest is not null && distance >= nearestDistance) continue;
+            nearest = candidate;
+            nearestDistance = distance;
+        }
+
+        return nearest;
+    }
+
+    /// <summary>Same idea as <see cref="NearestByDurationAnchor"/>, mirrored for the gradient axis.</summary>
+    private PowerBand? NearestByGradientAnchor(IEnumerable<PowerBand> candidates, double targetAnchor)
+    {
+        PowerBand? nearest = null;
+        var nearestDistance = double.MaxValue;
+        foreach (var candidate in candidates)
+        {
+            if (!_gradientBandsByKey.TryGetValue(candidate.GradeKey, out var gradientBand)) continue;
+            var distance = Math.Abs(gradientBand.Anchor - targetAnchor);
+            if (nearest is not null && distance >= nearestDistance) continue;
+            nearest = candidate;
+            nearestDistance = distance;
+        }
+
+        return nearest;
     }
 
     /// <summary>Linear blend along the duration axis, guarding the zero-span (single-band) case.</summary>

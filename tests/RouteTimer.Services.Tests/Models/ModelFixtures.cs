@@ -47,6 +47,22 @@ internal static class ModelFixtures
         220);
 
     /// <summary>
+    /// Simulates a model persisted by a foreign/older schema version: alongside canonical data, it
+    /// carries a band whose GradeKey ("-1:1") matches the current schema but whose DurationKey
+    /// ("legacy-duration-key") is not in the current canonical duration band set. A query needing the
+    /// ("-1:1","30:60") corner as a same-gradient fallback must skip this unrecognized candidate rather
+    /// than throwing, and fall through to the recognized ("-1:1","0:30") band instead.
+    /// </summary>
+    public static PowerModel ForeignSchemaModel() => new(
+        [
+            new PowerBand("-1:1", "0:30", 180, TimeSpan.FromMinutes(20), 3, 1, ConfidenceLevel.High),
+            new PowerBand("-1:1", "legacy-duration-key", 999, TimeSpan.FromMinutes(20), 3, 1, ConfidenceLevel.High),
+            new PowerBand("1:3", "0:30", 260, TimeSpan.FromMinutes(20), 3, 1, ConfidenceLevel.High),
+            new PowerBand("1:3", "30:60", 300, TimeSpan.FromMinutes(20), 3, 1, ConfidenceLevel.High)
+        ],
+        220);
+
+    /// <summary>
     /// A single-sample activity landing in exactly one gradient/duration cell: <paramref name="movingDuration"/>
     /// is the activity's total moving time (and, with one sample, also this sample's full weight);
     /// <paramref name="elapsed"/> is the cumulative moving time at the sample, which selects the duration band.
