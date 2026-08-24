@@ -83,7 +83,7 @@ public sealed class DescentLimitBuilder : IDescentLimitBuilder
         var activityWeight = Math.Clamp(activityCount / (double)FullActivityCount, 0, 1);
         var shrinkage = Math.Min(durationWeight, activityWeight);
         var learnedCap = conservativeCap + (shrinkage * (observedP90 - conservativeCap));
-        var effectiveCap = Math.Clamp(Math.Min(learnedCap, hardCap), 2, hardCap);
+        var effectiveCap = Math.Min(hardCap, Math.Max(2, learnedCap));
         var confidence = evidenceSeconds >= FullEvidenceSeconds && activityCount >= FullActivityCount
             ? ConfidenceLevel.High
             : ConfidenceLevel.Medium;

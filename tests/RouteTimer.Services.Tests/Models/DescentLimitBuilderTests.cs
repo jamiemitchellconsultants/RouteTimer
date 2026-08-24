@@ -95,6 +95,24 @@ public sealed class DescentLimitBuilderTests
     }
 
     [Fact]
+    public void Build_lets_extreme_representative_curvature_override_the_two_metre_floor()
+    {
+        var activities = new[]
+        {
+            Activity("one", 400, 10, -.10, .8),
+            Activity("two", 400, 10, -.10, .8),
+            Activity("three", 400, 10, -.10, .8)
+        };
+
+        var cell = Cell(new DescentLimitBuilder().Build(activities), "steep", "tight");
+
+        Assert.True(double.IsFinite(cell.SpeedCapMetresPerSecond));
+        Assert.InRange(cell.SpeedCapMetresPerSecond, double.Epsilon, 1.5811388300841898);
+        Assert.Equal(ConfidenceLevel.High, cell.Confidence);
+        Assert.False(cell.IsFallback);
+    }
+
+    [Fact]
     public void Build_produces_all_nine_cells_with_learned_and_fallback_provenance()
     {
         var activities = new[]

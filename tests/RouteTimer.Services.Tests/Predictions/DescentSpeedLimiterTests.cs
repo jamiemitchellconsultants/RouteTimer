@@ -71,6 +71,18 @@ public sealed class DescentSpeedLimiterTests
     }
 
     [Fact]
+    public void Resolve_lets_extreme_actual_curvature_override_the_two_metre_floor()
+    {
+        var model = Grid((grade, curvature) =>
+            new DescentLimitCell(grade, curvature, 19, TimeSpan.FromMinutes(20), 3, ConfidenceLevel.High, false));
+
+        var result = new DescentSpeedLimiter().Resolve(-.10, .8, model);
+
+        Assert.Equal(1.5811388300841898, result.SpeedCapMetresPerSecond, 12);
+        Assert.False(result.UsedFallback);
+    }
+
+    [Fact]
     public void Resolve_uses_no_cap_for_grade_above_descent_grid()
     {
         var result = new DescentSpeedLimiter().Resolve(-.0199999999, 0, DescentLimitModel.Conservative);
