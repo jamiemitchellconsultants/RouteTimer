@@ -2,14 +2,19 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using RouteTimer.Contracts.Profile;
 using RouteTimer.Contracts.Training;
+using RouteTimer.Contracts.Predictions;
 using RouteTimer.Services.Profile;
 using RouteTimer.Services.Training;
+using RouteTimer.Services.Routes;
+using RouteTimer.Services.Validation;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHealthChecks();
 builder.Services.AddSingleton<ProfileService>();
 builder.Services.AddSingleton<TrainingUploadService>();
+builder.Services.AddSingleton<IGpxRouteParser, GpxRouteParser>();
+builder.Services.AddSingleton<IRouteProcessor>(_ => new RouteProcessor(RouteProcessingOptions.Default));
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
@@ -63,6 +68,32 @@ app.MapPost("/api/training/uploads", async (HttpRequest request, TrainingUploadS
 
         var results = await uploads.AcceptAsync(batch, cancellationToken);
         return Results.Ok(results.Select(result => new TrainingUploadResponse(result.FileName, result.Outcome.ToString().ToLowerInvariant(), result.ErrorCode)));
+    })
+    .RequireAuthorization();
+app.MapPost("/api/predictions", async (HttpRequest request, IGpxRouteParser parser, IRouteProcessor processor, CancellationToken cancellationToken) =>
+    {
+        if (!request.HasFormContentType)
+        {
+            return Results.BadRequest(new { code = "multipart-required" });
+        }
+
+        var file = (await request.ReadFormAsync(cancellationToken)).Files.SingleOrDefault();
+        if (file is null || !file.FileName.EndsWith(".gpx", StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.BadRequest(new { code = "prediction-gpx-required" });
+        }
+
+        try
+        {
+            await using var input = file.OpenReadStream();
+            var parsed = await parser.ParseAsync(input, cancellationToken);
+            var route = processor.Process(parsed.Points);
+            return Results.Ok(new PredictionRoutePreview(parsed.Name, route.DistanceMetres, route.AscentMetres, route.Samples.Count));
+        }
+        catch (RouteInputException exception)
+        {
+            return Results.BadRequest(new { code = "invalid-gpx", message = exception.Message });
+        }
     })
     .RequireAuthorization();
 

@@ -26,4 +26,15 @@ public sealed class AuthorizationTests
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
+
+    [Fact]
+    public async Task Prediction_submission_endpoint_requires_authentication()
+    {
+        await using var app = new WebApplicationFactory<Program>();
+        using var client = app.CreateClient();
+
+        using var response = await client.PostAsync("/api/predictions", new MultipartFormDataContent());
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
 }
