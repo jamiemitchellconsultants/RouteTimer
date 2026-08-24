@@ -275,6 +275,32 @@ public sealed class PredictionWorkflowTests
         Assert.Null(predictions.Failure);
     }
 
+    // Break caught: a handler-wide overflow filter rewrites retryable predictor or repository faults as invalid results.
+    [Theory]
+    [InlineData("predictor")]
+    [InlineData("publish")]
+    public async Task Handler_leaves_overflow_outside_result_construction_unclassified_for_retry(string source)
+    {
+        var predictionId = Guid.NewGuid();
+        var model = ModelSnapshot("captured", 210);
+        var overflow = new OverflowException($"{source}-overflow");
+        var predictions = new FakePredictionRepository
+        {
+            Processing = new PredictionForProcessing(predictionId,
+                new StoredUpload(Guid.NewGuid(), "route.gpx", "gpx", GpxBytes(), new byte[32], DateTimeOffset.UtcNow), model.Id, new RiderProfile(75, 10)),
+            PublishException = source == "publish" ? overflow : null,
+        };
+        IRoutePredictor predictor = source == "predictor" ? new OverflowPredictor(overflow) : new CapturingPredictor();
+        var handler = new PredictionJobHandler(predictions, new FixedModelRepository(null) { ById = { [model.Id] = model } }, new GpxRouteParser(),
+            new RouteProcessor(RouteProcessingOptions.Default), predictor);
+
+        var actual = await Assert.ThrowsAsync<OverflowException>(() => handler.HandleAsync(
+            new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 1, "worker", null, DateTimeOffset.UtcNow), CancellationToken.None));
+
+        Assert.Same(overflow, actual);
+        Assert.Null(predictions.Published);
+    }
+
     private static PredictionUpload Upload() => new("route.gpx", new MemoryStream(GpxBytes()));
 
     private static byte[] GpxBytes() => """
@@ -311,6 +337,7 @@ public sealed class PredictionWorkflowTests
     {
         public List<QueuedPredictionCreation> Created { get; } = [];
         public PredictionForProcessing? Processing { get; init; }
+        public Exception? PublishException { get; init; }
         public PredictionPublication? Published { get; private set; }
         public (string Code, string Message)? Failure { get; private set; }
         public Task<QueuedPredictionSubmission> CreateQueuedAsync(QueuedPredictionCreation creation, CancellationToken cancellationToken)
@@ -320,7 +347,12 @@ public sealed class PredictionWorkflowTests
         }
 
         public Task<PredictionForProcessing?> GetForProcessingAsync(Guid predictionId, CancellationToken cancellationToken) => Task.FromResult(Processing);
-        public Task PublishAsync(Guid predictionId, PredictionPublication publication, CancellationToken cancellationToken) { Published = publication; return Task.CompletedTask; }
+        public Task PublishAsync(Guid predictionId, PredictionPublication publication, CancellationToken cancellationToken)
+        {
+            if (PublishException is not null) throw PublishException;
+            Published = publication;
+            return Task.CompletedTask;
+        }
         public Task FailAsync(Guid predictionId, string code, string message, CancellationToken cancellationToken) { Failure = (code, message); return Task.CompletedTask; }
         public Task<IReadOnlyList<PredictionSummary>> GetSummariesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<PredictionDetail?> GetAsync(Guid predictionId, CancellationToken cancellationToken) => throw new NotSupportedException();
@@ -431,5 +463,10 @@ public sealed class PredictionWorkflowTests
     private sealed class ThrowingPredictor : IRoutePredictor
     {
         public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model) => throw new InvalidOperationException("transient");
+    }
+
+    private sealed class OverflowPredictor(OverflowException exception) : IRoutePredictor
+    {
+        public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model) => throw exception;
     }
 }

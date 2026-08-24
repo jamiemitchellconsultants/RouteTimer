@@ -30,14 +30,23 @@ public sealed class PredictionJobHandler(
             var parsed = await parser.ParseAsync(content, cancellationToken);
             var route = processor.Process(parsed.Points);
             var result = predictor.Predict(route, prediction.Profile, model.Model);
-            var publication = BuildPublication(route, result, model);
+            PredictionPublication publication;
+            try
+            {
+                publication = BuildPublication(route, result, model);
+            }
+            catch (OverflowException exception)
+            {
+                throw new PredictionJobException("invalid-prediction-result", "The prediction contains overflowing time values.", exception);
+            }
+
             await predictions.PublishAsync(prediction.Id, publication, cancellationToken);
         }
         catch (PredictionJobException)
         {
             throw;
         }
-        catch (Exception exception) when (exception is RouteInputException or PredictionCalculationException or ArgumentException or OverflowException)
+        catch (Exception exception) when (exception is RouteInputException or PredictionCalculationException or ArgumentException)
         {
             const string code = "invalid-prediction-result";
             throw new PredictionJobException(code, "The route could not produce a valid prediction.", exception);
