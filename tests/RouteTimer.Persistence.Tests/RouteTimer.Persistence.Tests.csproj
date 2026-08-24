@@ -22,4 +22,9 @@
     <ProjectReference Include="..\..\src\RouteTimer.Persistence\RouteTimer.Persistence.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
+  </ItemGroup>
+
 </Project>
