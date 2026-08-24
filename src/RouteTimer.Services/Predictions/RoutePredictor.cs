@@ -133,9 +133,18 @@ public sealed class RoutePredictor : IRoutePredictor
         var forceSpeed = Math.Max(entrySpeed, InitialSpeedMetresPerSecond);
         var wheelPower = riderPower * coefficients.DrivetrainEfficiency;
         var drivingForce = wheelPower / forceSpeed;
-        var resistance = CyclingForces.GravityForce(grade, mass)
-            + CyclingForces.RollingForce(grade, mass, coefficients.Crr)
-            + CyclingForces.AerodynamicForce(entrySpeed, coefficients.AirDensity, coefficients.CdA);
+        double resistance;
+        try
+        {
+            resistance = CyclingForces.GravityForce(grade, mass)
+                + CyclingForces.RollingForce(grade, mass, coefficients.Crr)
+                + CyclingForces.AerodynamicForce(entrySpeed, coefficients.AirDensity, coefficients.CdA);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            throw new PredictionCalculationException("Prediction produced invalid resistance force.");
+        }
+
         var acceleration = (drivingForce - resistance) / mass;
         var exitSquared = entrySpeed * entrySpeed + 2 * acceleration * distance;
         if (!double.IsFinite(exitSquared))

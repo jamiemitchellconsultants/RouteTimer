@@ -190,6 +190,30 @@ public sealed class PredictionWorkflowTests
         Assert.Null(predictions.Published);
     }
 
+    // Break caught: malformed predictor structure or cumulative TimeSpan overflow escapes as a transient worker exception.
+    [Theory]
+    [InlineData("null-segments")]
+    [InlineData("null-warnings")]
+    [InlineData("cumulative-overflow")]
+    public async Task Handler_classifies_malformed_structure_and_time_overflow_as_permanent_invalid_results(string kind)
+    {
+        var predictionId = Guid.NewGuid();
+        var model = ModelSnapshot("captured", 210);
+        var predictions = new FakePredictionRepository
+        {
+            Processing = new PredictionForProcessing(predictionId,
+                new StoredUpload(Guid.NewGuid(), "route.gpx", "gpx", GpxBytes(), new byte[32], DateTimeOffset.UtcNow), model.Id, new RiderProfile(75, 10))
+        };
+        var handler = new PredictionJobHandler(predictions, new FixedModelRepository(null) { ById = { [model.Id] = model } }, new GpxRouteParser(),
+            new RouteProcessor(RouteProcessingOptions.Default), new MalformedStructurePredictor(kind));
+
+        var exception = await Assert.ThrowsAsync<PredictionJobException>(() => handler.HandleAsync(
+            new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 1, "worker", null, DateTimeOffset.UtcNow), CancellationToken.None));
+
+        Assert.Equal("invalid-prediction-result", exception.Code);
+        Assert.Null(predictions.Published);
+    }
+
     // Break caught: NaN output or mismatched segment/time data is persisted instead of becoming a permanent prediction failure.
     [Theory]
     [InlineData("non-finite", "invalid-prediction-result")]
@@ -379,6 +403,29 @@ public sealed class PredictionWorkflowTests
     {
         public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model) =>
             throw new PredictionCalculationException("Simulation could not progress.");
+    }
+
+    private sealed class MalformedStructurePredictor(string kind) : IRoutePredictor
+    {
+        public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model)
+        {
+            if (kind == "null-segments")
+                return new PredictionResult(null!, TimeSpan.Zero, ConfidenceLevel.Low, []);
+
+            var segments = route.Samples.Skip(1).Select((sample, index) => new PredictionSegment(
+                sample.Sequence,
+                sample.SegmentDistanceMetres,
+                sample.Gradient,
+                200,
+                5,
+                kind == "cumulative-overflow" && index == 0 ? TimeSpan.MaxValue : TimeSpan.FromTicks(1),
+                ConfidenceLevel.Low)).ToList();
+            return new PredictionResult(
+                segments,
+                kind == "cumulative-overflow" ? TimeSpan.MaxValue : TimeSpan.FromTicks(segments.Count),
+                ConfidenceLevel.Low,
+                kind == "null-warnings" ? null! : []);
+        }
     }
 
     private sealed class ThrowingPredictor : IRoutePredictor

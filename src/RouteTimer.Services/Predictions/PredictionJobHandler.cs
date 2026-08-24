@@ -37,7 +37,7 @@ public sealed class PredictionJobHandler(
         {
             throw;
         }
-        catch (Exception exception) when (exception is RouteInputException or PredictionCalculationException or ArgumentException)
+        catch (Exception exception) when (exception is RouteInputException or PredictionCalculationException or ArgumentException or OverflowException)
         {
             const string code = "invalid-prediction-result";
             throw new PredictionJobException(code, "The route could not produce a valid prediction.", exception);
@@ -46,6 +46,11 @@ public sealed class PredictionJobHandler(
 
     private static PredictionPublication BuildPublication(RouteTimer.Domain.Routes.ProcessedRoute route, PredictionResult result, RiderModelSnapshot model)
     {
+        if (result.Segments is null || result.Warnings is null)
+        {
+            throw new PredictionJobException("invalid-prediction-result", "The prediction result structure is invalid.");
+        }
+
         var routeSegments = route.Samples.Skip(1).ToArray();
         if (routeSegments.Length != result.Segments.Count || !routeSegments.Select(sample => sample.Sequence).SequenceEqual(result.Segments.Select(segment => segment.Sequence)))
         {

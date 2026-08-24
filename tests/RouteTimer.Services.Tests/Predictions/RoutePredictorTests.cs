@@ -181,6 +181,17 @@ public sealed class RoutePredictorTests
         new PhysicalCoefficients(.97, 1.225, .005, double.PositiveInfinity),
     };
 
+    // Break caught: a force helper's finite-input overflow guard leaks ArgumentOutOfRangeException past the predictor boundary.
+    [Fact]
+    public void Predict_translates_finite_force_overflow_to_a_calculation_failure()
+    {
+        var route = PredictionFixtures.Route((1, 0, 0));
+        var coefficients = new PhysicalCoefficients(1, double.MaxValue, 0, double.MaxValue);
+        var model = PredictionFixtures.Model(new PowerModel([], 100), coefficients, calibrated: true);
+
+        Assert.Throws<PredictionCalculationException>(() => PredictionFixtures.Predict(route, model, new RiderProfile(75, 10)));
+    }
+
     // Break caught: corrupt route totals or segment geometry bypass the calculation error boundary.
     [Theory]
     [InlineData("total-distance")]
