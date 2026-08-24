@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using RouteTimer.Domain.Jobs;
 using RouteTimer.Persistence;
 using RouteTimer.Persistence.Jobs;
@@ -345,5 +346,73 @@ public sealed class PostgresJobQueueTests
         Assert.NotEqual(firstId, secondId);
         var jobs = await context.Jobs.AsNoTracking().Where(job => job.SubjectId == subjectId).ToListAsync();
         Assert.Equal(2, jobs.Count);
+    }
+
+    /// <summary>
+    /// Reproduces, deterministically, the narrow race the code guards against: a racing insert fails
+    /// with a unique-index conflict against a job that is still Queued/Running at that exact instant,
+    /// but that job is claimed and completed (by a different connection) before the fallback lookup for
+    /// "who won" runs - so that lookup finds nothing. EnqueueIfNotPendingAsync must retry its insert in
+    /// that case rather than letting an InvalidOperationException from an empty sequence escape (which
+    /// would otherwise surface as a spurious failure of an unrelated, already-successful caller, e.g.
+    /// ParseTrainingJobHandler after it already saved a parsed activity).
+    ///
+    /// Postgres only checks the unique constraint against rows committed at insert time, so genuinely
+    /// reproducing "conflict, then the row disappears before the next statement" requires the completion
+    /// to happen inside the single await gap between the racing insert's failure and its own fallback
+    /// SELECT - not just "at some point during the test". A SaveChangesInterceptor gives us that precise
+    /// hook: EF Core invokes SaveChangesFailedAsync synchronously, while still inside the failing
+    /// SaveChangesAsync call, before the exception is handed back to our code's catch block.
+    /// </summary>
+    [Fact]
+    public async Task EnqueueIfNotPendingAsync_retries_once_when_the_conflicting_job_becomes_terminal_before_the_fallback_lookup_runs()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using (var migrationContext = CreateContext(database))
+        {
+            await migrationContext.Database.MigrateAsync();
+        }
+
+        var subjectId = ModelSubject.Id;
+        await using var completerContext = CreateContext(database);
+        var completerQueue = new PostgresJobQueue(completerContext);
+        var conflictingId = await completerQueue.EnqueueAsync(JobType.BuildModel, subjectId, CancellationToken.None);
+        await completerQueue.ClaimAsync("worker-a", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5), CancellationToken.None);
+
+        // Fires from inside the racing context's own failing SaveChangesAsync call - i.e. strictly
+        // between its failed insert and its fallback SELECT - and completes the conflicting job there,
+        // via a wholly separate connection, so the fallback SELECT is guaranteed to find nothing active.
+        var interceptor = new CompleteJobOnSaveFailureInterceptor(
+            () => completerQueue.CompleteAsync(conflictingId, "worker-a", CancellationToken.None));
+        var racingOptions = new DbContextOptionsBuilder<RouteTimerDbContext>()
+            .UseNpgsql(database.GetConnectionString())
+            .AddInterceptors(interceptor)
+            .Options;
+        await using var racingContext = new RouteTimerDbContext(racingOptions);
+        var racingQueue = new PostgresJobQueue(racingContext);
+
+        var resultId = await racingQueue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None);
+
+        Assert.True(interceptor.WasInvoked);
+        Assert.NotEqual(conflictingId, resultId);
+        var jobs = await completerContext.Jobs.AsNoTracking().Where(job => job.SubjectId == subjectId).ToListAsync();
+        Assert.Equal(2, jobs.Count);
+        var freshJob = Assert.Single(jobs, job => job.Id == resultId);
+        Assert.Equal(JobState.Queued.ToString(), freshJob.State);
+    }
+
+    /// <summary>Completes a specific job, via a caller-supplied callback, the moment the context this
+    /// interceptor is attached to fails a SaveChangesAsync call - used to land a completion inside the
+    /// otherwise-unreachable gap between a failed racing insert and its own fallback lookup.</summary>
+    private sealed class CompleteJobOnSaveFailureInterceptor(Func<Task> onSaveFailed) : SaveChangesInterceptor
+    {
+        public bool WasInvoked { get; private set; }
+
+        public override async Task SaveChangesFailedAsync(DbContextErrorEventData eventData, CancellationToken cancellationToken = default)
+        {
+            WasInvoked = true;
+            await onSaveFailed();
+            await base.SaveChangesFailedAsync(eventData, cancellationToken);
+        }
     }
 }
