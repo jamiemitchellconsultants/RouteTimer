@@ -15,4 +15,15 @@ public sealed class AuthorizationTests
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
+
+    [Fact]
+    public async Task Training_upload_endpoint_requires_authentication()
+    {
+        await using var app = new WebApplicationFactory<Program>();
+        using var client = app.CreateClient();
+
+        using var response = await client.PostAsync("/api/training/uploads", new MultipartFormDataContent());
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
 }
