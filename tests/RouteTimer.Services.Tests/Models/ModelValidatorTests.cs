@@ -1,9 +1,11 @@
 using RouteTimer.Domain.Activities;
 using RouteTimer.Domain.Models;
+using RouteTimer.Domain.Physics;
 using RouteTimer.Domain.Predictions;
 using RouteTimer.Domain.Profile;
 using RouteTimer.Domain.Routes;
 using RouteTimer.Services.Models;
+using RouteTimer.Services.Physics;
 using RouteTimer.Services.Predictions;
 using RouteTimer.Services.Routes;
 using RouteTimer.Services.Validation;
@@ -22,7 +24,7 @@ public sealed class ModelValidatorTests
         var builder = new FakePowerModelBuilder([]);
         var routeProcessor = new FakeRouteProcessor([]);
         var predictor = new FakeRoutePredictor([]);
-        var validator = new ModelValidator(builder, routeProcessor, predictor);
+        var validator = CreateValidator(builder, routeProcessor, predictor);
 
         var result = validator.Validate(SampleProfile, activities);
 
@@ -49,7 +51,7 @@ public sealed class ModelValidatorTests
             (_, _, _) => PredictionOf(1250),
             (_, _, _) => PredictionOf(1350),
         ]);
-        var validator = new ModelValidator(builder, routeProcessor, predictor);
+        var validator = CreateValidator(builder, routeProcessor, predictor);
 
         var result = validator.Validate(SampleProfile, activities);
 
@@ -79,7 +81,7 @@ public sealed class ModelValidatorTests
             (_, _, _) => PredictionOf(1100),
             (_, _, _) => PredictionOf(1200),
         ]);
-        var validator = new ModelValidator(builder, routeProcessor, predictor);
+        var validator = CreateValidator(builder, routeProcessor, predictor);
 
         var result = validator.Validate(SampleProfile, activities);
 
@@ -99,7 +101,7 @@ public sealed class ModelValidatorTests
             (_, _, _) => PredictionOf(1110),
             (_, _, _) => PredictionOf(1200),
         ]);
-        var validator = new ModelValidator(builder, routeProcessor, predictor);
+        var validator = CreateValidator(builder, routeProcessor, predictor);
 
         var result = validator.Validate(SampleProfile, activities);
 
@@ -127,7 +129,7 @@ public sealed class ModelValidatorTests
             (_, _, _) => PredictionOf(1350),
             (_, _, _) => PredictionOf(1350),
         ]);
-        var validator = new ModelValidator(builder, routeProcessor, predictor);
+        var validator = CreateValidator(builder, routeProcessor, predictor);
 
         var result = validator.Validate(SampleProfile, activities);
 
@@ -150,7 +152,7 @@ public sealed class ModelValidatorTests
             (_, _, _) => throw new PredictionCalculationException("no valid solution"),
             (_, _, _) => PredictionOf(1200),
         ]);
-        var validator = new ModelValidator(builder, routeProcessor, predictor);
+        var validator = CreateValidator(builder, routeProcessor, predictor);
 
         var result = validator.Validate(SampleProfile, activities);
 
@@ -171,7 +173,7 @@ public sealed class ModelValidatorTests
         ]);
         var routeProcessor = new FakeRouteProcessor([_ => EmptyRoute(), _ => EmptyRoute()]);
         var predictor = new FakeRoutePredictor([(_, _, _) => PredictionOf(1050), (_, _, _) => PredictionOf(1200)]);
-        var validator = new ModelValidator(builder, routeProcessor, predictor);
+        var validator = CreateValidator(builder, routeProcessor, predictor);
 
         var result = validator.Validate(SampleProfile, activities);
 
@@ -193,7 +195,7 @@ public sealed class ModelValidatorTests
             _ => throw new RouteInputException("degenerate trace"),
         ]);
         var predictor = new FakeRoutePredictor([]);
-        var validator = new ModelValidator(builder, routeProcessor, predictor);
+        var validator = CreateValidator(builder, routeProcessor, predictor);
 
         var result = validator.Validate(SampleProfile, activities);
 
@@ -223,13 +225,104 @@ public sealed class ModelValidatorTests
             (_, _, _) => PredictionOf(1050),
             (_, _, _) => PredictionOf(2100),
         ]);
-        var validator = new ModelValidator(builder, routeProcessor, predictor);
+        var calibrator = FakePhysicsCalibrator.Fallbacks(3);
+        var descents = FakeDescentLimitBuilder.Fallbacks(3);
+        var validator = new ModelValidator(builder, calibrator, descents, routeProcessor, predictor);
 
         validator.Validate(SampleProfile, activities);
 
         Assert.Equal(3, builder.ReceivedTrainingSets.Count);
         Assert.All(builder.ReceivedTrainingSets, trainingSet => Assert.Equal(2, trainingSet.Count));
+        Assert.Same(identical, builder.ReceivedTrainingSets[0][0]);
+        Assert.Same(distinct, builder.ReceivedTrainingSets[0][1]);
+        Assert.Same(identical, builder.ReceivedTrainingSets[1][0]);
+        Assert.Same(distinct, builder.ReceivedTrainingSets[1][1]);
+        Assert.Same(identical, builder.ReceivedTrainingSets[2][0]);
+        Assert.Same(identical, builder.ReceivedTrainingSets[2][1]);
+        Assert.Equal(builder.ReceivedTrainingSets, calibrator.ReceivedTrainingSets);
+        Assert.Equal(builder.ReceivedTrainingSets, descents.ReceivedTrainingSets);
     }
+
+    [Fact]
+    public void Validate_never_sends_the_held_out_activity_to_any_fold_builder()
+    {
+        var activities = new List<CleanedActivity> { Activity(1000), Activity(1100), Activity(1200), Activity(1300) };
+        var builder = new FakePowerModelBuilder(Enumerable.Repeat<Func<IReadOnlyList<CleanedActivity>, PowerModel>>(_ => SampleModel, 4));
+        var calibrator = FakePhysicsCalibrator.Fallbacks(4);
+        var descents = FakeDescentLimitBuilder.Fallbacks(4);
+        var routeProcessor = new FakeRouteProcessor(Enumerable.Repeat<Func<IReadOnlyList<GeoPoint>, ProcessedRoute>>(_ => EmptyRoute(), 4));
+        var predictor = new FakeRoutePredictor(activities.Select(activity =>
+            new Func<ProcessedRoute, RiderProfile, RiderModel, PredictionResult>((_, _, _) => PredictionOf(activity.MovingDuration.TotalSeconds))));
+        var validator = new ModelValidator(builder, calibrator, descents, routeProcessor, predictor);
+
+        var result = validator.Validate(SampleProfile, activities);
+
+        Assert.Equal(ModelValidationStatus.Passed, result.Status);
+        Assert.Equal(4, builder.ReceivedTrainingSets.Count);
+        Assert.Equal(4, calibrator.ReceivedTrainingSets.Count);
+        Assert.Equal(4, descents.ReceivedTrainingSets.Count);
+        for (var fold = 0; fold < activities.Count; fold++)
+        {
+            Assert.DoesNotContain(builder.ReceivedTrainingSets[fold], activity => ReferenceEquals(activity, activities[fold]));
+            Assert.Same(builder.ReceivedTrainingSets[fold], calibrator.ReceivedTrainingSets[fold]);
+            Assert.Same(builder.ReceivedTrainingSets[fold], descents.ReceivedTrainingSets[fold]);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Validate_scores_folds_and_propagates_calibration_and_descent_results(bool learned)
+    {
+        var activities = new List<CleanedActivity> { Activity(1000), Activity(1000), Activity(1000) };
+        var coefficients = learned
+            ? new PhysicalCoefficients(.96, 1.20, .006, .28)
+            : PhysicalCoefficients.Default;
+        var calibration = new PhysicalCalibrationResult(
+            coefficients,
+            learned,
+            learned ? "physics-calibrated" : "insufficient-physics-evidence");
+        var descentModel = learned ? LearnedDescentModel() : DescentLimitModel.Conservative;
+        var builder = new FakePowerModelBuilder(Enumerable.Repeat<Func<IReadOnlyList<CleanedActivity>, PowerModel>>(_ => SampleModel, 3));
+        var calibrator = new FakePhysicsCalibrator(Enumerable.Repeat<Func<IReadOnlyList<CleanedActivity>, PhysicalCalibrationResult>>(_ => calibration, 3));
+        var descents = new FakeDescentLimitBuilder(Enumerable.Repeat<Func<IReadOnlyList<CleanedActivity>, DescentLimitModel>>(_ => descentModel, 3));
+        var routeProcessor = new FakeRouteProcessor(Enumerable.Repeat<Func<IReadOnlyList<GeoPoint>, ProcessedRoute>>(_ => EmptyRoute(), 3));
+        var predictor = new FakeRoutePredictor(Enumerable.Repeat<Func<ProcessedRoute, RiderProfile, RiderModel, PredictionResult>>(
+            (_, _, model) =>
+            {
+                Assert.Same(SampleModel, model.PowerModel);
+                Assert.Equal(coefficients, model.Coefficients);
+                Assert.Same(descentModel, model.DescentLimits);
+                Assert.Equal(learned, model.WasCalibrated);
+                Assert.Equal("leave-one-out-fold", model.AlgorithmVersion);
+                return PredictionOf(1000);
+            },
+            3));
+        var validator = new ModelValidator(builder, calibrator, descents, routeProcessor, predictor);
+
+        var result = validator.Validate(SampleProfile, activities);
+
+        Assert.Equal(ModelValidationStatus.Passed, result.Status);
+        Assert.Equal(0, result.MedianAbsolutePercentageError);
+        Assert.Equal(3, predictor.CallCount);
+    }
+
+    private static ModelValidator CreateValidator(
+        FakePowerModelBuilder builder,
+        FakeRouteProcessor routeProcessor,
+        FakeRoutePredictor predictor) =>
+        new(
+            builder,
+            FakePhysicsCalibrator.Fallbacks(builder.PlannedCallCount),
+            FakeDescentLimitBuilder.Fallbacks(builder.PlannedCallCount),
+            routeProcessor,
+            predictor);
+
+    private static DescentLimitModel LearnedDescentModel() => new(
+        DescentLimitModel.Conservative.Cells.Select((cell, index) =>
+            index == 0
+                ? cell with { Evidence = TimeSpan.FromMinutes(20), ActivityCount = 3, Confidence = ConfidenceLevel.High, IsFallback = false }
+                : cell).ToArray());
 
     private static CleanedActivity Activity(double movingSeconds)
     {
@@ -261,6 +354,7 @@ public sealed class ModelValidatorTests
             _handlers = new Queue<Func<IReadOnlyList<CleanedActivity>, PowerModel>>(handlers);
 
         public int CallCount { get; private set; }
+        public int PlannedCallCount => _handlers.Count + CallCount;
         public List<IReadOnlyList<CleanedActivity>> ReceivedTrainingSets { get; } = [];
 
         public PowerModel Build(RiderProfile profile, IReadOnlyList<CleanedActivity> activities)
@@ -272,6 +366,50 @@ public sealed class ModelValidatorTests
                 throw new InvalidOperationException("Unexpected extra IPowerModelBuilder.Build call in test fake.");
             }
 
+            return _handlers.Dequeue()(activities);
+        }
+    }
+
+    private sealed class FakePhysicsCalibrator : IPhysicsCalibrator
+    {
+        private readonly Queue<Func<IReadOnlyList<CleanedActivity>, PhysicalCalibrationResult>> _handlers;
+
+        public FakePhysicsCalibrator(IEnumerable<Func<IReadOnlyList<CleanedActivity>, PhysicalCalibrationResult>> handlers) =>
+            _handlers = new Queue<Func<IReadOnlyList<CleanedActivity>, PhysicalCalibrationResult>>(handlers);
+
+        public List<IReadOnlyList<CleanedActivity>> ReceivedTrainingSets { get; } = [];
+
+        public static FakePhysicsCalibrator Fallbacks(int count) => new(
+            Enumerable.Repeat<Func<IReadOnlyList<CleanedActivity>, PhysicalCalibrationResult>>(
+                _ => new PhysicalCalibrationResult(PhysicalCoefficients.Default, false, "insufficient-physics-evidence"),
+                count));
+
+        public PhysicalCalibrationResult Calibrate(RiderProfile profile, IReadOnlyList<CleanedActivity> activities)
+        {
+            ReceivedTrainingSets.Add(activities);
+            if (_handlers.Count == 0)
+                throw new InvalidOperationException("Unexpected extra IPhysicsCalibrator.Calibrate call in test fake.");
+            return _handlers.Dequeue()(activities);
+        }
+    }
+
+    private sealed class FakeDescentLimitBuilder : IDescentLimitBuilder
+    {
+        private readonly Queue<Func<IReadOnlyList<CleanedActivity>, DescentLimitModel>> _handlers;
+
+        public FakeDescentLimitBuilder(IEnumerable<Func<IReadOnlyList<CleanedActivity>, DescentLimitModel>> handlers) =>
+            _handlers = new Queue<Func<IReadOnlyList<CleanedActivity>, DescentLimitModel>>(handlers);
+
+        public List<IReadOnlyList<CleanedActivity>> ReceivedTrainingSets { get; } = [];
+
+        public static FakeDescentLimitBuilder Fallbacks(int count) => new(
+            Enumerable.Repeat<Func<IReadOnlyList<CleanedActivity>, DescentLimitModel>>(_ => DescentLimitModel.Conservative, count));
+
+        public DescentLimitModel Build(IReadOnlyList<CleanedActivity> activities)
+        {
+            ReceivedTrainingSets.Add(activities);
+            if (_handlers.Count == 0)
+                throw new InvalidOperationException("Unexpected extra IDescentLimitBuilder.Build call in test fake.");
             return _handlers.Dequeue()(activities);
         }
     }

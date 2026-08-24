@@ -1,10 +1,10 @@
 using RouteTimer.Domain.Activities;
 using RouteTimer.Domain.Models;
-using RouteTimer.Domain.Physics;
 using RouteTimer.Domain.Predictions;
 using RouteTimer.Domain.Profile;
 using RouteTimer.Domain.Routes;
 using RouteTimer.Services.Predictions;
+using RouteTimer.Services.Physics;
 using RouteTimer.Services.Routes;
 using RouteTimer.Services.Validation;
 
@@ -18,7 +18,12 @@ namespace RouteTimer.Services.Models;
 /// time. The resulting per-fold absolute percentage errors are summarized as a median and 90th
 /// percentile; the median against a 10% target determines whether the model passes or fails validation.
 /// </summary>
-public sealed class ModelValidator(IPowerModelBuilder builder, IRouteProcessor routeProcessor, IRoutePredictor predictor) : IModelValidator
+public sealed class ModelValidator(
+    IPowerModelBuilder builder,
+    IPhysicsCalibrator calibrator,
+    IDescentLimitBuilder descentBuilder,
+    IRouteProcessor routeProcessor,
+    IRoutePredictor predictor) : IModelValidator
 {
     private const int MinimumEligibleActivities = 3;
     private const double PassingMedianAbsolutePercentageError = .10;
@@ -63,7 +68,14 @@ public sealed class ModelValidator(IPowerModelBuilder builder, IRouteProcessor r
                 continue;
             }
 
-            var foldModel = new RiderModel(foldPowerModel, PhysicalCoefficients.Default, DescentLimitModel.Conservative, false, FoldAlgorithmVersion);
+            var foldCalibration = calibrator.Calibrate(profile, trainingSet);
+            var foldDescents = descentBuilder.Build(trainingSet);
+            var foldModel = new RiderModel(
+                foldPowerModel,
+                foldCalibration.Coefficients,
+                foldDescents,
+                foldCalibration.WasCalibrated,
+                FoldAlgorithmVersion);
 
             ProcessedRoute route;
             try
