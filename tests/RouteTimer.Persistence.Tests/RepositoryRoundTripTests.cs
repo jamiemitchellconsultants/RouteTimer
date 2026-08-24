@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using RouteTimer.Persistence;
 using RouteTimer.Persistence.Entities;
+using RouteTimer.Persistence.Repositories;
+using RouteTimer.Services.Persistence;
 
 namespace RouteTimer.Persistence.Tests;
 
@@ -43,5 +45,23 @@ public sealed class RepositoryRoundTripTests
 
         Assert.Equal(hash, loaded.Sha256);
         Assert.Equal(new byte[] { 1, 2, 3 }, loaded.Content);
+    }
+
+    [Fact]
+    public async Task Store_upload_if_absent_retains_the_first_copy_and_rejects_a_matching_hash()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new StoredUploadRepository(context);
+        var hash = Enumerable.Repeat((byte)9, 32).ToArray();
+
+        var first = await repository.StoreIfAbsentAsync(new StoredUpload("first.fit", "fit", [1, 2, 3], hash, DateTimeOffset.UtcNow), CancellationToken.None);
+        var duplicate = await repository.StoreIfAbsentAsync(new StoredUpload("second.fit", "fit", [4, 5, 6], hash, DateTimeOffset.UtcNow), CancellationToken.None);
+
+        Assert.True(first);
+        Assert.False(duplicate);
+        var saved = Assert.Single(context.Uploads);
+        Assert.Equal("first.fit", saved.FileName);
+        Assert.Equal(new byte[] { 1, 2, 3 }, saved.Content);
     }
 }

@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using RouteTimer.Services.Persistence;
 
 namespace RouteTimer.Services.Training;
 
@@ -9,9 +10,14 @@ public sealed record TrainingUploadResult(string FileName, UploadOutcome Outcome
 public sealed class TrainingUploadService
 {
     private const int MaximumBytes = 50 * 1024 * 1024;
-    private readonly HashSet<string> knownHashes = new(StringComparer.Ordinal);
+    private readonly IStoredUploadRepository repository;
 
-    public Task<IReadOnlyList<TrainingUploadResult>> AcceptAsync(IReadOnlyList<TrainingUpload> uploads, CancellationToken cancellationToken)
+    public TrainingUploadService(IStoredUploadRepository repository)
+    {
+        this.repository = repository;
+    }
+
+    public async Task<IReadOnlyList<TrainingUploadResult>> AcceptAsync(IReadOnlyList<TrainingUpload> uploads, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(uploads);
         var results = new List<TrainingUploadResult>(uploads.Count);
@@ -24,12 +30,15 @@ public sealed class TrainingUploadService
                 continue;
             }
 
-            var hash = Convert.ToHexString(SHA256.HashData(upload.Content));
-            results.Add(knownHashes.Add(hash)
+            var hash = SHA256.HashData(upload.Content);
+            var stored = await repository.StoreIfAbsentAsync(
+                new StoredUpload(upload.FileName, "fit", upload.Content, hash, DateTimeOffset.UtcNow),
+                cancellationToken);
+            results.Add(stored
                 ? new TrainingUploadResult(upload.FileName, UploadOutcome.Accepted, null)
                 : new TrainingUploadResult(upload.FileName, UploadOutcome.Duplicate, "duplicate-upload"));
         }
 
-        return Task.FromResult<IReadOnlyList<TrainingUploadResult>>(results);
+        return results;
     }
 }

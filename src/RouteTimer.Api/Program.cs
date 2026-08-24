@@ -1,9 +1,13 @@
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
 using RouteTimer.Contracts.Profile;
 using RouteTimer.Contracts.Training;
 using RouteTimer.Contracts.Predictions;
+using RouteTimer.Persistence;
+using RouteTimer.Persistence.Repositories;
 using RouteTimer.Services.Profile;
+using RouteTimer.Services.Persistence;
 using RouteTimer.Services.Training;
 using RouteTimer.Services.Routes;
 using RouteTimer.Services.Validation;
@@ -12,7 +16,11 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHealthChecks();
 builder.Services.AddSingleton<ProfileService>();
-builder.Services.AddSingleton<TrainingUploadService>();
+var connectionString = builder.Configuration.GetConnectionString("RouteTimer")
+    ?? "Host=localhost;Database=routetimer;Username=routetimer;Password=routetimer";
+builder.Services.AddDbContext<RouteTimerDbContext>(options => options.UseNpgsql(connectionString));
+builder.Services.AddScoped<IStoredUploadRepository, StoredUploadRepository>();
+builder.Services.AddScoped<TrainingUploadService>();
 builder.Services.AddSingleton<IGpxRouteParser, GpxRouteParser>();
 builder.Services.AddSingleton<IRouteProcessor>(_ => new RouteProcessor(RouteProcessingOptions.Default));
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
