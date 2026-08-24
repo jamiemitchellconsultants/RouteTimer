@@ -1,4 +1,5 @@
 @page "/training"
+@inject HttpClient Http
 
 <PageTitle>Training | RouteTimer</PageTitle>
 
@@ -10,10 +11,43 @@
 @if (selectedCount > 0)
 {
     <p>@selectedCount FIT file(s) ready to upload.</p>
+    <button @onclick="UploadAsync" disabled="@uploading">@(uploading ? "Uploading…" : "Upload training files")</button>
+}
+@if (status is not null)
+{
+    <p role="status">@status</p>
 }
 
 @code {
     private int selectedCount;
+    private IReadOnlyList<IBrowserFile> files = [];
+    private bool uploading;
+    private string? status;
 
-    private void SelectFiles(InputFileChangeEventArgs args) => selectedCount = args.GetMultipleFiles().Count;
+    private void SelectFiles(InputFileChangeEventArgs args)
+    {
+        files = args.GetMultipleFiles();
+        selectedCount = files.Count;
+        status = null;
+    }
+
+    private async Task UploadAsync()
+    {
+        uploading = true;
+        try
+        {
+            using var content = new MultipartFormDataContent();
+            foreach (var file in files)
+            {
+                content.Add(new StreamContent(file.OpenReadStream(50 * 1024 * 1024)), "files", file.Name);
+            }
+
+            using var response = await Http.PostAsync("api/training/uploads", content);
+            status = response.IsSuccessStatusCode ? "Training files submitted for analysis." : "Training upload could not be submitted.";
+        }
+        finally
+        {
+            uploading = false;
+        }
+    }
 }
