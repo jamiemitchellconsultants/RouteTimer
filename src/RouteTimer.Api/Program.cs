@@ -30,6 +30,7 @@ if (builder.Configuration.GetValue("Database:ApplyMigrations", false))
 }
 builder.Services.AddScoped<IStoredUploadRepository, StoredUploadRepository>();
 builder.Services.AddScoped<ITrainingActivityRepository, TrainingActivityRepository>();
+builder.Services.AddScoped<IRiderModelRepository, RiderModelRepository>();
 builder.Services.AddScoped<IJobQueue, PostgresJobQueue>();
 builder.Services.AddScoped<IProfileRepository, ProfileRepository>();
 builder.Services.AddScoped<TrainingUploadService>();

@@ -4,6 +4,8 @@ using RouteTimer.Persistence.Entities;
 using RouteTimer.Persistence.Repositories;
 using RouteTimer.Services.Persistence;
 using RouteTimer.Domain.Activities;
+using RouteTimer.Domain.Models;
+using RouteTimer.Domain.Physics;
 using RouteTimer.Domain.Profile;
 using RouteTimer.Domain.Routes;
 
@@ -167,5 +169,79 @@ public sealed class RepositoryRoundTripTests
 
         Assert.True(comparer.Equals(inOneOrder, inAnotherOrder));
         Assert.Equal(comparer.GetHashCode(inOneOrder), comparer.GetHashCode(inAnotherOrder));
+    }
+
+    [Fact]
+    public async Task Save_rider_model_round_trips_bands_coefficients_and_validation_summary()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new RiderModelRepository(context);
+        var profile = new RiderProfile(75, 10);
+        var bands = new[]
+        {
+            new PowerBand("flat", "short", 250, TimeSpan.FromMinutes(30), 5, 0.8, ConfidenceLevel.High),
+            new PowerBand("climb", "long", 210, TimeSpan.FromMinutes(45), 3, 0.6, ConfidenceLevel.Medium),
+            new PowerBand("descent", "short", 90, TimeSpan.FromMinutes(5), 1, 0.2, ConfidenceLevel.Low)
+        };
+        var powerModel = new PowerModel(bands, 220);
+        var riderModel = new RiderModel(powerModel, PhysicalCoefficients.Default, "v1");
+        var validation = new ModelValidationSummary(ModelValidationStatus.NotValidated, null, null);
+
+        var modelId = await repository.SaveAsync(riderModel, profile, wasCalibrated: false, validation, CancellationToken.None);
+        var loaded = await repository.GetAsync(modelId, CancellationToken.None);
+
+        Assert.NotNull(loaded);
+        Assert.Equal(modelId, loaded.Id);
+        Assert.Equal(profile, loaded.ProfileSnapshot);
+        Assert.False(loaded.WasCalibrated);
+        Assert.Equal(validation, loaded.Validation);
+        Assert.Equal("v1", loaded.Model.AlgorithmVersion);
+        Assert.Equal(PhysicalCoefficients.Default, loaded.Model.Coefficients);
+        Assert.Equal(220, loaded.Model.PowerModel.GlobalTypicalWatts);
+        Assert.Equal(bands.Length, loaded.Model.PowerModel.Bands.Count);
+        foreach (var band in bands)
+        {
+            var loadedBand = Assert.Single(loaded.Model.PowerModel.Bands, b => b.GradeKey == band.GradeKey && b.DurationKey == band.DurationKey);
+            Assert.Equal(band, loadedBand);
+        }
+    }
+
+    [Fact]
+    public async Task GetCurrent_returns_the_most_recently_saved_rider_model()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new RiderModelRepository(context);
+        var profile = new RiderProfile(75, 10);
+        var validation = new ModelValidationSummary(ModelValidationStatus.InsufficientData, null, null);
+
+        var firstModel = new RiderModel(new PowerModel([], 100), PhysicalCoefficients.Default, "v1");
+        var firstId = await repository.SaveAsync(firstModel, profile, wasCalibrated: false, validation, CancellationToken.None);
+
+        var secondModel = new RiderModel(new PowerModel([], 150), PhysicalCoefficients.Default, "v2");
+        var secondId = await repository.SaveAsync(secondModel, profile, wasCalibrated: false, validation, CancellationToken.None);
+
+        var current = await repository.GetCurrentAsync(CancellationToken.None);
+
+        Assert.NotNull(current);
+        Assert.Equal(secondId, current.Id);
+        Assert.NotEqual(firstId, current.Id);
+        Assert.Equal("v2", current.Model.AlgorithmVersion);
+        Assert.Equal(150, current.Model.PowerModel.GlobalTypicalWatts);
+    }
+
+    [Fact]
+    public async Task GetCurrent_and_Get_return_null_when_no_matching_rider_model_exists()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new RiderModelRepository(context);
+
+        var current = await repository.GetCurrentAsync(CancellationToken.None);
+        var missing = await repository.GetAsync(Guid.NewGuid(), CancellationToken.None);
+
+        Assert.Null(current);
+        Assert.Null(missing);
     }
 }
