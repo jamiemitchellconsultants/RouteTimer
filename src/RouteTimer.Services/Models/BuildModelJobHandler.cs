@@ -13,20 +13,19 @@ namespace RouteTimer.Services.Models;
 /// training activity, builds a fresh <see cref="PowerModel"/> from the eligible evidence, and persists
 /// the resulting <see cref="RiderModel"/> version. Missing prerequisites (no profile, no eligible
 /// evidence) are reported as a permanent <see cref="ModelBuildException"/> rather than retried, since
-/// retrying without new data would fail again. Validation is a placeholder only - this handler never
-/// performs real leave-one-out validation, it only distinguishes "too little evidence to validate at
-/// all" from "evidence exists but hasn't been validated yet"; real validation is separate future work.
+/// retrying without new data would fail again. Real leave-one-out validation
+/// (see <see cref="IModelValidator"/>) runs as part of every model build, comparing the model's
+/// predictions against each eligible activity's own recorded moving time.
 /// </summary>
 public sealed class BuildModelJobHandler(
     IProfileRepository profiles,
     ITrainingActivityRepository activities,
     IPowerModelBuilder builder,
+    IModelValidator validator,
     IRiderModelRepository models) : IJobHandler
 {
     /// <summary>Bump whenever the model-building algorithm or its configuration changes materially.</summary>
     public const string AlgorithmVersion = "power-model-v1";
-
-    private const int MinimumEligibleActivitiesForValidation = 3;
 
     public JobType Handles => JobType.BuildModel;
 
@@ -65,14 +64,11 @@ public sealed class BuildModelJobHandler(
 
         var model = new RiderModel(powerModel, PhysicalCoefficients.Default, AlgorithmVersion);
 
-        var status = eligibleCount < MinimumEligibleActivitiesForValidation
-            ? ModelValidationStatus.InsufficientData
-            : ModelValidationStatus.NotValidated;
-        var validation = new ModelValidationSummary(status, null, null);
+        var validation = validator.Validate(profile, allActivities);
 
         // Calibration (fitting the physical coefficients to observed data) isn't implemented yet, so
-        // this handler always saves the default coefficients uncalibrated - matching the validation
-        // placeholder above, this is expected to change once calibration is built.
+        // this handler always saves the default coefficients uncalibrated - that's expected to change
+        // once calibration is built.
         await models.SaveAsync(model, profile, wasCalibrated: false, validation, cancellationToken);
     }
 }
