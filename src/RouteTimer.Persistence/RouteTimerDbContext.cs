@@ -6,6 +6,7 @@ namespace RouteTimer.Persistence;
 public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> options) : DbContext(options)
 {
     public DbSet<PredictionEntity> Predictions => Set<PredictionEntity>();
+    public DbSet<AnalysisJobEntity> Jobs => Set<AnalysisJobEntity>();
     public DbSet<RiderProfileEntity> Profiles => Set<RiderProfileEntity>();
     public DbSet<StoredUploadEntity> Uploads => Set<StoredUploadEntity>();
 
@@ -17,6 +18,16 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
         prediction.Property(entity => entity.ModelVersion).HasMaxLength(128).IsRequired();
         prediction.Property(entity => entity.CreatedAt).HasColumnType("timestamp with time zone");
         prediction.HasIndex(entity => entity.CreatedAt);
+
+        var job = modelBuilder.Entity<AnalysisJobEntity>();
+        job.ToTable("analysis_jobs");
+        job.HasKey(entity => entity.Id);
+        job.Property(entity => entity.Type).HasMaxLength(64).IsRequired();
+        job.Property(entity => entity.State).HasMaxLength(32).IsRequired();
+        job.Property(entity => entity.WorkerId).HasMaxLength(128);
+        job.Property(entity => entity.LeaseExpiresAt).HasColumnType("timestamp with time zone");
+        job.Property(entity => entity.CreatedAt).HasColumnType("timestamp with time zone");
+        job.HasIndex(entity => new { entity.State, entity.LeaseExpiresAt, entity.CreatedAt });
 
         var profile = modelBuilder.Entity<RiderProfileEntity>();
         profile.ToTable("rider_profile");
