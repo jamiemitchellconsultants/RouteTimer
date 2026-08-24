@@ -56,8 +56,8 @@ public sealed class RepositoryRoundTripTests
         var repository = new StoredUploadRepository(context);
         var hash = Enumerable.Repeat((byte)9, 32).ToArray();
 
-        var first = await repository.StoreIfAbsentAsync(new StoredUpload("first.fit", "fit", [1, 2, 3], hash, DateTimeOffset.UtcNow), CancellationToken.None);
-        var duplicate = await repository.StoreIfAbsentAsync(new StoredUpload("second.fit", "fit", [4, 5, 6], hash, DateTimeOffset.UtcNow), CancellationToken.None);
+        var first = await repository.StoreIfAbsentAsync(new StoredUpload(Guid.NewGuid(), "first.fit", "fit", [1, 2, 3], hash, DateTimeOffset.UtcNow), CancellationToken.None);
+        var duplicate = await repository.StoreIfAbsentAsync(new StoredUpload(Guid.NewGuid(), "second.fit", "fit", [4, 5, 6], hash, DateTimeOffset.UtcNow), CancellationToken.None);
 
         Assert.True(first);
         Assert.False(duplicate);

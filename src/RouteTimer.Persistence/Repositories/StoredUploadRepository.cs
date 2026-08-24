@@ -20,7 +20,7 @@ public sealed class StoredUploadRepository(RouteTimerDbContext context) : IStore
 
         context.Uploads.Add(new StoredUploadEntity
         {
-            Id = Guid.NewGuid(),
+            Id = upload.Id,
             Kind = upload.Kind,
             FileName = upload.FileName,
             Content = upload.Content,

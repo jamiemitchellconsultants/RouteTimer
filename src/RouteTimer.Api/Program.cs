@@ -7,9 +7,11 @@ using RouteTimer.Contracts.Predictions;
 using RouteTimer.Api;
 using RouteTimer.Persistence;
 using RouteTimer.Persistence.Repositories;
+using RouteTimer.Persistence.Jobs;
 using RouteTimer.Services.Profile;
 using RouteTimer.Services.Persistence;
 using RouteTimer.Services.Training;
+using RouteTimer.Services.Jobs;
 using RouteTimer.Services.Routes;
 using RouteTimer.Services.Validation;
 
@@ -25,6 +27,7 @@ if (builder.Configuration.GetValue("Database:ApplyMigrations", false))
     builder.Services.AddHostedService<DatabaseMigrationService>();
 }
 builder.Services.AddScoped<IStoredUploadRepository, StoredUploadRepository>();
+builder.Services.AddScoped<IJobQueue, PostgresJobQueue>();
 builder.Services.AddScoped<IProfileRepository, ProfileRepository>();
 builder.Services.AddScoped<TrainingUploadService>();
 builder.Services.AddScoped<ProfileService>();

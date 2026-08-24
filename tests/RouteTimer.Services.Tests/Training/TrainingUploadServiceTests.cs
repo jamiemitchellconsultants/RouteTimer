@@ -1,5 +1,7 @@
 using RouteTimer.Services.Training;
 using RouteTimer.Services.Persistence;
+using RouteTimer.Domain.Jobs;
+using RouteTimer.Services.Jobs;
 
 namespace RouteTimer.Services.Tests.Training;
 
@@ -9,7 +11,8 @@ public sealed class TrainingUploadServiceTests
     public async Task Accept_batch_returns_independent_accepted_duplicate_and_invalid_results()
     {
         var repository = new InMemoryStoredUploadRepository();
-        var service = new TrainingUploadService(repository);
+        var jobs = new InMemoryJobQueue();
+        var service = new TrainingUploadService(repository, jobs);
         var uploads = new[]
         {
             new TrainingUpload("one.fit", [1, 2, 3]),
@@ -26,6 +29,14 @@ public sealed class TrainingUploadServiceTests
         var saved = Assert.Single(repository.Uploads);
         Assert.Equal("one.fit", saved.FileName);
         Assert.Equal(new byte[] { 1, 2, 3 }, saved.Content);
+        Assert.Single(jobs.Enqueued);
+    }
+
+    private sealed class InMemoryJobQueue : IJobQueue
+    {
+        public List<(JobType Type, Guid SubjectId)> Enqueued { get; } = [];
+        public Task<Guid> EnqueueAsync(JobType type, Guid subjectId, CancellationToken cancellationToken) { Enqueued.Add((type, subjectId)); return Task.FromResult(Guid.NewGuid()); }
+        public Task<AnalysisJob?> ClaimAsync(string workerId, DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken) => Task.FromResult<AnalysisJob?>(null);
     }
 
     private sealed class InMemoryStoredUploadRepository : IStoredUploadRepository

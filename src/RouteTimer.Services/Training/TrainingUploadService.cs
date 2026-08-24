@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using RouteTimer.Services.Persistence;
+using RouteTimer.Domain.Jobs;
+using RouteTimer.Services.Jobs;
 
 namespace RouteTimer.Services.Training;
 
@@ -11,10 +13,12 @@ public sealed class TrainingUploadService
 {
     private const int MaximumBytes = 50 * 1024 * 1024;
     private readonly IStoredUploadRepository repository;
+    private readonly IJobQueue jobs;
 
-    public TrainingUploadService(IStoredUploadRepository repository)
+    public TrainingUploadService(IStoredUploadRepository repository, IJobQueue jobs)
     {
         this.repository = repository;
+        this.jobs = jobs;
     }
 
     public async Task<IReadOnlyList<TrainingUploadResult>> AcceptAsync(IReadOnlyList<TrainingUpload> uploads, CancellationToken cancellationToken)
@@ -31,9 +35,14 @@ public sealed class TrainingUploadService
             }
 
             var hash = SHA256.HashData(upload.Content);
+            var uploadId = Guid.NewGuid();
             var stored = await repository.StoreIfAbsentAsync(
-                new StoredUpload(upload.FileName, "fit", upload.Content, hash, DateTimeOffset.UtcNow),
+                new StoredUpload(uploadId, upload.FileName, "fit", upload.Content, hash, DateTimeOffset.UtcNow),
                 cancellationToken);
+            if (stored)
+            {
+                await jobs.EnqueueAsync(JobType.ParseTraining, uploadId, cancellationToken);
+            }
             results.Add(stored
                 ? new TrainingUploadResult(upload.FileName, UploadOutcome.Accepted, null)
                 : new TrainingUploadResult(upload.FileName, UploadOutcome.Duplicate, "duplicate-upload"));
