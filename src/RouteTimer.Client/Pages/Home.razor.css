@@ -1,0 +1,2 @@
+.dashboard-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); }
+.dashboard-grid article { border: 1px solid #d6d6d6; border-radius: .5rem; padding: 1rem; }

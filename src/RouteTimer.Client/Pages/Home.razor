@@ -1,7 +1,25 @@
 ﻿@page "/"
 
-<PageTitle>Home</PageTitle>
+<PageTitle>RouteTimer</PageTitle>
 
-<h1>Hello, world!</h1>
+<h1>RouteTimer dashboard</h1>
 
-Welcome to your new app.
+<p>Train on your road rides, then predict moving time for a GPX route in calm, dry conditions.</p>
+
+<section class="dashboard-grid" aria-label="RouteTimer status">
+    <article>
+        <h2>Rider profile</h2>
+        <p>Set rider and bike/equipment mass before submitting predictions.</p>
+        <a href="profile">Manage profile</a>
+    </article>
+    <article>
+        <h2>Training evidence</h2>
+        <p>Upload FIT activities with power data to learn your typical riding power.</p>
+        <a href="training">Upload FIT files</a>
+    </article>
+    <article>
+        <h2>Route prediction</h2>
+        <p>Upload an elevation-bearing GPX route for a detailed moving-time estimate.</p>
+        <a href="predictions">Predict a route</a>
+    </article>
+</section>

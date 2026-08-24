@@ -22,4 +22,8 @@
     <ProjectReference Include="..\..\src\RouteTimer.Client\RouteTimer.Client.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="bunit" />
+  </ItemGroup>
+
 </Project>
