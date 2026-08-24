@@ -53,4 +53,17 @@ public sealed class TrainingCleanerTests
         Assert.Equal(ActivityEligibility.Ineligible, cleaned.Quality.Eligibility);
         Assert.Contains("insufficient-power-coverage", cleaned.Quality.ReasonCodes);
     }
+
+    // Break caught: geometry enrichment replaces decoder elevations with fitted elevations before persistence.
+    [Fact]
+    public void Clean_preserves_raw_decoder_elevation_for_nonlinear_profiles()
+    {
+        var parsed = ActivityFixtures.NonlinearElevationRide();
+
+        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed);
+
+        Assert.Equal(
+            parsed.Samples.Select(sample => sample.Position!.Value.ElevationMetres),
+            cleaned.Samples.Select(sample => sample.Position.ElevationMetres));
+    }
 }

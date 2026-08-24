@@ -22,8 +22,24 @@ public sealed class DescentSpeedLimiter : IDescentSpeedLimiter
             return new DescentLimitEstimate(conservativeCap, ConfidenceLevel.Low, true);
         }
 
-        var cell = model.Cells.Single(value =>
-            value.GradeKey == grade.Key && value.CurvatureKey == curvature.Key);
+        var matching = model.Cells?
+            .Where(value => value is not null && value.GradeKey == grade.Key && value.CurvatureKey == curvature.Key)
+            .Take(2)
+            .ToArray();
+        if (matching is null || matching.Length != 1 || !DescentLimitModel.SatisfiesCellInvariants(matching[0]))
+        {
+            var conservativeCap = ConservativeCap(grade, curvaturePerMetre);
+            if (matching is { Length: 1 } &&
+                double.IsFinite(matching[0].SpeedCapMetresPerSecond) &&
+                matching[0].SpeedCapMetresPerSecond > 0)
+            {
+                conservativeCap = Math.Min(conservativeCap, matching[0].SpeedCapMetresPerSecond);
+            }
+
+            return new DescentLimitEstimate(conservativeCap, ConfidenceLevel.Low, true);
+        }
+
+        var cell = matching[0];
         var actualCurvatureCap = CurvatureCap(curvaturePerMetre);
         var cap = Math.Min(cell.SpeedCapMetresPerSecond, Math.Min(20, actualCurvatureCap));
         if (cell.IsFallback)

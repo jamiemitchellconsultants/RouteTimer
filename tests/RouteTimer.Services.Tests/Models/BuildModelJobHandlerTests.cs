@@ -9,6 +9,7 @@ using RouteTimer.Services.Models;
 using RouteTimer.Services.Persistence;
 using RouteTimer.Services.Physics;
 using RouteTimer.Services.Routes;
+using RouteTimer.Services.Tests.Activities;
 using RouteTimer.Services.Validation;
 
 namespace RouteTimer.Services.Tests.Models;
@@ -90,6 +91,38 @@ public sealed class BuildModelJobHandlerTests
             Assert.Equal(456, sample.CurvaturePerMetre);
         });
         Assert.Equal(0, activities.SaveCount);
+    }
+
+    // Break caught: freshly persisted rows are fit once more than migrated zero-geometry rows before model evidence is built.
+    [Fact]
+    public async Task Handle_builds_equal_geometry_evidence_from_fresh_and_migrated_zero_rows()
+    {
+        var enricher = new TrainingGeometryEnricher(RouteProcessingOptions.Default);
+        var raw = ActivityFixtures.CleanedFrom(ActivityFixtures.NonlinearElevationPoints());
+        var fresh = enricher.Enrich(raw) with { Name = "fresh" };
+        var migrated = raw with
+        {
+            Name = "migrated",
+            Samples = raw.Samples.Select(sample => sample with { Gradient = 0, CurvaturePerMetre = 0 }).ToArray()
+        };
+        var activities = new FakeTrainingActivityRepository { Activities = [fresh, migrated] };
+        var builder = new FakePowerModelBuilder { Result = SampleModel };
+        var handler = new BuildModelJobHandler(
+            new FakeProfileRepository { Profile = SampleProfile },
+            activities,
+            enricher,
+            builder,
+            new FakePhysicsCalibrator(),
+            new FakeDescentLimitBuilder(),
+            new FakeModelValidator(),
+            new FakeRiderModelRepository());
+
+        await handler.HandleAsync(MakeJob(), CancellationToken.None);
+
+        var evidence = Assert.IsAssignableFrom<IReadOnlyList<CleanedActivity>>(builder.ReceivedActivities);
+        Assert.Equal(
+            evidence[0].Samples.Select(sample => (sample.Position.ElevationMetres, sample.Gradient, sample.CurvaturePerMetre)),
+            evidence[1].Samples.Select(sample => (sample.Position.ElevationMetres, sample.Gradient, sample.CurvaturePerMetre)));
     }
 
     [Fact]

@@ -8,6 +8,8 @@ using RouteTimer.Domain.Models;
 using RouteTimer.Domain.Physics;
 using RouteTimer.Domain.Profile;
 using RouteTimer.Domain.Routes;
+using RouteTimer.Services.Activities;
+using RouteTimer.Services.Routes;
 
 namespace RouteTimer.Persistence.Tests;
 
@@ -186,6 +188,33 @@ public sealed class RepositoryRoundTripTests
         Assert.Equal(.0125, Assert.Single(loaded.Samples).CurvaturePerMetre, 10);
     }
 
+    // Break caught: cleaning persists robust-fit elevations instead of the decoder elevations needed for later idempotent enrichment.
+    [Fact]
+    public async Task Save_training_activity_round_trips_raw_decoder_elevation_after_cleaning()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new TrainingActivityRepository(context);
+        var start = new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero);
+        var elevations = new[] { 100d, 112, 91, 130, 96, 118, 105 };
+        var raw = elevations.Select((elevation, index) => new RawRideSample(
+            start.AddSeconds(index * 5),
+            new GeoPoint(0, index * .00022483, elevation),
+            7,
+            200,
+            140,
+            85,
+            true)).ToArray();
+        var parsed = new ParsedFitActivity("Raw elevations", ActivitySport.Cycling, start, raw, TimeSpan.FromSeconds(30), 150);
+        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed);
+
+        var id = await repository.SaveAsync(Guid.NewGuid(), cleaned, CancellationToken.None);
+        var loaded = await repository.GetAsync(id, CancellationToken.None);
+
+        Assert.NotNull(loaded);
+        Assert.Equal(elevations, loaded.Samples.Select(sample => sample.Position.ElevationMetres));
+    }
+
     [Fact]
     public async Task GetAll_returns_every_saved_training_activity_regardless_of_eligibility()
     {
@@ -246,9 +275,9 @@ public sealed class RepositoryRoundTripTests
             .Select((cell, index) => cell with
             {
                 SpeedCapMetresPerSecond = index == 8 ? .75 : 10 + index,
-                Evidence = TimeSpan.FromSeconds(60 + index),
-                ActivityCount = index + 1,
-                Confidence = index % 2 == 0 ? ConfidenceLevel.High : ConfidenceLevel.Medium,
+                Evidence = index == 0 ? TimeSpan.FromSeconds(60) : TimeSpan.FromMinutes(index == 8 ? 20 : 5 + index),
+                ActivityCount = index == 0 ? 1 : index == 8 ? 3 : 2,
+                Confidence = index == 0 ? ConfidenceLevel.Low : index == 8 ? ConfidenceLevel.High : ConfidenceLevel.Medium,
                 IsFallback = index == 0
             })
             .ToArray());
@@ -299,7 +328,7 @@ public sealed class RepositoryRoundTripTests
         await context.SaveChangesAsync();
         context.ChangeTracker.Clear();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => repository.GetAsync(id, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidPersistedRiderModelException>(() => repository.GetAsync(id, CancellationToken.None));
     }
 
     // Break caught: Enum.TryParse accepts numeric or whitespace-normalized confidence text that was never canonically persisted.
@@ -325,7 +354,7 @@ public sealed class RepositoryRoundTripTests
         await context.SaveChangesAsync();
         context.ChangeTracker.Clear();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => repository.GetAsync(id, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidPersistedRiderModelException>(() => repository.GetAsync(id, CancellationToken.None));
     }
 
     // Break caught: stored provenance disagrees with immutable cells and callers receive contradictory snapshot metadata.
@@ -342,7 +371,60 @@ public sealed class RepositoryRoundTripTests
         await context.SaveChangesAsync();
         context.ChangeTracker.Clear();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => repository.GetAsync(id, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidPersistedRiderModelException>(() => repository.GetAsync(id, CancellationToken.None));
+    }
+
+    // Break caught: persisted descent provenance/evidence contradictions reconstruct as trusted domain state.
+    [Theory]
+    [InlineData("fallback-confidence")]
+    [InlineData("fallback-covered")]
+    [InlineData("fallback-cap")]
+    [InlineData("learned-evidence")]
+    [InlineData("learned-activities")]
+    [InlineData("learned-low")]
+    [InlineData("learned-high-too-early")]
+    [InlineData("learned-medium-at-full")]
+    public async Task Get_rider_model_rejects_cross_field_descent_contradictions(string kind)
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new RiderModelRepository(context);
+        var model = new RiderModel(new PowerModel([], 200), PhysicalCoefficients.Default, DescentLimitModel.Conservative, false, "v1");
+        var id = await repository.SaveAsync(model, new RiderProfile(75, 10), new ModelValidationSummary(ModelValidationStatus.NotValidated, null, null), CancellationToken.None);
+        var entity = await context.RiderModels.Include(value => value.DescentLimits).SingleAsync();
+        var cell = entity.DescentLimits.Single(value => value.GradeKey == "mild" && value.CurvatureKey == "straight");
+        switch (kind)
+        {
+            case "fallback-confidence":
+                cell.Confidence = "High";
+                break;
+            case "fallback-covered":
+                cell.EvidenceSeconds = 300;
+                cell.ActivityCount = 2;
+                break;
+            case "fallback-cap":
+                cell.SpeedCapMetresPerSecond = 13.01;
+                break;
+            case "learned-evidence":
+                SetLearned(entity, cell, 299, 2, "Medium");
+                break;
+            case "learned-activities":
+                SetLearned(entity, cell, 300, 1, "Medium");
+                break;
+            case "learned-low":
+                SetLearned(entity, cell, 300, 2, "Low");
+                break;
+            case "learned-high-too-early":
+                SetLearned(entity, cell, 300, 2, "High");
+                break;
+            case "learned-medium-at-full":
+                SetLearned(entity, cell, 1200, 3, "Medium");
+                break;
+        }
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+
+        await Assert.ThrowsAsync<InvalidPersistedRiderModelException>(() => repository.GetAsync(id, CancellationToken.None));
     }
 
     [Fact]
@@ -381,5 +463,14 @@ public sealed class RepositoryRoundTripTests
 
         Assert.Null(current);
         Assert.Null(missing);
+    }
+
+    private static void SetLearned(RiderModelEntity entity, RiderModelDescentLimitEntity cell, double evidenceSeconds, int activityCount, string confidence)
+    {
+        entity.DescentWasLearned = true;
+        cell.IsFallback = false;
+        cell.EvidenceSeconds = evidenceSeconds;
+        cell.ActivityCount = activityCount;
+        cell.Confidence = confidence;
     }
 }

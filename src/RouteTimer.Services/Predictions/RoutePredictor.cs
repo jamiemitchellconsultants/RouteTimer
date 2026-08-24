@@ -45,8 +45,8 @@ public sealed class RoutePredictor : IRoutePredictor
             var hasDescentCap = sample.Gradient < 0 && double.IsFinite(descent.SpeedCapMetresPerSecond);
             var segmentConfidence = Min(estimate.Confidence, physicalConfidence);
             if (hasDescentCap) segmentConfidence = Min(segmentConfidence, descent.Confidence);
-            if (estimate.Extrapolated) AddWarning("power-model-extrapolation", warnings, warningSet);
-            if (hasDescentCap && descent.UsedFallback) AddWarning("conservative-descent-limits", warnings, warningSet);
+            if (estimate.Extrapolated) AddWarning(PredictionWarningCodes.PowerModelExtrapolation, warnings, warningSet);
+            if (hasDescentCap && descent.UsedFallback) AddWarning(PredictionWarningCodes.ConservativeDescentLimits, warnings, warningSet);
 
             var remainingDistance = sample.SegmentDistanceMetres;
             var proposal = remainingDistance;

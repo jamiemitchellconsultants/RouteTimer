@@ -29,7 +29,7 @@ public sealed class BuildModelJobHandler(
     IRiderModelRepository models) : IJobHandler
 {
     /// <summary>Bump whenever the model-building algorithm or its configuration changes materially.</summary>
-    public const string AlgorithmVersion = "route-model-v2";
+    public const string AlgorithmVersion = RiderModelAggregateValidator.CurrentAlgorithmVersion;
 
     public JobType Handles => JobType.BuildModel;
 

@@ -5,9 +5,11 @@ using RouteTimer.Domain.Predictions;
 using RouteTimer.Domain.Profile;
 using RouteTimer.Domain.Routes;
 using RouteTimer.Services.Models;
+using RouteTimer.Services.Activities;
 using RouteTimer.Services.Physics;
 using RouteTimer.Services.Predictions;
 using RouteTimer.Services.Routes;
+using RouteTimer.Services.Tests.Activities;
 using RouteTimer.Services.Validation;
 
 namespace RouteTimer.Services.Tests.Models;
@@ -305,6 +307,44 @@ public sealed class ModelValidatorTests
         Assert.Equal(ModelValidationStatus.Passed, result.Status);
         Assert.Equal(0, result.MedianAbsolutePercentageError);
         Assert.Equal(3, predictor.CallCount);
+    }
+
+    // Break caught: held-out positions that training enrichment already smoothed are robust-fit a second time by RouteProcessor.
+    [Fact]
+    public void Validate_processes_held_out_raw_elevation_with_exactly_one_route_geometry_fit()
+    {
+        var points = ActivityFixtures.NonlinearElevationPoints();
+        var stored = new TrainingGeometryEnricher(RouteProcessingOptions.Default)
+            .Enrich(ActivityFixtures.CleanedFrom(points));
+        var activities = new[]
+        {
+            stored with { Name = "one" },
+            stored with { Name = "two" },
+            stored with { Name = "three" },
+        };
+        var processor = new RouteProcessor(RouteProcessingOptions.Default);
+        var expected = processor.Process(points);
+        var actualRoutes = new List<ProcessedRoute>();
+        var predictor = new FakeRoutePredictor(Enumerable.Repeat<Func<ProcessedRoute, RiderProfile, RiderModel, PredictionResult>>(
+            (route, _, _) =>
+            {
+                actualRoutes.Add(route);
+                return PredictionOf(stored.MovingDuration.TotalSeconds);
+            },
+            3));
+        var validator = new ModelValidator(
+            new FakePowerModelBuilder(Enumerable.Repeat<Func<IReadOnlyList<CleanedActivity>, PowerModel>>(_ => SampleModel, 3)),
+            FakePhysicsCalibrator.Fallbacks(3),
+            FakeDescentLimitBuilder.Fallbacks(3),
+            processor,
+            predictor);
+
+        validator.Validate(SampleProfile, activities);
+
+        Assert.Equal(3, actualRoutes.Count);
+        Assert.All(actualRoutes, actual => Assert.Equal(
+            expected.Samples.Select(sample => (sample.Point.ElevationMetres, sample.Gradient, sample.CurvaturePerMetre)),
+            actual.Samples.Select(sample => (sample.Point.ElevationMetres, sample.Gradient, sample.CurvaturePerMetre))));
     }
 
     private static ModelValidator CreateValidator(

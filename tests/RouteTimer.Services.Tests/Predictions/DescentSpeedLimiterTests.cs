@@ -1,5 +1,7 @@
 using RouteTimer.Domain.Models;
 using RouteTimer.Services.Predictions;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 
 namespace RouteTimer.Services.Tests.Predictions;
 
@@ -120,6 +122,48 @@ public sealed class DescentSpeedLimiterTests
         Assert.False(result.UsedFallback);
     }
 
+    // Break caught: lookup trusts learned/fallback flags even when impossible state bypasses the domain constructor.
+    [Fact]
+    public void Resolve_falls_back_conservatively_when_malformed_learned_state_bypasses_the_constructor()
+    {
+        var cells = DescentLimitModel.Conservative.Cells.ToArray();
+        cells[0] = cells[0] with
+        {
+            SpeedCapMetresPerSecond = 19,
+            Evidence = TimeSpan.Zero,
+            ActivityCount = 0,
+            Confidence = ConfidenceLevel.High,
+            IsFallback = false,
+        };
+        var malformed = MalformedModel(cells);
+
+        var result = new DescentSpeedLimiter().Resolve(-.03, 0, malformed);
+
+        Assert.Equal(13, result.SpeedCapMetresPerSecond, 12);
+        Assert.Equal(ConfidenceLevel.Low, result.Confidence);
+        Assert.True(result.UsedFallback);
+    }
+
+    // Break caught: defensive fallback can discard a stored cap that is already slower and therefore safer.
+    [Fact]
+    public void Resolve_retains_a_slower_sparse_fallback_cap()
+    {
+        var cells = DescentLimitModel.Conservative.Cells.ToArray();
+        cells[0] = cells[0] with
+        {
+            SpeedCapMetresPerSecond = 8,
+            Evidence = TimeSpan.FromMinutes(30),
+            ActivityCount = 1,
+        };
+        var model = new DescentLimitModel(cells);
+
+        var result = new DescentSpeedLimiter().Resolve(-.03, 0, model);
+
+        Assert.Equal(8, result.SpeedCapMetresPerSecond, 12);
+        Assert.Equal(ConfidenceLevel.Low, result.Confidence);
+        Assert.True(result.UsedFallback);
+    }
+
     private static DescentLimitModel DistinctLearnedGrid()
     {
         var caps = new Dictionary<(string Grade, string Curvature), double>
@@ -144,5 +188,13 @@ public sealed class DescentSpeedLimiterTests
         var curvatures = new[] { "straight", "moderate", "tight" };
         return new DescentLimitModel(
             grades.SelectMany(grade => curvatures.Select(curvature => createCell(grade, curvature))).ToArray());
+    }
+
+    private static DescentLimitModel MalformedModel(IReadOnlyList<DescentLimitCell> cells)
+    {
+        var model = (DescentLimitModel)RuntimeHelpers.GetUninitializedObject(typeof(DescentLimitModel));
+        var field = typeof(DescentLimitModel).GetField("<Cells>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        field.SetValue(model, Array.AsReadOnly(cells.ToArray()));
+        return model;
     }
 }

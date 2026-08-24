@@ -47,7 +47,6 @@ public sealed class TrainingGeometryEnricher(RouteProcessingOptions routeOptions
             var value = geometry[index];
             enriched.Add(sample with
             {
-                Position = sample.Position with { ElevationMetres = value.SmoothedElevationMetres },
                 Gradient = value.Gradient,
                 CurvaturePerMetre = value.CurvaturePerMetre
             });

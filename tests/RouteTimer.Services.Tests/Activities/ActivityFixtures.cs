@@ -58,6 +58,25 @@ internal static class ActivityFixtures
         return new CleanedActivity("Geometry", samples, TimeSpan.FromSeconds((points.Count - 1) * 5), EligibleQuality());
     }
 
+    public static IReadOnlyList<GeoPoint> NonlinearElevationPoints() =>
+    [
+        new(0, 0, 100),
+        new(0, 0.00022483, 112),
+        new(0, 0.00044966, 91),
+        new(0, 0.00067449, 130),
+        new(0, 0.00089932, 96),
+        new(0, 0.00112415, 118),
+        new(0, 0.00134898, 105),
+    ];
+
+    public static ParsedFitActivity NonlinearElevationRide()
+    {
+        var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var samples = NonlinearElevationPoints().Select((point, index) => new RawRideSample(
+            start.AddSeconds(index * 5), point, 7, 200, 140, 85, true)).ToArray();
+        return new ParsedFitActivity("Nonlinear elevation", ActivitySport.Cycling, start, samples, TimeSpan.FromSeconds(30), 150);
+    }
+
     private static ParsedFitActivity Build(double powerCoverage, bool includePauseAndGap)
     {
         var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);

@@ -11,8 +11,7 @@ public sealed class RiderModelRepository(RouteTimerDbContext context) : IRiderMo
 {
     public async Task<Guid> SaveAsync(RiderModel model, RiderProfile profileSnapshot, ModelValidationSummary validation, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(model);
-        ArgumentNullException.ThrowIfNull(validation);
+        RiderModelAggregateValidator.Validate(model, profileSnapshot, validation);
 
         var id = Guid.NewGuid();
         var entity = new RiderModelEntity
@@ -90,6 +89,22 @@ public sealed class RiderModelRepository(RouteTimerDbContext context) : IRiderMo
 
     private static RiderModelSnapshot ToSnapshot(RiderModelEntity entity)
     {
+        try
+        {
+            return ReconstructSnapshot(entity);
+        }
+        catch (InvalidPersistedRiderModelException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or OverflowException)
+        {
+            throw new InvalidPersistedRiderModelException("The persisted rider model is invalid.", exception);
+        }
+    }
+
+    private static RiderModelSnapshot ReconstructSnapshot(RiderModelEntity entity)
+    {
         var bands = entity.Bands
             .OrderBy(band => band.GradeKey, StringComparer.Ordinal)
             .ThenBy(band => band.DurationKey, StringComparer.Ordinal)
@@ -97,23 +112,24 @@ public sealed class RiderModelRepository(RouteTimerDbContext context) : IRiderMo
                 band.GradeKey,
                 band.DurationKey,
                 band.TypicalWatts,
-                TimeSpan.FromSeconds(band.EvidenceSeconds),
+                ParseDuration(band.EvidenceSeconds, "power-band evidence"),
                 band.ActivityCount,
                 band.ShrinkageWeight,
-                Enum.Parse<ConfidenceLevel>(band.Confidence)))
+                ParseCanonicalEnum<ConfidenceLevel>(band.Confidence, "power-band confidence")))
             .ToList();
 
         var powerModel = new PowerModel(bands, entity.GlobalTypicalWatts);
         var coefficients = new PhysicalCoefficients(entity.DrivetrainEfficiency, entity.AirDensity, entity.Crr, entity.CdA);
         var descentLimits = ToDescentLimits(entity);
         if (entity.DescentWasLearned != descentLimits.WasLearned)
-            throw new InvalidOperationException("Persisted descent provenance does not match the stored descent cells.");
+            throw new ArgumentException("Persisted descent provenance does not match the stored descent cells.");
         var riderModel = new RiderModel(powerModel, coefficients, descentLimits, entity.WasCalibrated, entity.AlgorithmVersion);
         var profileSnapshot = new RiderProfile(entity.ProfileRiderWeightKg, entity.ProfileBikeWeightKg);
         var validation = new ModelValidationSummary(
-            Enum.Parse<ModelValidationStatus>(entity.ValidationStatus),
+            ParseCanonicalEnum<ModelValidationStatus>(entity.ValidationStatus, "validation status"),
             entity.ValidationMedianApe,
             entity.ValidationP90Ape);
+        RiderModelAggregateValidator.Validate(riderModel, profileSnapshot, validation);
 
         return new RiderModelSnapshot(entity.Id, entity.CreatedAt, profileSnapshot, riderModel, validation);
     }
@@ -127,8 +143,7 @@ public sealed class RiderModelRepository(RouteTimerDbContext context) : IRiderMo
                 !double.IsFinite(cell.SpeedCapMetresPerSecond) || cell.SpeedCapMetresPerSecond <= 0 || cell.SpeedCapMetresPerSecond > 20 ||
                 !double.IsFinite(cell.EvidenceSeconds) || cell.EvidenceSeconds < 0 || cell.EvidenceSeconds > TimeSpan.MaxValue.TotalSeconds ||
                 cell.ActivityCount < 0 ||
-                !Enum.TryParse<ConfidenceLevel>(cell.Confidence, out var confidence) || !Enum.IsDefined(confidence) ||
-                !string.Equals(cell.Confidence, Enum.GetName(confidence), StringComparison.Ordinal))
+                !TryParseCanonicalEnum(cell.Confidence, out ConfidenceLevel confidence))
             {
                 throw new InvalidOperationException("Persisted descent cell data is malformed.");
             }
@@ -151,5 +166,35 @@ public sealed class RiderModelRepository(RouteTimerDbContext context) : IRiderMo
         {
             throw new InvalidOperationException("Persisted descent cell data is malformed.", exception);
         }
+    }
+
+    private static TimeSpan ParseDuration(double seconds, string field)
+    {
+        if (!double.IsFinite(seconds) || seconds < 0 || seconds > TimeSpan.MaxValue.TotalSeconds)
+            throw new ArgumentException($"Persisted {field} is malformed.");
+        return TimeSpan.FromSeconds(seconds);
+    }
+
+    private static TEnum ParseCanonicalEnum<TEnum>(string? value, string field)
+        where TEnum : struct, Enum
+    {
+        if (!TryParseCanonicalEnum(value, out TEnum parsed))
+            throw new ArgumentException($"Persisted {field} is malformed.");
+        return parsed;
+    }
+
+    private static bool TryParseCanonicalEnum<TEnum>(string? value, out TEnum parsed)
+        where TEnum : struct, Enum
+    {
+        if (value is not null &&
+            Enum.TryParse(value, ignoreCase: false, out parsed) &&
+            Enum.IsDefined(parsed) &&
+            string.Equals(value, Enum.GetName(parsed), StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        parsed = default;
+        return false;
     }
 }

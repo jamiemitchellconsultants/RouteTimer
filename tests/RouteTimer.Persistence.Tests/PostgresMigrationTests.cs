@@ -29,9 +29,9 @@ public sealed class PostgresMigrationTests
             .Select((cell, index) => cell with
             {
                 SpeedCapMetresPerSecond = index == 8 ? .75 : 11 + index,
-                Evidence = TimeSpan.FromSeconds(90 + index),
-                ActivityCount = index + 2,
-                Confidence = index % 2 == 0 ? ConfidenceLevel.High : ConfidenceLevel.Medium,
+                Evidence = index == 0 ? TimeSpan.FromSeconds(90) : TimeSpan.FromMinutes(index == 8 ? 20 : 5 + index),
+                ActivityCount = index == 0 ? 2 : index == 8 ? 3 : 2,
+                Confidence = index == 0 ? ConfidenceLevel.Low : index == 8 ? ConfidenceLevel.High : ConfidenceLevel.Medium,
                 IsFallback = index == 0
             })
             .ToArray();
@@ -65,6 +65,53 @@ public sealed class PostgresMigrationTests
         Assert.Equal(.75, loaded.Model.DescentLimits.Cells[^1].SpeedCapMetresPerSecond);
         Assert.Equal(9, await loadContext.RiderModelDescentLimits.CountAsync(cell => cell.ModelId == id));
         Assert.True(await loadContext.RiderModels.Where(entity => entity.Id == id).Select(entity => entity.DescentWasLearned).SingleAsync());
+    }
+
+    // Break caught: PostgreSQL rows can bypass save-time checks and reconstruct malformed aggregate parts without one permanent classification.
+    [Fact]
+    public async Task Rider_model_repository_rejects_corrupted_whole_model_rows_through_PostgreSQL()
+    {
+        await using var database = new PostgreSqlBuilder("postgres:16-alpine").Build();
+        await database.StartAsync();
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseNpgsql(database.GetConnectionString()).Options;
+        await using (var migrationContext = new RouteTimerDbContext(options))
+        {
+            await migrationContext.Database.MigrateAsync();
+        }
+
+        var corruptions = new[] { "profile", "coefficients", "power-band", "validation-status-numeric", "descent" };
+        foreach (var corruption in corruptions)
+        {
+            Guid id;
+            await using (var saveContext = new RouteTimerDbContext(options))
+            {
+                var model = new RiderModel(
+                    new PowerModel([new PowerBand("foreign-grade", "foreign-duration", 200, TimeSpan.FromMinutes(5), 2, .25, ConfidenceLevel.Medium)], 200),
+                    PhysicalCoefficients.Default,
+                    DescentLimitModel.Conservative,
+                    false,
+                    "legacy-v1");
+                id = await new RiderModelRepository(saveContext).SaveAsync(
+                    model,
+                    new RiderProfile(75, 10),
+                    new ModelValidationSummary(ModelValidationStatus.Passed, .05, .08),
+                    CancellationToken.None);
+            }
+
+            await using (var corruptContext = new RouteTimerDbContext(options))
+            {
+                var entity = await corruptContext.RiderModels
+                    .Include(model => model.Bands)
+                    .Include(model => model.DescentLimits)
+                    .SingleAsync(model => model.Id == id);
+                RiderModelRepositoryValidationTests.Corrupt(entity, corruption);
+                await corruptContext.SaveChangesAsync();
+            }
+
+            await using var loadContext = new RouteTimerDbContext(options);
+            await Assert.ThrowsAsync<RouteTimer.Services.Persistence.InvalidPersistedRiderModelException>(
+                () => new RiderModelRepository(loadContext).GetAsync(id, CancellationToken.None));
+        }
     }
 
     [Fact]

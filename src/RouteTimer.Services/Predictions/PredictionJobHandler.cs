@@ -21,8 +21,20 @@ public sealed class PredictionJobHandler(
     {
         var prediction = await predictions.GetForProcessingAsync(job.SubjectId, cancellationToken)
             ?? throw new PredictionJobException("prediction-missing", "The prediction no longer exists.");
-        var model = await models.GetAsync(prediction.ModelId, cancellationToken)
-            ?? throw new PredictionJobException("model-missing", "The prediction's captured model no longer exists.");
+        RiderModelSnapshot? model;
+        try
+        {
+            model = await models.GetAsync(prediction.ModelId, cancellationToken);
+        }
+        catch (InvalidPersistedRiderModelException exception)
+        {
+            throw new PredictionJobException("invalid-rider-model", "The prediction's captured rider model is invalid.", exception);
+        }
+
+        if (model is null)
+        {
+            throw new PredictionJobException("model-missing", "The prediction's captured model no longer exists.");
+        }
 
         try
         {
@@ -55,7 +67,12 @@ public sealed class PredictionJobHandler(
 
     private static PredictionPublication BuildPublication(RouteTimer.Domain.Routes.ProcessedRoute route, PredictionResult result, RiderModelSnapshot model)
     {
-        if (result.Segments is null || result.Warnings is null)
+        if (result is null ||
+            result.Segments is null ||
+            result.Warnings is null ||
+            !Enum.IsDefined(result.Confidence) ||
+            result.Segments.Any(segment => segment is null || !Enum.IsDefined(segment.Confidence)) ||
+            result.Warnings.Any(warning => !PredictionWarningCodes.IsKnown(warning)))
         {
             throw new PredictionJobException("invalid-prediction-result", "The prediction result structure is invalid.");
         }
@@ -73,9 +90,9 @@ public sealed class PredictionJobHandler(
             var sample = pair.First;
             var segment = pair.Second;
             cumulative += segment.MovingTime;
-            ValidateFinite(sample.Point.Latitude, sample.Point.Longitude, sample.Point.ElevationMetres, sample.Gradient);
+            ValidateFinite(sample.Point.Latitude, sample.Point.Longitude, sample.Point.ElevationMetres, sample.Gradient, segment.Gradient);
             ValidateNonNegative(sample.CumulativeDistanceMetres, sample.SegmentDistanceMetres, sample.CurvaturePerMetre,
-                segment.PowerWatts, segment.SpeedMetresPerSecond, segment.MovingTime.TotalSeconds, cumulative.TotalSeconds);
+                segment.DistanceMetres, segment.PowerWatts, segment.SpeedMetresPerSecond, segment.MovingTime.TotalSeconds, cumulative.TotalSeconds);
             persisted.Add(new PersistedPredictionSegment(segment.Sequence, sample.Point.Latitude, sample.Point.Longitude, sample.Point.ElevationMetres,
                 sample.CumulativeDistanceMetres, sample.SegmentDistanceMetres, sample.Gradient, sample.CurvaturePerMetre, segment.PowerWatts,
                 segment.SpeedMetresPerSecond, segment.MovingTime, cumulative, segment.Confidence));
@@ -106,22 +123,22 @@ public sealed class PredictionJobHandler(
         foreach (var warning in predictorWarnings) AddWarning(warning, warnings, warningSet);
         if (!model.WasCalibrated)
         {
-            AddWarning("uncalibrated-coefficients", warnings, warningSet);
+            AddWarning(PredictionWarningCodes.UncalibratedCoefficients, warnings, warningSet);
             confidence = ConfidenceLevel.Low;
         }
 
         switch (model.Validation.Status)
         {
             case ModelValidationStatus.Failed:
-                AddWarning("model-validation-failed", warnings, warningSet);
+                AddWarning(PredictionWarningCodes.ModelValidationFailed, warnings, warningSet);
                 confidence = ConfidenceLevel.Low;
                 break;
             case ModelValidationStatus.InsufficientData:
-                AddWarning("model-validation-insufficient-data", warnings, warningSet);
+                AddWarning(PredictionWarningCodes.ModelValidationInsufficientData, warnings, warningSet);
                 confidence = Min(confidence, ConfidenceLevel.Medium);
                 break;
             case ModelValidationStatus.NotValidated:
-                AddWarning("model-validation-not-validated", warnings, warningSet);
+                AddWarning(PredictionWarningCodes.ModelValidationNotValidated, warnings, warningSet);
                 confidence = Min(confidence, ConfidenceLevel.Medium);
                 break;
         }

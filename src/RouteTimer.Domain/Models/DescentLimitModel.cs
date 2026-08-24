@@ -2,6 +2,11 @@ namespace RouteTimer.Domain.Models;
 
 public sealed class DescentLimitModel
 {
+    private static readonly TimeSpan MinimumLearnedEvidence = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan HighConfidenceEvidence = TimeSpan.FromMinutes(20);
+    private const int MinimumLearnedActivityCount = 2;
+    private const int HighConfidenceActivityCount = 3;
+
     private static readonly IReadOnlyDictionary<string, int> GradeOrder =
         DescentGradeBand.All.Select((band, index) => (band.Key, index))
             .ToDictionary(value => value.Key, value => value.index, StringComparer.Ordinal);
@@ -24,7 +29,8 @@ public sealed class DescentLimitModel
         {
             if (cell is null)
                 throw new ArgumentException("Descent limit cells cannot be null.", nameof(cells));
-            if (!GradeOrder.ContainsKey(cell.GradeKey) || !CurvatureOrder.ContainsKey(cell.CurvatureKey))
+            if (cell.GradeKey is null || cell.CurvatureKey is null ||
+                !GradeOrder.ContainsKey(cell.GradeKey) || !CurvatureOrder.ContainsKey(cell.CurvatureKey))
                 throw new ArgumentException("A descent limit cell has an unknown grade or curvature key.", nameof(cells));
             if (!double.IsFinite(cell.SpeedCapMetresPerSecond) || cell.SpeedCapMetresPerSecond <= 0 || cell.SpeedCapMetresPerSecond > 20)
                 throw new ArgumentException("Descent speed caps must be finite and in the range (0, 20].", nameof(cells));
@@ -34,6 +40,8 @@ public sealed class DescentLimitModel
                 throw new ArgumentException("Descent activity count cannot be negative.", nameof(cells));
             if (!Enum.IsDefined(cell.Confidence))
                 throw new ArgumentException("Descent confidence is invalid.", nameof(cells));
+            if (!SatisfiesCellInvariants(cell))
+                throw new ArgumentException("Descent cell provenance, evidence, confidence, or fallback cap is contradictory.", nameof(cells));
         }
 
         if (copy.Select(cell => (cell.GradeKey, cell.CurvatureKey)).Distinct().Count() != copy.Length)
@@ -50,13 +58,45 @@ public sealed class DescentLimitModel
     public IReadOnlyList<DescentLimitCell> Cells { get; }
     public bool WasLearned { get; }
 
+    public static bool SatisfiesCellInvariants(DescentLimitCell? cell)
+    {
+        if (cell is null ||
+            cell.GradeKey is null ||
+            cell.CurvatureKey is null ||
+            !GradeOrder.ContainsKey(cell.GradeKey) ||
+            !CurvatureOrder.ContainsKey(cell.CurvatureKey) ||
+            !double.IsFinite(cell.SpeedCapMetresPerSecond) ||
+            cell.SpeedCapMetresPerSecond <= 0 ||
+            cell.SpeedCapMetresPerSecond > 20 ||
+            cell.Evidence < TimeSpan.Zero ||
+            cell.ActivityCount < 0 ||
+            !Enum.IsDefined(cell.Confidence))
+        {
+            return false;
+        }
+
+        if (cell.IsFallback)
+        {
+            return cell.Confidence == ConfidenceLevel.Low &&
+                   (cell.Evidence < MinimumLearnedEvidence || cell.ActivityCount < MinimumLearnedActivityCount) &&
+                   cell.SpeedCapMetresPerSecond <= ConservativeCap(cell.GradeKey, cell.CurvatureKey);
+        }
+
+        if (cell.Evidence < MinimumLearnedEvidence || cell.ActivityCount < MinimumLearnedActivityCount)
+        {
+            return false;
+        }
+
+        var expectedConfidence = cell.Evidence >= HighConfidenceEvidence && cell.ActivityCount >= HighConfidenceActivityCount
+            ? ConfidenceLevel.High
+            : ConfidenceLevel.Medium;
+        return cell.Confidence == expectedConfidence;
+    }
+
     private static IReadOnlyList<DescentLimitCell> CreateConservativeCells() =>
         DescentGradeBand.All.SelectMany(grade => DescentCurvatureBand.All.Select(curvature =>
         {
-            var curvatureCap = curvature.LowerBoundaryPerMetre > 0
-                ? Math.Sqrt(2 / curvature.LowerBoundaryPerMetre)
-                : 20;
-            var cap = Math.Min(grade.ConservativeCapMetresPerSecond, Math.Min(20, curvatureCap));
+            var cap = ConservativeCap(grade.Key, curvature.Key);
             return new DescentLimitCell(
                 grade.Key,
                 curvature.Key,
@@ -66,4 +106,14 @@ public sealed class DescentLimitModel
                 ConfidenceLevel.Low,
                 true);
         })).ToArray();
+
+    private static double ConservativeCap(string gradeKey, string curvatureKey)
+    {
+        var grade = DescentGradeBand.All.Single(value => value.Key == gradeKey);
+        var curvature = DescentCurvatureBand.All.Single(value => value.Key == curvatureKey);
+        var curvatureCap = curvature.LowerBoundaryPerMetre > 0
+            ? Math.Sqrt(2 / curvature.LowerBoundaryPerMetre)
+            : 20;
+        return Math.Min(grade.ConservativeCapMetresPerSecond, Math.Min(20, curvatureCap));
+    }
 }

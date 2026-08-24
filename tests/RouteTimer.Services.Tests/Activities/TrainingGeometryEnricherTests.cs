@@ -30,4 +30,20 @@ public sealed class TrainingGeometryEnricherTests
         Assert.Equal(expected.Select(value => value.Gradient), actual.Select(sample => sample.Gradient));
         Assert.Equal(expected.Select(value => value.CurvaturePerMetre), actual.Select(sample => sample.CurvaturePerMetre));
     }
+
+    // Break caught: enrichment overwrites its own raw input, so a second call performs another robust fit.
+    [Fact]
+    public void Enrich_preserves_raw_elevation_and_is_idempotent_for_nonlinear_profiles()
+    {
+        var points = ActivityFixtures.NonlinearElevationPoints();
+        var enricher = new TrainingGeometryEnricher(RouteProcessingOptions.Default);
+
+        var once = enricher.Enrich(ActivityFixtures.CleanedFrom(points));
+        var twice = enricher.Enrich(once);
+
+        Assert.Equal(points.Select(point => point.ElevationMetres), once.Samples.Select(sample => sample.Position.ElevationMetres));
+        Assert.Equal(
+            once.Samples.Select(sample => (sample.Gradient, sample.CurvaturePerMetre)),
+            twice.Samples.Select(sample => (sample.Gradient, sample.CurvaturePerMetre)));
+    }
 }
