@@ -62,13 +62,13 @@ public sealed class BuildModelJobHandler(
             throw new ModelBuildException("no-power-evidence", "No eligible training activities have power data available.");
         }
 
-        var model = new RiderModel(powerModel, PhysicalCoefficients.Default, AlgorithmVersion);
+        var model = new RiderModel(powerModel, PhysicalCoefficients.Default, DescentLimitModel.Conservative, false, AlgorithmVersion);
 
         var validation = validator.Validate(profile, allActivities);
 
         // Calibration (fitting the physical coefficients to observed data) isn't implemented yet, so
         // this handler always saves the default coefficients uncalibrated - that's expected to change
         // once calibration is built.
-        await models.SaveAsync(model, profile, wasCalibrated: false, validation, cancellationToken);
+        await models.SaveAsync(model, profile, validation, cancellationToken);
     }
 }

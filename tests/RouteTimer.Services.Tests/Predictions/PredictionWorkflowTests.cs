@@ -213,8 +213,8 @@ public sealed class PredictionWorkflowTests
 
     private static RiderModelSnapshot ModelSnapshot(string version, double watts, bool wasCalibrated = false, ModelValidationStatus validationStatus = ModelValidationStatus.InsufficientData)
     {
-        var model = new RiderModel(new PowerModel([], watts), PhysicalCoefficients.Default, version);
-        return new RiderModelSnapshot(Guid.NewGuid(), DateTimeOffset.UtcNow, new RiderProfile(75, 10), model, wasCalibrated,
+        var model = new RiderModel(new PowerModel([], watts), PhysicalCoefficients.Default, DescentLimitModel.Conservative, wasCalibrated, version);
+        return new RiderModelSnapshot(Guid.NewGuid(), DateTimeOffset.UtcNow, new RiderProfile(75, 10), model,
             new ModelValidationSummary(validationStatus, null, null));
     }
 
@@ -229,7 +229,7 @@ public sealed class PredictionWorkflowTests
     {
         public RiderModelSnapshot? Current { get; set; } = current;
         public Dictionary<Guid, RiderModelSnapshot> ById { get; } = [];
-        public Task<Guid> SaveAsync(RiderModel model, RiderProfile profileSnapshot, bool wasCalibrated, ModelValidationSummary validation, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<Guid> SaveAsync(RiderModel model, RiderProfile profileSnapshot, ModelValidationSummary validation, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<RiderModelSnapshot?> GetCurrentAsync(CancellationToken cancellationToken) => Task.FromResult(Current);
         public Task<RiderModelSnapshot?> GetAsync(Guid modelId, CancellationToken cancellationToken) => Task.FromResult(ById.TryGetValue(modelId, out var model) ? model : null);
     }

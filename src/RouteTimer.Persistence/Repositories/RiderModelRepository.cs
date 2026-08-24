@@ -9,7 +9,7 @@ namespace RouteTimer.Persistence.Repositories;
 
 public sealed class RiderModelRepository(RouteTimerDbContext context) : IRiderModelRepository
 {
-    public async Task<Guid> SaveAsync(RiderModel model, RiderProfile profileSnapshot, bool wasCalibrated, ModelValidationSummary validation, CancellationToken cancellationToken)
+    public async Task<Guid> SaveAsync(RiderModel model, RiderProfile profileSnapshot, ModelValidationSummary validation, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(validation);
@@ -26,7 +26,8 @@ public sealed class RiderModelRepository(RouteTimerDbContext context) : IRiderMo
             AirDensity = model.Coefficients.AirDensity,
             Crr = model.Coefficients.Crr,
             CdA = model.Coefficients.CdA,
-            WasCalibrated = wasCalibrated,
+            WasCalibrated = model.WasCalibrated,
+            DescentWasLearned = model.DescentLimits.WasLearned,
             GlobalTypicalWatts = model.PowerModel.GlobalTypicalWatts,
             ValidationStatus = validation.Status.ToString(),
             ValidationMedianApe = validation.MedianAbsolutePercentageError,
@@ -48,6 +49,21 @@ public sealed class RiderModelRepository(RouteTimerDbContext context) : IRiderMo
             });
         }
 
+        foreach (var cell in model.DescentLimits.Cells)
+        {
+            entity.DescentLimits.Add(new RiderModelDescentLimitEntity
+            {
+                ModelId = id,
+                GradeKey = cell.GradeKey,
+                CurvatureKey = cell.CurvatureKey,
+                SpeedCapMetresPerSecond = cell.SpeedCapMetresPerSecond,
+                EvidenceSeconds = cell.Evidence.TotalSeconds,
+                ActivityCount = cell.ActivityCount,
+                Confidence = cell.Confidence.ToString(),
+                IsFallback = cell.IsFallback
+            });
+        }
+
         context.RiderModels.Add(entity);
         await context.SaveChangesAsync(cancellationToken);
         return id;
@@ -57,6 +73,7 @@ public sealed class RiderModelRepository(RouteTimerDbContext context) : IRiderMo
     {
         var entity = await context.RiderModels
             .Include(model => model.Bands)
+            .Include(model => model.DescentLimits)
             .OrderByDescending(model => model.CreatedAt)
             .FirstOrDefaultAsync(cancellationToken);
         return entity is null ? null : ToSnapshot(entity);
@@ -66,6 +83,7 @@ public sealed class RiderModelRepository(RouteTimerDbContext context) : IRiderMo
     {
         var entity = await context.RiderModels
             .Include(model => model.Bands)
+            .Include(model => model.DescentLimits)
             .SingleOrDefaultAsync(model => model.Id == modelId, cancellationToken);
         return entity is null ? null : ToSnapshot(entity);
     }
@@ -87,13 +105,50 @@ public sealed class RiderModelRepository(RouteTimerDbContext context) : IRiderMo
 
         var powerModel = new PowerModel(bands, entity.GlobalTypicalWatts);
         var coefficients = new PhysicalCoefficients(entity.DrivetrainEfficiency, entity.AirDensity, entity.Crr, entity.CdA);
-        var riderModel = new RiderModel(powerModel, coefficients, entity.AlgorithmVersion);
+        var descentLimits = ToDescentLimits(entity);
+        if (entity.DescentWasLearned != descentLimits.WasLearned)
+            throw new InvalidOperationException("Persisted descent provenance does not match the stored descent cells.");
+        var riderModel = new RiderModel(powerModel, coefficients, descentLimits, entity.WasCalibrated, entity.AlgorithmVersion);
         var profileSnapshot = new RiderProfile(entity.ProfileRiderWeightKg, entity.ProfileBikeWeightKg);
         var validation = new ModelValidationSummary(
             Enum.Parse<ModelValidationStatus>(entity.ValidationStatus),
             entity.ValidationMedianApe,
             entity.ValidationP90Ape);
 
-        return new RiderModelSnapshot(entity.Id, entity.CreatedAt, profileSnapshot, riderModel, entity.WasCalibrated, validation);
+        return new RiderModelSnapshot(entity.Id, entity.CreatedAt, profileSnapshot, riderModel, validation);
+    }
+
+    private static DescentLimitModel ToDescentLimits(RiderModelEntity entity)
+    {
+        var cells = new List<DescentLimitCell>(entity.DescentLimits.Count);
+        foreach (var cell in entity.DescentLimits)
+        {
+            if (string.IsNullOrWhiteSpace(cell.GradeKey) || string.IsNullOrWhiteSpace(cell.CurvatureKey) ||
+                !double.IsFinite(cell.SpeedCapMetresPerSecond) || cell.SpeedCapMetresPerSecond <= 0 || cell.SpeedCapMetresPerSecond > 20 ||
+                !double.IsFinite(cell.EvidenceSeconds) || cell.EvidenceSeconds < 0 || cell.EvidenceSeconds > TimeSpan.MaxValue.TotalSeconds ||
+                cell.ActivityCount < 0 ||
+                !Enum.TryParse<ConfidenceLevel>(cell.Confidence, out var confidence) || !Enum.IsDefined(confidence))
+            {
+                throw new InvalidOperationException("Persisted descent cell data is malformed.");
+            }
+
+            cells.Add(new DescentLimitCell(
+                cell.GradeKey,
+                cell.CurvatureKey,
+                cell.SpeedCapMetresPerSecond,
+                TimeSpan.FromSeconds(cell.EvidenceSeconds),
+                cell.ActivityCount,
+                confidence,
+                cell.IsFallback));
+        }
+
+        try
+        {
+            return new DescentLimitModel(cells);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new InvalidOperationException("Persisted descent cell data is malformed.", exception);
+        }
     }
 }

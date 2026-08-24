@@ -33,7 +33,8 @@ public sealed class BuildModelJobHandlerTests
         Assert.Equal(PhysicalCoefficients.Default, models.Saved.Value.Model.Coefficients);
         Assert.Equal(BuildModelJobHandler.AlgorithmVersion, models.Saved.Value.Model.AlgorithmVersion);
         Assert.Equal(SampleProfile, models.Saved.Value.ProfileSnapshot);
-        Assert.False(models.Saved.Value.WasCalibrated);
+        Assert.False(models.Saved.Value.Model.WasCalibrated);
+        Assert.Same(DescentLimitModel.Conservative, models.Saved.Value.Model.DescentLimits);
         Assert.Same(SampleProfile, builder.ReceivedProfile);
         Assert.Same(activities.Activities, builder.ReceivedActivities);
         Assert.Same(SampleProfile, validator.ReceivedProfile);
@@ -194,11 +195,11 @@ public sealed class BuildModelJobHandlerTests
 
     private sealed class FakeRiderModelRepository : IRiderModelRepository
     {
-        public (RiderModel Model, RiderProfile ProfileSnapshot, bool WasCalibrated, ModelValidationSummary Validation)? Saved { get; private set; }
+        public (RiderModel Model, RiderProfile ProfileSnapshot, ModelValidationSummary Validation)? Saved { get; private set; }
 
-        public Task<Guid> SaveAsync(RiderModel model, RiderProfile profileSnapshot, bool wasCalibrated, ModelValidationSummary validation, CancellationToken cancellationToken)
+        public Task<Guid> SaveAsync(RiderModel model, RiderProfile profileSnapshot, ModelValidationSummary validation, CancellationToken cancellationToken)
         {
-            Saved = (model, profileSnapshot, wasCalibrated, validation);
+            Saved = (model, profileSnapshot, validation);
             return Task.FromResult(Guid.NewGuid());
         }
 

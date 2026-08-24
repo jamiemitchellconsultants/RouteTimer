@@ -63,7 +63,7 @@ public sealed class ModelValidator(IPowerModelBuilder builder, IRouteProcessor r
                 continue;
             }
 
-            var foldModel = new RiderModel(foldPowerModel, PhysicalCoefficients.Default, FoldAlgorithmVersion);
+            var foldModel = new RiderModel(foldPowerModel, PhysicalCoefficients.Default, DescentLimitModel.Conservative, false, FoldAlgorithmVersion);
 
             ProcessedRoute route;
             try

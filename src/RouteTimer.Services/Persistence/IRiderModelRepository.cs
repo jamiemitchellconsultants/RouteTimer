@@ -5,7 +5,7 @@ namespace RouteTimer.Services.Persistence;
 
 public interface IRiderModelRepository
 {
-    Task<Guid> SaveAsync(RiderModel model, RiderProfile profileSnapshot, bool wasCalibrated, ModelValidationSummary validation, CancellationToken cancellationToken);
+    Task<Guid> SaveAsync(RiderModel model, RiderProfile profileSnapshot, ModelValidationSummary validation, CancellationToken cancellationToken);
 
     Task<RiderModelSnapshot?> GetCurrentAsync(CancellationToken cancellationToken);
 

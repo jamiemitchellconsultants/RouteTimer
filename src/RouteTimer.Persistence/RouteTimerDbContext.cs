@@ -16,6 +16,7 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
     public DbSet<ActivitySampleEntity> ActivitySamples => Set<ActivitySampleEntity>();
     public DbSet<RiderModelEntity> RiderModels => Set<RiderModelEntity>();
     public DbSet<PowerBandEntity> PowerBands => Set<PowerBandEntity>();
+    public DbSet<RiderModelDescentLimitEntity> RiderModelDescentLimits => Set<RiderModelDescentLimitEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -115,6 +116,7 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
         sample.ToTable("activity_samples");
         sample.HasKey(entity => new { entity.ActivityId, entity.Sequence });
         sample.Property(entity => entity.Timestamp).HasColumnType("timestamp with time zone");
+        sample.Property(entity => entity.CurvaturePerMetre).HasDefaultValue(0d);
 
         activity.HasMany(entity => entity.Samples)
             .WithOne()
@@ -127,6 +129,7 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
         riderModel.Property(entity => entity.CreatedAt).HasColumnType("timestamp with time zone");
         riderModel.Property(entity => entity.AlgorithmVersion).HasMaxLength(128).IsRequired();
         riderModel.Property(entity => entity.ValidationStatus).HasMaxLength(32).IsRequired();
+        riderModel.Property(entity => entity.DescentWasLearned).HasDefaultValue(false);
         riderModel.HasIndex(entity => entity.CreatedAt);
 
         prediction.HasOne(entity => entity.RiderModel)
@@ -143,6 +146,18 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
 
         riderModel.HasMany(entity => entity.Bands)
             .WithOne()
+            .HasForeignKey(entity => entity.ModelId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        var descentLimit = modelBuilder.Entity<RiderModelDescentLimitEntity>();
+        descentLimit.ToTable("rider_model_descent_limits");
+        descentLimit.HasKey(entity => new { entity.ModelId, entity.GradeKey, entity.CurvatureKey });
+        descentLimit.Property(entity => entity.GradeKey).HasMaxLength(32).IsRequired();
+        descentLimit.Property(entity => entity.CurvatureKey).HasMaxLength(32).IsRequired();
+        descentLimit.Property(entity => entity.Confidence).HasMaxLength(32).IsRequired();
+
+        riderModel.HasMany(entity => entity.DescentLimits)
+            .WithOne(entity => entity.Model)
             .HasForeignKey(entity => entity.ModelId)
             .OnDelete(DeleteBehavior.Cascade);
     }

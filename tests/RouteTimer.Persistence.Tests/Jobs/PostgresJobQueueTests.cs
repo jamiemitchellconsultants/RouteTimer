@@ -516,7 +516,7 @@ public sealed class PostgresJobQueueTests
     {
         var models = new RiderModelRepository(context);
         var profile = new RiderProfile(75, 10);
-        var id = await models.SaveAsync(new RiderModel(new PowerModel([], 200), PhysicalCoefficients.Default, "v1"), profile, false,
+        var id = await models.SaveAsync(new RiderModel(new PowerModel([], 200), PhysicalCoefficients.Default, DescentLimitModel.Conservative, false, "v1"), profile,
             new ModelValidationSummary(ModelValidationStatus.Passed, .05, .08), CancellationToken.None);
         return (await models.GetAsync(id, CancellationToken.None))!;
     }

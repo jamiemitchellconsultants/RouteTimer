@@ -46,7 +46,8 @@ public sealed class TrainingActivityRepository(RouteTimerDbContext context) : IT
                 HeartRate = sample.HeartRate,
                 Cadence = sample.Cadence,
                 CrossesDiscontinuity = sample.CrossesDiscontinuity,
-                Gradient = sample.Gradient
+                Gradient = sample.Gradient,
+                CurvaturePerMetre = sample.CurvaturePerMetre
             });
         }
 
@@ -84,7 +85,8 @@ public sealed class TrainingActivityRepository(RouteTimerDbContext context) : IT
                 sample.HeartRate,
                 sample.Cadence,
                 sample.CrossesDiscontinuity,
-                sample.Gradient))
+                sample.Gradient,
+                sample.CurvaturePerMetre))
             .ToList();
 
         var quality = new ActivityQuality(
