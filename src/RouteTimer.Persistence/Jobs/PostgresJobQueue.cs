@@ -71,19 +71,36 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
         return rows > 0;
     }
 
-    public async Task CompleteAsync(Guid jobId, CancellationToken cancellationToken)
+    public async Task<bool> CompleteAsync(Guid jobId, string workerId, CancellationToken cancellationToken)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
         cancellationToken.ThrowIfCancellationRequested();
-        await context.Jobs
-            .Where(entity => entity.Id == jobId)
+
+        var running = JobState.Running.ToString();
+        var rows = await context.Jobs
+            .Where(entity => entity.Id == jobId && entity.State == running && entity.WorkerId == workerId)
             .ExecuteUpdateAsync(setters => setters.SetProperty(entity => entity.State, JobState.Succeeded.ToString()), cancellationToken);
+        return rows > 0;
     }
 
-    public async Task FailAsync(Guid jobId, bool permanent, string? diagnosticCode, string? diagnosticMessage, CancellationToken cancellationToken)
+    public async Task<bool> FailAsync(Guid jobId, string workerId, bool permanent, string? diagnosticCode, string? diagnosticMessage, CancellationToken cancellationToken)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var job = await context.Jobs.SingleAsync(entity => entity.Id == jobId, cancellationToken);
+        // The guarded read-then-save below happens on a single row keyed by its primary key, and every
+        // mutation of an AnalysisJob row goes through ClaimAsync/RenewLeaseAsync/CompleteAsync/FailAsync -
+        // none of which can interleave invisibly between this read and SaveChangesAsync - so this ownership
+        // check is race-free without an explicit transaction or FOR UPDATE.
+        var running = JobState.Running.ToString();
+        var job = await context.Jobs.SingleOrDefaultAsync(
+            entity => entity.Id == jobId && entity.State == running && entity.WorkerId == workerId,
+            cancellationToken);
+        if (job is null)
+        {
+            return false;
+        }
+
         job.DiagnosticCode = diagnosticCode;
         job.DiagnosticMessage = diagnosticMessage;
 
@@ -99,6 +116,7 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
         }
 
         await context.SaveChangesAsync(cancellationToken);
+        return true;
     }
 
     private static AnalysisJob ToDomain(AnalysisJobEntity job) =>

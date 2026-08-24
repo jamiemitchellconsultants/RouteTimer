@@ -7,6 +7,6 @@ public interface IJobQueue
     Task<Guid> EnqueueAsync(JobType type, Guid subjectId, CancellationToken cancellationToken);
     Task<AnalysisJob?> ClaimAsync(string workerId, DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken);
     Task<bool> RenewLeaseAsync(Guid jobId, string workerId, DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken);
-    Task CompleteAsync(Guid jobId, CancellationToken cancellationToken);
-    Task FailAsync(Guid jobId, bool permanent, string? diagnosticCode, string? diagnosticMessage, CancellationToken cancellationToken);
+    Task<bool> CompleteAsync(Guid jobId, string workerId, CancellationToken cancellationToken);
+    Task<bool> FailAsync(Guid jobId, string workerId, bool permanent, string? diagnosticCode, string? diagnosticMessage, CancellationToken cancellationToken);
 }
