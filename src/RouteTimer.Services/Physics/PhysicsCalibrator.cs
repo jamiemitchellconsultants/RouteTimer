@@ -328,7 +328,29 @@ public sealed class PhysicsCalibrator : IPhysicsCalibrator
             var comparison = string.Compare(left.ActivityName, right.ActivityName, StringComparison.Ordinal);
             if (comparison != 0) return comparison;
             comparison = left.Start.CompareTo(right.Start);
-            return comparison != 0 ? comparison : left.End.CompareTo(right.End);
+            if (comparison != 0) return comparison;
+            comparison = left.End.CompareTo(right.End);
+            if (comparison != 0) return comparison;
+            comparison = CompareDouble(left.Seconds, right.Seconds);
+            if (comparison != 0) return comparison;
+            comparison = CompareDouble(left.Speed, right.Speed);
+            if (comparison != 0) return comparison;
+            comparison = CompareDouble(left.Grade, right.Grade);
+            if (comparison != 0) return comparison;
+            comparison = CompareDouble(left.Response, right.Response);
+            if (comparison != 0) return comparison;
+            comparison = CompareDouble(left.RollingBasis, right.RollingBasis);
+            return comparison != 0
+                ? comparison
+                : CompareDouble(left.AerodynamicBasis, right.AerodynamicBasis);
+        }
+
+        private static int CompareDouble(double left, double right)
+        {
+            var comparison = left.CompareTo(right);
+            return comparison != 0
+                ? comparison
+                : BitConverter.DoubleToInt64Bits(left).CompareTo(BitConverter.DoubleToInt64Bits(right));
         }
     }
 }

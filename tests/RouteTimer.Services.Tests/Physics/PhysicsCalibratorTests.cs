@@ -26,6 +26,20 @@ public sealed class PhysicsCalibratorTests
         Assert.Equal(forward, reverse);
     }
 
+    // Break caught: treating duplicate activity-name/timestamp keys as equal leaves List.Sort free to accumulate
+    // differing observations in caller order, producing bitwise-different fitted coefficients after reversal.
+    [Fact]
+    public void Calibrate_is_order_independent_when_primary_sort_keys_collide()
+    {
+        var activities = PhysicsFixtures.CollidingPrimaryKeyActivities();
+
+        var forward = new PhysicsCalibrator().Calibrate(PhysicsFixtures.Profile, activities);
+        var reverse = new PhysicsCalibrator().Calibrate(PhysicsFixtures.Profile, activities.Reverse().ToArray());
+
+        Assert.True(forward.WasCalibrated);
+        Assert.Equal(forward, reverse);
+    }
+
     // Break caught: an unconstrained solve can publish physically implausible coefficients.
     [Theory]
     [InlineData(.001, .10, .002, .15)]
@@ -211,6 +225,18 @@ internal static class PhysicsFixtures
                 var grade = interval % 2 == 0 ? .20 : -.02;
                 return FromPhysicalBalance(expected, speed, grade, 0, false);
             }))
+            .ToArray();
+    }
+
+    public static IReadOnlyList<CleanedActivity> CollidingPrimaryKeyActivities()
+    {
+        var expected = new PhysicalCoefficients(.97, 1.225, .006, .35);
+        return Enumerable.Range(0, 12)
+            .Select(variant => Activity(
+                "Same ride name",
+                0,
+                48,
+                interval => SyntheticInterval(expected, interval + variant * 11, variant % 4 == 0)))
             .ToArray();
     }
 
