@@ -151,4 +151,21 @@ public sealed class RepositoryRoundTripTests
         var storedActivity = await context.TrainingActivities.SingleAsync();
         Assert.Equal(uploadId, storedActivity.UploadId);
     }
+
+    [Fact]
+    public async Task Exclusion_counts_value_comparer_is_order_independent()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var property = context.Model
+            .FindEntityType(typeof(TrainingActivityEntity))!
+            .FindProperty(nameof(TrainingActivityEntity.ExclusionCounts))!;
+        var comparer = property.GetValueComparer();
+
+        var inOneOrder = new Dictionary<string, int> { ["gap"] = 1, ["pause"] = 2, ["dropout"] = 3 };
+        var inAnotherOrder = new Dictionary<string, int> { ["dropout"] = 3, ["gap"] = 1, ["pause"] = 2 };
+
+        Assert.True(comparer.Equals(inOneOrder, inAnotherOrder));
+        Assert.Equal(comparer.GetHashCode(inOneOrder), comparer.GetHashCode(inAnotherOrder));
+    }
 }

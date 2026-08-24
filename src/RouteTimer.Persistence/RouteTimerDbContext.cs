@@ -85,9 +85,12 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
     private static readonly JsonSerializerOptions JsonOptions = new();
 
     private static readonly ValueComparer<IReadOnlyDictionary<string, int>> DictionaryComparer = new(
-        (left, right) => (left ?? new Dictionary<string, int>()).SequenceEqual(right ?? new Dictionary<string, int>()),
-        dictionary => dictionary.Aggregate(0, (hash, pair) => HashCode.Combine(hash, pair.Key, pair.Value)),
+        (left, right) => DictionaryEquals(left ?? new Dictionary<string, int>(), right ?? new Dictionary<string, int>()),
+        dictionary => dictionary.Aggregate(0, (hash, pair) => hash ^ HashCode.Combine(pair.Key, pair.Value)),
         dictionary => dictionary.ToDictionary(pair => pair.Key, pair => pair.Value));
+
+    private static bool DictionaryEquals(IReadOnlyDictionary<string, int> left, IReadOnlyDictionary<string, int> right) =>
+        left.Count == right.Count && left.All(pair => right.TryGetValue(pair.Key, out var value) && value == pair.Value);
 
     private static readonly ValueComparer<IReadOnlyList<string>> ListComparer = new(
         (left, right) => (left ?? new List<string>()).SequenceEqual(right ?? new List<string>()),
