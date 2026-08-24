@@ -16,6 +16,37 @@ internal static class ModelFixtures
         220);
 
     /// <summary>
+    /// A 2x2 sub-grid ("-1:1"/"1:3" gradient bands x "0:30"/"30:60" duration bands) with distinct watts
+    /// at each corner, plus one extra band at "1:3"/"180:+" (isolated, not adjacent to the 2x2 block) so
+    /// high-duration extrapolation can be exercised. All four 2x2 corners carry High confidence except
+    /// (1:3, 30:60) which is Medium, so confidence-as-weakest-link tests have something to bite on.
+    /// </summary>
+    public static PowerModel GridModel() => new(
+        [
+            new PowerBand("-1:1", "0:30", 180, TimeSpan.FromMinutes(20), 3, 1, ConfidenceLevel.High),
+            new PowerBand("-1:1", "30:60", 200, TimeSpan.FromMinutes(20), 3, 1, ConfidenceLevel.High),
+            new PowerBand("1:3", "0:30", 260, TimeSpan.FromMinutes(20), 3, 1, ConfidenceLevel.High),
+            new PowerBand("1:3", "30:60", 300, TimeSpan.FromMinutes(20), 3, 1, ConfidenceLevel.Medium),
+            new PowerBand("1:3", "180:+", 340, TimeSpan.FromMinutes(20), 3, 1, ConfidenceLevel.High)
+        ],
+        220);
+
+    /// <summary>
+    /// Has exact evidence at ("-1:1","0:30") and ("-1:1","60:120") but nothing at ("-1:1","30:60"), so a
+    /// query bracketing "0:30"/"30:60" on the duration axis needs the ("-1:1","30:60") corner and must
+    /// fall back to the same-gradient/nearest-duration rule (closer to "0:30" than "60:120" by anchor).
+    /// Also carries "1:3" data at "0:30" and "30:60" so the other two bracket corners resolve exactly.
+    /// </summary>
+    public static PowerModel SparseCornerModel() => new(
+        [
+            new PowerBand("-1:1", "0:30", 180, TimeSpan.FromMinutes(20), 3, 1, ConfidenceLevel.High),
+            new PowerBand("-1:1", "60:120", 240, TimeSpan.FromMinutes(20), 3, 1, ConfidenceLevel.High),
+            new PowerBand("1:3", "0:30", 260, TimeSpan.FromMinutes(20), 3, 1, ConfidenceLevel.High),
+            new PowerBand("1:3", "30:60", 300, TimeSpan.FromMinutes(20), 3, 1, ConfidenceLevel.High)
+        ],
+        220);
+
+    /// <summary>
     /// A single-sample activity landing in exactly one gradient/duration cell: <paramref name="movingDuration"/>
     /// is the activity's total moving time (and, with one sample, also this sample's full weight);
     /// <paramref name="elapsed"/> is the cumulative moving time at the sample, which selects the duration band.
