@@ -2,6 +2,7 @@ using RouteTimer.Domain.Jobs;
 using RouteTimer.Services.Jobs;
 using Microsoft.EntityFrameworkCore;
 using RouteTimer.Persistence.Entities;
+using Npgsql;
 
 namespace RouteTimer.Persistence.Jobs;
 
@@ -17,6 +18,35 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
         context.Jobs.Add(new AnalysisJobEntity { Id = id, Type = type.ToString(), SubjectId = subjectId, State = JobState.Queued.ToString(), CreatedAt = DateTimeOffset.UtcNow });
         await context.SaveChangesAsync(cancellationToken);
         return id;
+    }
+
+    public async Task<Guid> EnqueueIfNotPendingAsync(JobType type, Guid subjectId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var id = Guid.NewGuid();
+        var entity = new AnalysisJobEntity { Id = id, Type = type.ToString(), SubjectId = subjectId, State = JobState.Queued.ToString(), CreatedAt = DateTimeOffset.UtcNow };
+        context.Jobs.Add(entity);
+
+        try
+        {
+            await context.SaveChangesAsync(cancellationToken);
+            return id;
+        }
+        catch (DbUpdateException exception) when (exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+        {
+            // A concurrent caller won the race to insert the active (Type, SubjectId) row that the
+            // partial unique index guards. Detach our failed entity so it doesn't linger in the change
+            // tracker, then look up whichever job actually won and return its id instead.
+            context.Entry(entity).State = EntityState.Detached;
+
+            var queued = JobState.Queued.ToString();
+            var running = JobState.Running.ToString();
+            var existing = await context.Jobs
+                .Where(job => job.Type == entity.Type && job.SubjectId == subjectId && (job.State == queued || job.State == running))
+                .OrderBy(job => job.CreatedAt)
+                .FirstAsync(cancellationToken);
+            return existing.Id;
+        }
     }
 
     public async Task<AnalysisJob?> ClaimAsync(string workerId, DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken)

@@ -283,4 +283,67 @@ public sealed class PostgresJobQueueTests
         Assert.Equal(JobState.Failed.ToString(), reloaded.State);
         Assert.Equal(3, reloaded.AttemptCount);
     }
+
+    [Fact]
+    public async Task Concurrent_EnqueueIfNotPendingAsync_calls_for_the_same_subject_coalesce_to_a_single_job()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using (var migrationContext = CreateContext(database))
+        {
+            await migrationContext.Database.MigrateAsync();
+        }
+
+        var subjectId = ModelSubject.Id;
+        var enqueueTasks = new List<Task<Guid>>();
+        var contexts = new List<RouteTimerDbContext>();
+        try
+        {
+            for (var i = 0; i < 5; i++)
+            {
+                var workerContext = CreateContext(database);
+                contexts.Add(workerContext);
+                var queue = new PostgresJobQueue(workerContext);
+                enqueueTasks.Add(queue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None));
+            }
+
+            var results = await Task.WhenAll(enqueueTasks);
+
+            Assert.Single(results.Distinct());
+
+            await using var verifyContext = CreateContext(database);
+            var jobs = await verifyContext.Jobs
+                .Where(job => job.Type == JobType.BuildModel.ToString() && job.SubjectId == subjectId)
+                .ToListAsync();
+            var onlyJob = Assert.Single(jobs);
+            Assert.All(results, result => Assert.Equal(onlyJob.Id, result));
+        }
+        finally
+        {
+            foreach (var workerContext in contexts)
+            {
+                await workerContext.DisposeAsync();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task EnqueueIfNotPendingAsync_inserts_a_fresh_job_once_the_prior_one_reaches_a_terminal_state()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using var context = CreateContext(database);
+        await context.Database.MigrateAsync();
+        var queue = new PostgresJobQueue(context);
+        var subjectId = ModelSubject.Id;
+        var now = DateTimeOffset.UtcNow;
+
+        var firstId = await queue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None);
+        await queue.ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), CancellationToken.None);
+        await queue.CompleteAsync(firstId, "worker-a", CancellationToken.None);
+
+        var secondId = await queue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None);
+
+        Assert.NotEqual(firstId, secondId);
+        var jobs = await context.Jobs.AsNoTracking().Where(job => job.SubjectId == subjectId).ToListAsync();
+        Assert.Equal(2, jobs.Count);
+    }
 }

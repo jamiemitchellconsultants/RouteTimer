@@ -7,9 +7,9 @@ namespace RouteTimer.Api.Workers;
 /// <summary>
 /// Hosted background worker that continuously claims queued <see cref="AnalysisJob"/>s and dispatches
 /// them to the matching <see cref="IJobHandler"/>. Keeps the claimed job's lease alive for the duration
-/// of handling, classifies failures into permanent (bad input, no handler) versus transient (unexpected
-/// errors, retried by the queue's own bounded-retry policy), and never lets a single job's failure - or
-/// a bug in its own dispatch code - take the host down.
+/// of handling, classifies failures into permanent (a <see cref="RouteTimerJobException"/> - bad input,
+/// no handler) versus transient (unexpected errors, retried by the queue's own bounded-retry policy), and
+/// never lets a single job's failure - or a bug in its own dispatch code - take the host down.
 /// </summary>
 public sealed class AnalysisWorker(IServiceScopeFactory scopeFactory, TimeProvider timeProvider, ILogger<AnalysisWorker> logger) : BackgroundService
 {
@@ -69,7 +69,7 @@ public sealed class AnalysisWorker(IServiceScopeFactory scopeFactory, TimeProvid
                 await handler.HandleAsync(job, stoppingToken);
                 LogIfNoLongerOwned(await jobs.CompleteAsync(job.Id, workerId, stoppingToken), job.Id);
             }
-            catch (ActivityInputException exception)
+            catch (RouteTimerJobException exception)
             {
                 LogIfNoLongerOwned(await jobs.FailAsync(job.Id, workerId, permanent: true, exception.Code, exception.Message, stoppingToken), job.Id);
             }

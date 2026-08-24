@@ -36,6 +36,7 @@ public sealed class TrainingUploadServiceTests
     {
         public List<(JobType Type, Guid SubjectId)> Enqueued { get; } = [];
         public Task<Guid> EnqueueAsync(JobType type, Guid subjectId, CancellationToken cancellationToken) { Enqueued.Add((type, subjectId)); return Task.FromResult(Guid.NewGuid()); }
+        public Task<Guid> EnqueueIfNotPendingAsync(JobType type, Guid subjectId, CancellationToken cancellationToken) { Enqueued.Add((type, subjectId)); return Task.FromResult(Guid.NewGuid()); }
         public Task<AnalysisJob?> ClaimAsync(string workerId, DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken) => Task.FromResult<AnalysisJob?>(null);
         public Task<bool> RenewLeaseAsync(Guid jobId, string workerId, DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken) => Task.FromResult(false);
         public Task<bool> CompleteAsync(Guid jobId, string workerId, CancellationToken cancellationToken) => Task.FromResult(false);

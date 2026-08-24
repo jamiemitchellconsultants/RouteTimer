@@ -155,6 +155,30 @@ public sealed class RepositoryRoundTripTests
     }
 
     [Fact]
+    public async Task GetAll_returns_every_saved_training_activity_regardless_of_eligibility()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new TrainingActivityRepository(context);
+        var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var eligibleSamples = new[] { new CleanRideSample(start, TimeSpan.Zero, new GeoPoint(51.1, -2.1, 100), 5.0, 180, 140, 85, false, 0.5) };
+        var ineligibleSamples = new[] { new CleanRideSample(start, TimeSpan.Zero, new GeoPoint(51.1, -2.1, 100), 5.0, null, null, null, false, 0.5) };
+        var eligible = new CleanedActivity("Eligible Ride", eligibleSamples, TimeSpan.FromMinutes(20),
+            new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []));
+        var ineligible = new CleanedActivity("Ineligible Ride", ineligibleSamples, TimeSpan.FromMinutes(5),
+            new ActivityQuality(ActivityEligibility.Ineligible, 0.1, 0.1, 0.1, 0, new Dictionary<string, int> { ["gap"] = 3 }, ["low-coverage"]));
+
+        await repository.SaveAsync(Guid.NewGuid(), eligible, CancellationToken.None);
+        await repository.SaveAsync(Guid.NewGuid(), ineligible, CancellationToken.None);
+
+        var all = await repository.GetAllAsync(CancellationToken.None);
+
+        Assert.Equal(2, all.Count);
+        Assert.Contains(all, activity => activity.Name == "Eligible Ride" && activity.Quality.Eligibility == ActivityEligibility.Eligible);
+        Assert.Contains(all, activity => activity.Name == "Ineligible Ride" && activity.Quality.Eligibility == ActivityEligibility.Ineligible);
+    }
+
+    [Fact]
     public async Task Exclusion_counts_value_comparer_is_order_independent()
     {
         var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;

@@ -59,6 +59,25 @@ public sealed class AnalysisWorkerTests
     }
 
     [Fact]
+    public async Task Fails_permanently_with_the_exceptions_code_and_message_on_model_build_exception()
+    {
+        var job = MakeJob(JobType.BuildModel);
+        var jobQueue = new FakeJobQueue();
+        jobQueue.EnqueueClaim(job);
+        var handler = new FakeJobHandler(JobType.BuildModel, new ModelBuildException("no-eligible-activities", "No eligible training activities are available to build a model."));
+        var worker = CreateWorker(jobQueue, handler);
+
+        await worker.ProcessIterationAsync(CancellationToken.None);
+
+        var failure = Assert.Single(jobQueue.Failed);
+        Assert.Equal(job.Id, failure.JobId);
+        Assert.True(failure.Permanent);
+        Assert.Equal("no-eligible-activities", failure.Code);
+        Assert.Equal("No eligible training activities are available to build a model.", failure.Message);
+        Assert.Empty(jobQueue.Completed);
+    }
+
+    [Fact]
     public async Task Fails_transiently_on_an_unexpected_exception_and_keeps_processing_afterward()
     {
         var jobOne = MakeJob(JobType.ParseTraining);
@@ -234,6 +253,8 @@ public sealed class AnalysisWorkerTests
         public void EnqueueRenewFailure(Exception exception) => renewOutcomes.Enqueue(exception);
 
         public Task<Guid> EnqueueAsync(JobType type, Guid subjectId, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<Guid> EnqueueIfNotPendingAsync(JobType type, Guid subjectId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<AnalysisJob?> ClaimAsync(string workerId, DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken)
         {

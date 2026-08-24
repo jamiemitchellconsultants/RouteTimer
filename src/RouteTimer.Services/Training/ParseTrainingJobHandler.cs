@@ -11,12 +11,19 @@ namespace RouteTimer.Services.Training;
 /// references, cleans it into a training-eligible (or ineligible) activity, and persists the result.
 /// Any <see cref="ActivityInputException"/> raised here is a permanent failure the caller (the hosted
 /// worker) is responsible for reporting; unexpected exceptions are left to propagate unclassified.
+/// On a successful save, coalesces a <see cref="JobType.BuildModel"/> rebuild via
+/// <see cref="IJobQueue.EnqueueIfNotPendingAsync"/> - at most one rebuild is ever pending, so a batch of
+/// uploads finishing in quick succession triggers at most one rebuild rather than one per file. This is
+/// deliberately simple: it does not wait for an in-flight batch to fully settle before enqueuing, so an
+/// upload that finishes while a rebuild is already running won't be included until the *next* rebuild
+/// (triggered whenever this handler runs again for a later upload). That's intentional scoping, not a bug.
 /// </summary>
 public sealed class ParseTrainingJobHandler(
     IStoredUploadRepository uploads,
     IFitActivityParser parser,
     ITrainingCleaner cleaner,
-    ITrainingActivityRepository activities) : IJobHandler
+    ITrainingActivityRepository activities,
+    IJobQueue jobs) : IJobHandler
 {
     public JobType Handles => JobType.ParseTraining;
 
@@ -34,5 +41,6 @@ public sealed class ParseTrainingJobHandler(
         var parsed = await parser.ParseAsync(content, cancellationToken);
         var cleaned = cleaner.Clean(parsed);
         await activities.SaveAsync(job.SubjectId, cleaned, cancellationToken);
+        await jobs.EnqueueIfNotPendingAsync(JobType.BuildModel, ModelSubject.Id, cancellationToken);
     }
 }

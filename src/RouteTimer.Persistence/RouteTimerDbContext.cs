@@ -37,6 +37,13 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
         job.Property(entity => entity.DiagnosticMessage).HasMaxLength(1024);
         job.HasIndex(entity => new { entity.State, entity.LeaseExpiresAt, entity.CreatedAt });
 
+        // Backs EnqueueIfNotPendingAsync's coalescing: at most one Queued/Running job may exist for a
+        // given (Type, SubjectId) pair, and the database enforces this even under concurrent inserts.
+        job.HasIndex(entity => new { entity.Type, entity.SubjectId })
+            .IsUnique()
+            .HasFilter("\"State\" IN ('Queued', 'Running')")
+            .HasDatabaseName("IX_analysis_jobs_active_type_subject");
+
         var profile = modelBuilder.Entity<RiderProfileEntity>();
         profile.ToTable("rider_profile");
         profile.HasKey(entity => entity.Id);
