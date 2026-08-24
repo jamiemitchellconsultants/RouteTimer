@@ -5,9 +5,11 @@ using RouteTimer.Contracts.Profile;
 using RouteTimer.Contracts.Training;
 using RouteTimer.Contracts.Predictions;
 using RouteTimer.Api;
+using RouteTimer.Api.Workers;
 using RouteTimer.Persistence;
 using RouteTimer.Persistence.Repositories;
 using RouteTimer.Persistence.Jobs;
+using RouteTimer.Services.Activities;
 using RouteTimer.Services.Profile;
 using RouteTimer.Services.Persistence;
 using RouteTimer.Services.Training;
@@ -34,6 +36,11 @@ builder.Services.AddScoped<TrainingUploadService>();
 builder.Services.AddScoped<ProfileService>();
 builder.Services.AddSingleton<IGpxRouteParser, GpxRouteParser>();
 builder.Services.AddSingleton<IRouteProcessor>(_ => new RouteProcessor(RouteProcessingOptions.Default));
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<IFitActivityParser, FitActivityParser>();
+builder.Services.AddSingleton<ITrainingCleaner>(_ => new TrainingCleaner(RouteProcessingOptions.Default));
+builder.Services.AddScoped<IJobHandler, ParseTrainingJobHandler>();
+builder.Services.AddHostedService<AnalysisWorker>();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
