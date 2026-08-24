@@ -4,6 +4,8 @@ using Microsoft.EntityFrameworkCore;
 using RouteTimer.Contracts.Profile;
 using RouteTimer.Contracts.Training;
 using RouteTimer.Contracts.Predictions;
+using RouteTimer.Contracts.Jobs;
+using RouteTimer.Contracts.Errors;
 using RouteTimer.Api;
 using RouteTimer.Api.Workers;
 using RouteTimer.Persistence;
@@ -35,8 +37,12 @@ builder.Services.AddScoped<ITrainingActivityRepository, TrainingActivityReposito
 builder.Services.AddScoped<IRiderModelRepository, RiderModelRepository>();
 builder.Services.AddScoped<IJobQueue, PostgresJobQueue>();
 builder.Services.AddScoped<IProfileRepository, ProfileRepository>();
+builder.Services.AddScoped<IPredictionRepository, PredictionRepository>();
+builder.Services.AddScoped<IJobRepository, JobRepository>();
 builder.Services.AddScoped<TrainingUploadService>();
 builder.Services.AddScoped<ProfileService>();
+builder.Services.AddScoped<PredictionSubmissionService>();
+builder.Services.AddScoped<PredictionQueryService>();
 builder.Services.AddSingleton<IGpxRouteParser, GpxRouteParser>();
 builder.Services.AddSingleton<IRouteProcessor>(_ => new RouteProcessor(RouteProcessingOptions.Default));
 builder.Services.AddSingleton(TimeProvider.System);
@@ -47,6 +53,7 @@ builder.Services.AddSingleton<IRoutePredictor, RoutePredictor>();
 builder.Services.AddSingleton<IModelValidator, ModelValidator>();
 builder.Services.AddScoped<IJobHandler, ParseTrainingJobHandler>();
 builder.Services.AddScoped<IJobHandler, BuildModelJobHandler>();
+builder.Services.AddScoped<IJobHandler, PredictionJobHandler>();
 builder.Services.AddHostedService<AnalysisWorker>();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -111,33 +118,77 @@ app.MapPost("/api/training/uploads", async (HttpRequest request, TrainingUploadS
         return Results.Ok(results.Select(result => new TrainingUploadResponse(result.FileName, result.Outcome.ToString().ToLowerInvariant(), result.ErrorCode)));
     })
     .RequireAuthorization();
-app.MapPost("/api/predictions", async (HttpRequest request, IGpxRouteParser parser, IRouteProcessor processor, CancellationToken cancellationToken) =>
+app.MapPost("/api/predictions", async (HttpRequest request, PredictionSubmissionService submissions, CancellationToken cancellationToken) =>
     {
         if (!request.HasFormContentType)
         {
-            return Results.BadRequest(new { code = "multipart-required" });
+            return Problem(StatusCodes.Status400BadRequest, ErrorCodes.MultipartRequired, "A multipart GPX upload is required.");
         }
 
         var file = (await request.ReadFormAsync(cancellationToken)).Files.SingleOrDefault();
         if (file is null || !file.FileName.EndsWith(".gpx", StringComparison.OrdinalIgnoreCase))
         {
-            return Results.BadRequest(new { code = "prediction-gpx-required" });
+            return Problem(StatusCodes.Status400BadRequest, ErrorCodes.PredictionGpxRequired, "A single .gpx route upload is required.");
+        }
+        if (file.Length > 50L * 1024 * 1024)
+        {
+            return Problem(StatusCodes.Status413PayloadTooLarge, ErrorCodes.GpxTooLarge, "The GPX upload exceeds 50 MB.");
         }
 
         try
         {
             await using var input = file.OpenReadStream();
-            var parsed = await parser.ParseAsync(input, cancellationToken);
-            var route = processor.Process(parsed.Points);
-            return Results.Ok(new PredictionRoutePreview(parsed.Name, route.DistanceMetres, route.AscentMetres, route.Samples.Count));
+            var accepted = await submissions.SubmitAsync(new PredictionUpload(file.FileName, input), cancellationToken);
+            return Results.Accepted($"/api/predictions/{accepted.PredictionId}", new PredictionSubmissionResponse(accepted.PredictionId, accepted.JobId, accepted.ModelId));
         }
-        catch (RouteInputException exception)
+        catch (PredictionSubmissionException exception)
         {
-            return Results.BadRequest(new { code = "invalid-gpx", message = exception.Message });
+            var status = exception.Code is ErrorCodes.ProfileRequired or ErrorCodes.ModelNotReady
+                ? StatusCodes.Status409Conflict
+                : exception.Code == ErrorCodes.GpxTooLarge ? StatusCodes.Status413PayloadTooLarge : StatusCodes.Status400BadRequest;
+            return Problem(status, exception.Code, exception.Message);
+        }
+        catch (IOException)
+        {
+            return Problem(StatusCodes.Status413PayloadTooLarge, ErrorCodes.GpxTooLarge, "The GPX upload exceeds 50 MB.");
         }
     })
     .RequireAuthorization();
+app.MapGet("/api/predictions", async (PredictionQueryService predictions, CancellationToken cancellationToken) =>
+    Results.Ok((await predictions.GetSummariesAsync(cancellationToken)).Select(ToSummary))).RequireAuthorization();
+app.MapGet("/api/predictions/{id:guid}", async (Guid id, PredictionQueryService predictions, CancellationToken cancellationToken) =>
+    (await predictions.GetAsync(id, cancellationToken)) is { } prediction
+        ? Results.Ok(new PredictionDetailResponse(ToDetailSummary(prediction), prediction.Segments.Select(ToSegment).ToList()))
+        : Results.NotFound()).RequireAuthorization();
+app.MapGet("/api/jobs/{id:guid}", async (Guid id, IJobRepository jobs, CancellationToken cancellationToken) =>
+    (await jobs.GetAsync(id, cancellationToken)) is { } job
+        ? Results.Ok(new JobResponse(job.Id, job.Type.ToString(), job.SubjectId, job.State.ToString(), job.AttemptCount, job.CreatedAt, job.WorkerId, job.LeaseExpiresAt, job.DiagnosticCode, job.DiagnosticMessage))
+        : Results.NotFound()).RequireAuthorization();
 
 app.Run();
+
+static IResult Problem(int status, string code, string detail) => Results.Problem(statusCode: status, detail: detail,
+    extensions: new Dictionary<string, object?> { ["code"] = code });
+
+static PredictionSummaryResponse ToSummary(RouteTimer.Services.Persistence.PredictionSummary prediction) => new(
+    prediction.Id, prediction.State.ToString(), prediction.DistanceMetres, prediction.AscentMetres, prediction.MovingTime?.TotalSeconds,
+    prediction.AverageSpeedMetresPerSecond, prediction.AveragePowerWatts, prediction.Confidence?.ToString(), prediction.Warnings,
+    prediction.ModelId, prediction.ModelVersion, prediction.ModelWasCalibrated, prediction.Validation.Status.ToString(), prediction.Validation.MedianAbsolutePercentageError,
+    prediction.Validation.P90AbsolutePercentageError, prediction.Profile.RiderWeightKg, prediction.Profile.BikeAndEquipmentWeightKg,
+    prediction.Assumptions.Surface, prediction.Assumptions.Wind, prediction.Assumptions.Weather, prediction.Assumptions.MovingOnly,
+    prediction.CreatedAt, prediction.CompletedAt);
+
+static PredictionSummaryResponse ToDetailSummary(RouteTimer.Services.Persistence.PredictionDetail prediction) => new(
+    prediction.Id, prediction.State.ToString(), prediction.DistanceMetres, prediction.AscentMetres, prediction.MovingTime?.TotalSeconds,
+    prediction.AverageSpeedMetresPerSecond, prediction.AveragePowerWatts, prediction.Confidence?.ToString(), prediction.Warnings,
+    prediction.ModelId, prediction.ModelVersion, prediction.ModelWasCalibrated, prediction.Validation.Status.ToString(), prediction.Validation.MedianAbsolutePercentageError,
+    prediction.Validation.P90AbsolutePercentageError, prediction.Profile.RiderWeightKg, prediction.Profile.BikeAndEquipmentWeightKg,
+    prediction.Assumptions.Surface, prediction.Assumptions.Wind, prediction.Assumptions.Weather, prediction.Assumptions.MovingOnly,
+    prediction.CreatedAt, prediction.CompletedAt);
+
+static PredictionSegmentResponse ToSegment(RouteTimer.Services.Persistence.PersistedPredictionSegment segment) => new(
+    segment.Sequence, segment.Latitude, segment.Longitude, segment.ElevationMetres, segment.CumulativeDistanceMetres,
+    segment.SegmentDistanceMetres, segment.Gradient, segment.CurvaturePerMetre, segment.PredictedPowerWatts,
+    segment.PredictedSpeedMetresPerSecond, segment.SegmentMovingTime.TotalSeconds, segment.CumulativeMovingTime.TotalSeconds, segment.Confidence.ToString());
 
 public partial class Program;

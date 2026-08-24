@@ -8,6 +8,7 @@ namespace RouteTimer.Persistence;
 public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> options) : DbContext(options)
 {
     public DbSet<PredictionEntity> Predictions => Set<PredictionEntity>();
+    public DbSet<PredictionSegmentEntity> PredictionSegments => Set<PredictionSegmentEntity>();
     public DbSet<AnalysisJobEntity> Jobs => Set<AnalysisJobEntity>();
     public DbSet<RiderProfileEntity> Profiles => Set<RiderProfileEntity>();
     public DbSet<StoredUploadEntity> Uploads => Set<StoredUploadEntity>();
@@ -22,8 +23,33 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
         prediction.ToTable("predictions");
         prediction.HasKey(entity => entity.Id);
         prediction.Property(entity => entity.ModelVersion).HasMaxLength(128).IsRequired();
+        prediction.Property(entity => entity.ModelValidationStatus).HasMaxLength(32).IsRequired();
+        prediction.Property(entity => entity.AssumptionSurface).HasMaxLength(32).IsRequired();
+        prediction.Property(entity => entity.AssumptionWind).HasMaxLength(32).IsRequired();
+        prediction.Property(entity => entity.AssumptionWeather).HasMaxLength(32).IsRequired();
+        prediction.Property(entity => entity.State).HasMaxLength(32).IsRequired();
+        prediction.Property(entity => entity.Confidence).HasMaxLength(32);
+        prediction.Property(entity => entity.Warnings)
+            .HasConversion(
+                warnings => JsonSerializer.Serialize(warnings, JsonOptions),
+                json => JsonSerializer.Deserialize<List<string>>(json, JsonOptions) ?? new List<string>())
+            .HasColumnType("jsonb")
+            .Metadata.SetValueComparer(ListComparer);
         prediction.Property(entity => entity.CreatedAt).HasColumnType("timestamp with time zone");
+        prediction.Property(entity => entity.CompletedAt).HasColumnType("timestamp with time zone");
         prediction.HasIndex(entity => entity.CreatedAt);
+        prediction.HasIndex(entity => entity.UploadId);
+        prediction.HasIndex(entity => entity.RiderModelId);
+
+        var predictionSegment = modelBuilder.Entity<PredictionSegmentEntity>();
+        predictionSegment.ToTable("prediction_segments");
+        predictionSegment.HasKey(entity => new { entity.PredictionId, entity.Sequence });
+        predictionSegment.Property(entity => entity.Confidence).HasMaxLength(32).IsRequired();
+
+        prediction.HasMany(entity => entity.Segments)
+            .WithOne()
+            .HasForeignKey(entity => entity.PredictionId)
+            .OnDelete(DeleteBehavior.Cascade);
 
         var job = modelBuilder.Entity<AnalysisJobEntity>();
         job.ToTable("analysis_jobs");
@@ -58,6 +84,11 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
         upload.Property(entity => entity.Sha256).HasColumnType("bytea").HasMaxLength(32).IsRequired();
         upload.Property(entity => entity.CreatedAt).HasColumnType("timestamp with time zone");
         upload.HasIndex(entity => new { entity.Kind, entity.Sha256 }).IsUnique();
+
+        prediction.HasOne(entity => entity.Upload)
+            .WithMany()
+            .HasForeignKey(entity => entity.UploadId)
+            .OnDelete(DeleteBehavior.Restrict);
 
         var activity = modelBuilder.Entity<TrainingActivityEntity>();
         activity.ToTable("training_activities");
@@ -97,6 +128,11 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
         riderModel.Property(entity => entity.AlgorithmVersion).HasMaxLength(128).IsRequired();
         riderModel.Property(entity => entity.ValidationStatus).HasMaxLength(32).IsRequired();
         riderModel.HasIndex(entity => entity.CreatedAt);
+
+        prediction.HasOne(entity => entity.RiderModel)
+            .WithMany()
+            .HasForeignKey(entity => entity.RiderModelId)
+            .OnDelete(DeleteBehavior.Restrict);
 
         var powerBand = modelBuilder.Entity<PowerBandEntity>();
         powerBand.ToTable("power_bands");
