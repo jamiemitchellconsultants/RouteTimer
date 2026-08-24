@@ -134,6 +134,51 @@ public sealed class AnalysisWorkerTests
     }
 
     [Fact]
+    public async Task Renewal_loop_survives_a_failed_renewal_attempt_and_succeeds_on_the_next_interval()
+    {
+        var job = MakeJob(JobType.ParseTraining);
+        var jobQueue = new FakeJobQueue();
+        jobQueue.EnqueueClaim(job);
+        jobQueue.EnqueueRenewFailure(new InvalidOperationException("transient db blip"));
+        var attemptCount = 0;
+        var firstAttempt = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondAttempt = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        jobQueue.OnRenew = () =>
+        {
+            attemptCount++;
+            if (attemptCount == 1)
+            {
+                firstAttempt.TrySetResult();
+            }
+            else if (attemptCount == 2)
+            {
+                secondAttempt.TrySetResult();
+            }
+        };
+        var handlerGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new GatedJobHandler(JobType.ParseTraining, handlerGate.Task);
+        var timeProvider = new FakeTimeProvider();
+        var worker = CreateWorker(jobQueue, timeProvider, handler);
+
+        var iterationTask = worker.ProcessIterationAsync(CancellationToken.None);
+
+        // First renewal attempt throws - the loop must catch it and keep running rather than dying.
+        timeProvider.Advance(TimeSpan.FromMinutes(3));
+        await firstAttempt.Task;
+        Assert.Empty(jobQueue.Renewed);
+
+        // Second attempt, on the next interval, succeeds.
+        timeProvider.Advance(TimeSpan.FromMinutes(3));
+        await secondAttempt.Task;
+        Assert.Single(jobQueue.Renewed, renewal => renewal.JobId == job.Id);
+
+        handlerGate.SetResult();
+        await iterationTask;
+
+        Assert.Contains(job.Id, jobQueue.Completed);
+    }
+
+    [Fact]
     public async Task Survives_an_exception_thrown_while_claiming_a_job_and_keeps_processing_afterward()
     {
         var jobTwo = MakeJob(JobType.ParseTraining);
@@ -173,6 +218,7 @@ public sealed class AnalysisWorkerTests
     private sealed class FakeJobQueue : IJobQueue
     {
         private readonly Queue<Func<AnalysisJob?>> claims = new();
+        private readonly Queue<Exception?> renewOutcomes = new();
 
         public List<Guid> Completed { get; } = [];
         public List<(Guid JobId, bool Permanent, string? Code, string? Message)> Failed { get; } = [];
@@ -184,6 +230,9 @@ public sealed class AnalysisWorkerTests
 
         public void EnqueueClaimFailure(Exception exception) => claims.Enqueue(() => throw exception);
 
+        /// <summary>The next call to <see cref="RenewLeaseAsync"/> throws this instead of succeeding.</summary>
+        public void EnqueueRenewFailure(Exception exception) => renewOutcomes.Enqueue(exception);
+
         public Task<Guid> EnqueueAsync(JobType type, Guid subjectId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<AnalysisJob?> ClaimAsync(string workerId, DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken)
@@ -194,9 +243,21 @@ public sealed class AnalysisWorkerTests
 
         public Task<bool> RenewLeaseAsync(Guid jobId, string workerId, DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken)
         {
-            Renewed.Add((jobId, workerId));
-            OnRenew?.Invoke();
-            return Task.FromResult(true);
+            var failure = renewOutcomes.Count > 0 ? renewOutcomes.Dequeue() : null;
+            try
+            {
+                if (failure is not null)
+                {
+                    throw failure;
+                }
+
+                Renewed.Add((jobId, workerId));
+                return Task.FromResult(true);
+            }
+            finally
+            {
+                OnRenew?.Invoke();
+            }
         }
 
         public Task<bool> CompleteAsync(Guid jobId, string workerId, CancellationToken cancellationToken)

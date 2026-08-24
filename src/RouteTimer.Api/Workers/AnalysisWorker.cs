@@ -50,7 +50,7 @@ public sealed class AnalysisWorker(IServiceScopeFactory scopeFactory, TimeProvid
             var handler = handlers.FirstOrDefault(candidate => candidate.Handles == job.Type);
             if (handler is null)
             {
-                await jobs.FailAsync(job.Id, workerId, permanent: true, "no-handler", $"No handler registered for job type {job.Type}.", stoppingToken);
+                LogIfNoLongerOwned(await jobs.FailAsync(job.Id, workerId, permanent: true, "no-handler", $"No handler registered for job type {job.Type}.", stoppingToken), job.Id);
                 return;
             }
 
@@ -67,18 +67,18 @@ public sealed class AnalysisWorker(IServiceScopeFactory scopeFactory, TimeProvid
             try
             {
                 await handler.HandleAsync(job, stoppingToken);
-                await jobs.CompleteAsync(job.Id, workerId, stoppingToken);
+                LogIfNoLongerOwned(await jobs.CompleteAsync(job.Id, workerId, stoppingToken), job.Id);
             }
             catch (ActivityInputException exception)
             {
-                await jobs.FailAsync(job.Id, workerId, permanent: true, exception.Code, exception.Message, stoppingToken);
+                LogIfNoLongerOwned(await jobs.FailAsync(job.Id, workerId, permanent: true, exception.Code, exception.Message, stoppingToken), job.Id);
             }
             catch (Exception exception)
             {
                 // Full detail (including stack trace) goes to the log only - the stored diagnostic must stay
                 // safe, generic text; the queue's own bounded-retry logic decides when this becomes terminal.
                 logger.LogError(exception, "Unexpected error while processing job {JobId} of type {JobType}.", job.Id, job.Type);
-                await jobs.FailAsync(job.Id, workerId, permanent: false, "processing-error", "An unexpected error occurred while processing this job.", stoppingToken);
+                LogIfNoLongerOwned(await jobs.FailAsync(job.Id, workerId, permanent: false, "processing-error", "An unexpected error occurred while processing this job.", stoppingToken), job.Id);
             }
             finally
             {
@@ -105,12 +105,30 @@ public sealed class AnalysisWorker(IServiceScopeFactory scopeFactory, TimeProvid
             while (!cancellationToken.IsCancellationRequested)
             {
                 await Task.Delay(RenewalInterval, timeProvider, cancellationToken);
-                await jobs.RenewLeaseAsync(jobId, workerId, timeProvider.GetUtcNow(), LeaseDuration, cancellationToken);
+                try
+                {
+                    await jobs.RenewLeaseAsync(jobId, workerId, timeProvider.GetUtcNow(), LeaseDuration, cancellationToken);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    // A single failed renewal attempt (e.g. a transient DB blip) must not kill the loop -
+                    // letting the lease expire while the handler is still running would let another worker
+                    // reclaim and duplicate-process this still-in-progress job. Try again next interval.
+                    logger.LogWarning(exception, "Failed to renew the lease for job {JobId}; will retry on the next interval.", jobId);
+                }
             }
         }
         catch (OperationCanceledException)
         {
             // Expected once the handler finishes and the iteration cancels this loop.
+        }
+    }
+
+    private void LogIfNoLongerOwned(bool ownedByThisWorker, Guid jobId)
+    {
+        if (!ownedByThisWorker)
+        {
+            logger.LogWarning("Job {JobId} was not updated: this worker no longer owned it (its lease likely expired and was reclaimed by another worker).", jobId);
         }
     }
 }
