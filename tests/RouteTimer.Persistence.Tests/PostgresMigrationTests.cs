@@ -19,10 +19,10 @@ public sealed class PostgresMigrationTests
         await context.Database.MigrateAsync();
 
         await using var command = context.Database.GetDbConnection().CreateCommand();
-        command.CommandText = "SELECT to_regclass('public.stored_uploads')::text";
+        command.CommandText = "SELECT array_agg(to_regclass(table_name)::text ORDER BY table_name) FROM (VALUES ('predictions'), ('rider_profile'), ('stored_uploads')) AS expected_tables(table_name)";
         await context.Database.OpenConnectionAsync();
         var table = await command.ExecuteScalarAsync();
 
-        Assert.Equal("stored_uploads", table);
+        Assert.Equal(new[] { "predictions", "rider_profile", "stored_uploads" }, (string[]?)table);
     }
 }

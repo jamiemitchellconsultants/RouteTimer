@@ -3,6 +3,7 @@ using RouteTimer.Persistence;
 using RouteTimer.Persistence.Entities;
 using RouteTimer.Persistence.Repositories;
 using RouteTimer.Services.Persistence;
+using RouteTimer.Domain.Profile;
 
 namespace RouteTimer.Persistence.Tests;
 
@@ -63,5 +64,19 @@ public sealed class RepositoryRoundTripTests
         var saved = Assert.Single(context.Uploads);
         Assert.Equal("first.fit", saved.FileName);
         Assert.Equal(new byte[] { 1, 2, 3 }, saved.Content);
+    }
+
+    [Fact]
+    public async Task Save_profile_overwrites_the_single_current_profile()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new ProfileRepository(context);
+
+        await repository.SaveAsync(new RiderProfile(75, 10), CancellationToken.None);
+        await repository.SaveAsync(new RiderProfile(76, 11), CancellationToken.None);
+
+        Assert.Equal(new RiderProfile(76, 11), await repository.GetAsync(CancellationToken.None));
+        Assert.Single(context.Profiles);
     }
 }

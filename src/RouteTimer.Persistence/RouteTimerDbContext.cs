@@ -6,6 +6,7 @@ namespace RouteTimer.Persistence;
 public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> options) : DbContext(options)
 {
     public DbSet<PredictionEntity> Predictions => Set<PredictionEntity>();
+    public DbSet<RiderProfileEntity> Profiles => Set<RiderProfileEntity>();
     public DbSet<StoredUploadEntity> Uploads => Set<StoredUploadEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -16,6 +17,11 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
         prediction.Property(entity => entity.ModelVersion).HasMaxLength(128).IsRequired();
         prediction.Property(entity => entity.CreatedAt).HasColumnType("timestamp with time zone");
         prediction.HasIndex(entity => entity.CreatedAt);
+
+        var profile = modelBuilder.Entity<RiderProfileEntity>();
+        profile.ToTable("rider_profile");
+        profile.HasKey(entity => entity.Id);
+        profile.Property(entity => entity.UpdatedAt).HasColumnType("timestamp with time zone");
 
         var upload = modelBuilder.Entity<StoredUploadEntity>();
         upload.ToTable("stored_uploads");

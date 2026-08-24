@@ -17,7 +17,6 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHealthChecks()
     .AddDbContextCheck<RouteTimerDbContext>("database", tags: ["ready"]);
-builder.Services.AddSingleton<ProfileService>();
 var connectionString = builder.Configuration.GetConnectionString("RouteTimer")
     ?? "Host=localhost;Database=routetimer;Username=routetimer;Password=routetimer";
 builder.Services.AddDbContext<RouteTimerDbContext>(options => options.UseNpgsql(connectionString));
@@ -26,7 +25,9 @@ if (builder.Configuration.GetValue("Database:ApplyMigrations", false))
     builder.Services.AddHostedService<DatabaseMigrationService>();
 }
 builder.Services.AddScoped<IStoredUploadRepository, StoredUploadRepository>();
+builder.Services.AddScoped<IProfileRepository, ProfileRepository>();
 builder.Services.AddScoped<TrainingUploadService>();
+builder.Services.AddScoped<ProfileService>();
 builder.Services.AddSingleton<IGpxRouteParser, GpxRouteParser>();
 builder.Services.AddSingleton<IRouteProcessor>(_ => new RouteProcessor(RouteProcessingOptions.Default));
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -55,9 +56,10 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
 {
     Predicate = static registration => registration.Tags.Contains("ready")
 }).AllowAnonymous();
-app.MapGet("/api/profile", (ProfileService profiles) => profiles.Current is { } profile
-    ? Results.Ok(new ProfileResponse(profile.RiderWeightKg, profile.BikeAndEquipmentWeightKg))
-    : Results.NotFound()).RequireAuthorization();
+app.MapGet("/api/profile", async (ProfileService profiles, CancellationToken cancellationToken) =>
+    (await profiles.GetAsync(cancellationToken)) is { } profile
+        ? Results.Ok(new ProfileResponse(profile.RiderWeightKg, profile.BikeAndEquipmentWeightKg))
+        : Results.NotFound()).RequireAuthorization();
 app.MapPut("/api/profile", async (UpdateProfileRequest request, ProfileService profiles, CancellationToken cancellationToken) =>
     {
         try

@@ -1,4 +1,5 @@
 using RouteTimer.Domain.Profile;
+using RouteTimer.Services.Persistence;
 
 namespace RouteTimer.Services.Profile;
 
@@ -6,9 +7,14 @@ public sealed class ProfileValidationException(string message) : Exception(messa
 
 public sealed class ProfileService
 {
-    private RiderProfile? profile;
+    private readonly IProfileRepository repository;
 
-    public Task<RiderProfile> UpdateAsync(double riderWeightKg, double bikeAndEquipmentWeightKg, CancellationToken cancellationToken)
+    public ProfileService(IProfileRepository repository)
+    {
+        this.repository = repository;
+    }
+
+    public async Task<RiderProfile> UpdateAsync(double riderWeightKg, double bikeAndEquipmentWeightKg, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!double.IsFinite(riderWeightKg) || riderWeightKg < 30 || riderWeightKg > 250)
@@ -21,9 +27,10 @@ public sealed class ProfileService
             throw new ProfileValidationException("Bike and equipment weight must be between 3 and 60 kg.");
         }
 
-        profile = new RiderProfile(riderWeightKg, bikeAndEquipmentWeightKg);
-        return Task.FromResult(profile);
+        var profile = new RiderProfile(riderWeightKg, bikeAndEquipmentWeightKg);
+        await repository.SaveAsync(profile, cancellationToken);
+        return profile;
     }
 
-    public RiderProfile? Current => profile;
+    public Task<RiderProfile?> GetAsync(CancellationToken cancellationToken) => repository.GetAsync(cancellationToken);
 }
