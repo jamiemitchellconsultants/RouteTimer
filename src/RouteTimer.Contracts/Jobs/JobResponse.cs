@@ -7,7 +7,6 @@ public sealed record JobResponse(
     string State,
     int AttemptCount,
     DateTimeOffset CreatedAt,
-    string? WorkerId,
     DateTimeOffset? LeaseExpiresAt,
     string? DiagnosticCode,
     string? DiagnosticMessage);

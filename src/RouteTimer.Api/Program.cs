@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
 using RouteTimer.Contracts.Profile;
 using RouteTimer.Contracts.Training;
@@ -7,6 +8,7 @@ using RouteTimer.Contracts.Predictions;
 using RouteTimer.Contracts.Jobs;
 using RouteTimer.Contracts.Errors;
 using RouteTimer.Api;
+using RouteTimer.Api.Auth;
 using RouteTimer.Api.Workers;
 using RouteTimer.Persistence;
 using RouteTimer.Persistence.Repositories;
@@ -61,12 +63,22 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         options.Authority = builder.Configuration["Keycloak:Authority"];
         options.Audience = "routetimer-api";
         options.RequireHttpsMetadata = true;
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = context =>
+            {
+                KeycloakRealmRoleMapper.AddRealmRoles(context.Principal);
+                return Task.CompletedTask;
+            }
+        };
     });
-builder.Services.AddAuthorizationBuilder()
-    .SetFallbackPolicy(new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+var riderPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
         .RequireAuthenticatedUser()
         .RequireRole("rider")
-        .Build());
+        .Build();
+builder.Services.AddAuthorizationBuilder().SetDefaultPolicy(riderPolicy).SetFallbackPolicy(riderPolicy);
+builder.Services.Configure<FormOptions>(options => options.MultipartBodyLengthLimit = 55L * 1024 * 1024);
+builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 55L * 1024 * 1024);
 
 var app = builder.Build();
 
@@ -120,24 +132,19 @@ app.MapPost("/api/training/uploads", async (HttpRequest request, TrainingUploadS
     .RequireAuthorization();
 app.MapPost("/api/predictions", async (HttpRequest request, PredictionSubmissionService submissions, CancellationToken cancellationToken) =>
     {
-        if (!request.HasFormContentType)
+        if (!request.HasFormContentType || !request.ContentType!.Contains("boundary=", StringComparison.OrdinalIgnoreCase))
         {
             return Problem(StatusCodes.Status400BadRequest, ErrorCodes.MultipartRequired, "A multipart GPX upload is required.");
         }
 
-        var files = (await request.ReadFormAsync(cancellationToken)).Files;
-        if (files.Count != 1 || !files[0].FileName.EndsWith(".gpx", StringComparison.OrdinalIgnoreCase))
-        {
-            return Problem(StatusCodes.Status400BadRequest, ErrorCodes.PredictionGpxRequired, "A single .gpx route upload is required.");
-        }
-        var file = files[0];
-        if (file.Length > 50L * 1024 * 1024)
-        {
-            return Problem(StatusCodes.Status413PayloadTooLarge, ErrorCodes.GpxTooLarge, "The GPX upload exceeds 50 MB.");
-        }
-
         try
         {
+            var files = (await request.ReadFormAsync(cancellationToken)).Files;
+            if (files.Count != 1 || !files[0].FileName.EndsWith(".gpx", StringComparison.OrdinalIgnoreCase))
+                return Problem(StatusCodes.Status400BadRequest, ErrorCodes.PredictionGpxRequired, "A single .gpx route upload is required.");
+            var file = files[0];
+            if (file.Length > 50L * 1024 * 1024)
+                return Problem(StatusCodes.Status413PayloadTooLarge, ErrorCodes.GpxTooLarge, "The GPX upload exceeds 50 MB.");
             await using var input = file.OpenReadStream();
             var accepted = await submissions.SubmitAsync(new PredictionUpload(file.FileName, input), cancellationToken);
             return Results.Accepted($"/api/predictions/{accepted.PredictionId}", new PredictionSubmissionResponse(accepted.PredictionId, accepted.JobId, accepted.ModelId));
@@ -148,6 +155,22 @@ app.MapPost("/api/predictions", async (HttpRequest request, PredictionSubmission
                 ? StatusCodes.Status409Conflict
                 : exception.Code == ErrorCodes.GpxTooLarge ? StatusCodes.Status413PayloadTooLarge : StatusCodes.Status400BadRequest;
             return Problem(status, exception.Code, exception.Message);
+        }
+        catch (BadHttpRequestException)
+        {
+            return Problem(StatusCodes.Status400BadRequest, ErrorCodes.MultipartRequired, "The multipart request is malformed.");
+        }
+        catch (InvalidDataException)
+        {
+            return Problem(StatusCodes.Status400BadRequest, ErrorCodes.MultipartRequired, "The multipart request is malformed.");
+        }
+        catch (InvalidOperationException)
+        {
+            return Problem(StatusCodes.Status400BadRequest, ErrorCodes.MultipartRequired, "The multipart request is malformed.");
+        }
+        catch (IOException exception) when (!exception.Message.Contains("limit", StringComparison.OrdinalIgnoreCase))
+        {
+            return Problem(StatusCodes.Status400BadRequest, ErrorCodes.MultipartRequired, "The multipart request is malformed.");
         }
         catch (IOException)
         {
@@ -163,7 +186,8 @@ app.MapGet("/api/predictions/{id:guid}", async (Guid id, PredictionQueryService 
         : Results.NotFound()).RequireAuthorization();
 app.MapGet("/api/jobs/{id:guid}", async (Guid id, IJobRepository jobs, CancellationToken cancellationToken) =>
     (await jobs.GetAsync(id, cancellationToken)) is { } job
-        ? Results.Ok(new JobResponse(job.Id, job.Type.ToString(), job.SubjectId, job.State.ToString(), job.AttemptCount, job.CreatedAt, job.WorkerId, job.LeaseExpiresAt, job.DiagnosticCode, job.DiagnosticMessage))
+        ? Results.Ok(new JobResponse(job.Id, job.Type.ToString(), job.SubjectId, job.State.ToString(), job.AttemptCount, job.CreatedAt,
+            job.State == RouteTimer.Domain.Jobs.JobState.Running ? job.LeaseExpiresAt : null, job.DiagnosticCode, job.DiagnosticMessage))
         : Results.NotFound()).RequireAuthorization();
 
 app.Run();

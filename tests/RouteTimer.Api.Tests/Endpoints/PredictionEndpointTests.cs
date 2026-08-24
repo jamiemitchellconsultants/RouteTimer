@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Encodings.Web;
@@ -37,6 +38,18 @@ public sealed class PredictionEndpointTests
         using var response = await client.GetAsync(path);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Authenticated_non_rider_is_forbidden_from_api_resources()
+    {
+        await using var app = CreateRiderApp();
+        using var client = app.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Test-Role", "non-rider");
+
+        using var response = await client.GetAsync("/api/predictions");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     // Break caught: prediction submission still returns a synchronous preview rather than a queued durable resource.
@@ -130,6 +143,40 @@ public sealed class PredictionEndpointTests
     }
 
     [Fact]
+    public async Task Submission_accepts_a_31_mb_route_but_rejects_over_50_mb_and_malformed_multipart_with_stable_codes()
+    {
+        await using var app = CreateRiderApp();
+        await SeedProfileAndModelAsync(app.Services);
+        using var client = app.CreateClient();
+        using var valid = new MultipartFormDataContent
+        {
+            { new ByteArrayContent(new byte[31 * 1024 * 1024]), "file", "route.gpx" }
+        };
+        using var tooLarge = new MultipartFormDataContent
+        {
+            { new ByteArrayContent(new byte[50 * 1024 * 1024 + 1]), "file", "route.gpx" }
+        };
+        using var missingBoundary = new ByteArrayContent([]);
+        missingBoundary.Headers.ContentType = new MediaTypeHeaderValue("multipart/form-data");
+        using var malformed = new ByteArrayContent(Encoding.UTF8.GetBytes("not a multipart body"));
+        malformed.Headers.ContentType = MediaTypeHeaderValue.Parse("multipart/form-data; boundary=expected");
+
+        using var validResponse = await client.PostAsync("/api/predictions", valid);
+        using var tooLargeResponse = await client.PostAsync("/api/predictions", tooLarge);
+        using var missingBoundaryResponse = await client.PostAsync("/api/predictions", missingBoundary);
+        using var malformedResponse = await client.PostAsync("/api/predictions", malformed);
+
+        Assert.Equal(HttpStatusCode.Accepted, validResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, tooLargeResponse.StatusCode);
+        Assert.Contains("gpx-too-large", await tooLargeResponse.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.BadRequest, missingBoundaryResponse.StatusCode);
+        var missingBoundaryBody = await missingBoundaryResponse.Content.ReadAsStringAsync();
+        Assert.True(missingBoundaryBody.Contains("multipart-required", StringComparison.Ordinal), missingBoundaryBody);
+        Assert.Equal(HttpStatusCode.BadRequest, malformedResponse.StatusCode);
+        Assert.Contains("multipart-required", await malformedResponse.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task History_detail_and_job_contracts_expose_snapshots_ordered_segments_and_no_summary_segment_payload()
     {
         await using var app = CreateRiderApp();
@@ -210,7 +257,11 @@ public sealed class PredictionEndpointTests
     private sealed class RiderAuthenticationHandler(IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder)
         : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
     {
-        protected override Task<AuthenticateResult> HandleAuthenticateAsync() => Task.FromResult(AuthenticateResult.Success(
-            new AuthenticationTicket(new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Name, "rider"), new Claim(ClaimTypes.Role, "rider")], Scheme.Name)), Scheme.Name)));
+        protected override Task<AuthenticateResult> HandleAuthenticateAsync()
+        {
+            var claims = new List<Claim> { new(ClaimTypes.Name, "rider") };
+            if (Request.Headers["X-Test-Role"] != "non-rider") claims.Add(new Claim(ClaimTypes.Role, "rider"));
+            return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(new ClaimsPrincipal(new ClaimsIdentity(claims, Scheme.Name)), Scheme.Name)));
+        }
     }
 }

@@ -44,6 +44,11 @@ public sealed class PredictionJobHandler(
             await predictions.FailAsync(prediction.Id, code, "The route could not produce a valid prediction.", cancellationToken);
             throw new PredictionJobException(code, "The route could not produce a valid prediction.", exception);
         }
+        catch (Exception) when (job.AttemptCount >= 3)
+        {
+            await predictions.FailAsync(prediction.Id, "processing-error", "An unexpected error occurred while processing this job.", cancellationToken);
+            throw;
+        }
     }
 
     private static PredictionPublication BuildPublication(RouteTimer.Domain.Routes.ProcessedRoute route, PredictionResult result, RiderModelSnapshot model)
@@ -76,7 +81,9 @@ public sealed class PredictionJobHandler(
         }
 
         var averageSpeed = result.MovingTime > TimeSpan.Zero ? route.DistanceMetres / result.MovingTime.TotalSeconds : 0;
-        var averagePower = result.Segments.Count == 0 ? 0 : result.Segments.Average(segment => segment.PowerWatts);
+        var averagePower = result.MovingTime > TimeSpan.Zero
+            ? result.Segments.Sum(segment => segment.PowerWatts * segment.MovingTime.TotalSeconds) / result.MovingTime.TotalSeconds
+            : 0;
         ValidateNonNegative(averageSpeed, averagePower);
         var (confidence, warnings) = ApplyModelWarnings(result.Confidence, model);
         return new PredictionPublication(route.DistanceMetres, route.AscentMetres, result.MovingTime, averageSpeed, averagePower, confidence, warnings, persisted);

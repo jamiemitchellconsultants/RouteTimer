@@ -135,7 +135,8 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
         var running = JobState.Running.ToString();
         var rows = await context.Jobs
             .Where(entity => entity.Id == jobId && entity.State == running && entity.WorkerId == workerId)
-            .ExecuteUpdateAsync(setters => setters.SetProperty(entity => entity.State, JobState.Succeeded.ToString()), cancellationToken);
+            .ExecuteUpdateAsync(setters => setters.SetProperty(entity => entity.State, JobState.Succeeded.ToString())
+                .SetProperty(entity => entity.WorkerId, (string?)null).SetProperty(entity => entity.LeaseExpiresAt, (DateTimeOffset?)null), cancellationToken);
         return rows > 0;
     }
 
@@ -163,6 +164,8 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
         if (permanent || job.AttemptCount >= MaxAttempts)
         {
             job.State = JobState.Failed.ToString();
+            job.WorkerId = null;
+            job.LeaseExpiresAt = null;
         }
         else
         {

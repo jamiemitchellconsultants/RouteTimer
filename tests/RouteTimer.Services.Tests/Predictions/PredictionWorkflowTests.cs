@@ -165,6 +165,43 @@ public sealed class PredictionWorkflowTests
         Assert.Equal(expectedCode, predictions.Failure?.Code);
     }
 
+    // Break caught: average predicted power gives equal influence to unequal-duration segments.
+    [Fact]
+    public async Task Handler_persists_time_weighted_average_power()
+    {
+        var predictionId = Guid.NewGuid();
+        var model = ModelSnapshot("captured", 210);
+        var predictions = new FakePredictionRepository
+        {
+            Processing = new PredictionForProcessing(predictionId,
+            new StoredUpload(Guid.NewGuid(), "route.gpx", "gpx", GpxBytes(), new byte[32], DateTimeOffset.UtcNow), model.Id, new RiderProfile(75, 10))
+        };
+        var handler = new PredictionJobHandler(predictions, new FixedModelRepository(null) { ById = { [model.Id] = model } }, new GpxRouteParser(),
+            new RouteProcessor(RouteProcessingOptions.Default), new UnequalDurationPredictor());
+
+        await handler.HandleAsync(new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 1, "worker", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow), CancellationToken.None);
+
+        Assert.Equal(166.66666666666666, predictions.Published!.AveragePowerWatts, 10);
+    }
+
+    [Fact]
+    public async Task Handler_marks_prediction_failed_only_on_the_terminal_transient_attempt()
+    {
+        var predictionId = Guid.NewGuid();
+        var model = ModelSnapshot("captured", 210);
+        var predictions = new FakePredictionRepository
+        {
+            Processing = new PredictionForProcessing(predictionId,
+            new StoredUpload(Guid.NewGuid(), "route.gpx", "gpx", GpxBytes(), new byte[32], DateTimeOffset.UtcNow), model.Id, new RiderProfile(75, 10))
+        };
+        var handler = new PredictionJobHandler(predictions, new FixedModelRepository(null) { ById = { [model.Id] = model } }, new GpxRouteParser(), new RouteProcessor(RouteProcessingOptions.Default), new ThrowingPredictor());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => handler.HandleAsync(new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 2, "worker", null, DateTimeOffset.UtcNow), CancellationToken.None));
+        Assert.Null(predictions.Failure);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => handler.HandleAsync(new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 3, "worker", null, DateTimeOffset.UtcNow), CancellationToken.None));
+        Assert.Equal("processing-error", predictions.Failure?.Code);
+    }
+
     private static PredictionUpload Upload() => new("route.gpx", new MemoryStream(GpxBytes()));
 
     private static byte[] GpxBytes() => """
@@ -260,5 +297,20 @@ public sealed class PredictionWorkflowTests
                 ConfidenceLevel.Low)).ToList();
             return new PredictionResult(segments, kind == "time" ? TimeSpan.FromSeconds(99) : TimeSpan.FromSeconds(segments.Count), ConfidenceLevel.Low);
         }
+    }
+
+    private sealed class UnequalDurationPredictor : IRoutePredictor
+    {
+        public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model)
+        {
+            var segments = route.Samples.Skip(1).Select((sample, index) => new PredictionSegment(sample.Sequence, sample.SegmentDistanceMetres, sample.Gradient,
+                index == 0 ? 100 : 200, 5, TimeSpan.FromSeconds(index == 0 ? 10 : 20), ConfidenceLevel.Low)).ToList();
+            return new PredictionResult(segments, TimeSpan.FromSeconds(30), ConfidenceLevel.Low);
+        }
+    }
+
+    private sealed class ThrowingPredictor : IRoutePredictor
+    {
+        public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model) => throw new InvalidOperationException("transient");
     }
 }
