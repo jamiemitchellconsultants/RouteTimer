@@ -1,6 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using RouteTimer.Domain.Models;
+using RouteTimer.Domain.Physics;
+using RouteTimer.Domain.Profile;
 using RouteTimer.Persistence.Repositories;
 using Testcontainers.PostgreSql;
 
@@ -8,6 +11,62 @@ namespace RouteTimer.Persistence.Tests;
 
 public sealed class PostgresMigrationTests
 {
+    // Break caught: the repository appears correct under EF InMemory but does not commit or reconstruct all normalized children under PostgreSQL.
+    [Fact]
+    public async Task Rider_model_repository_round_trips_complete_immutable_model_through_PostgreSQL()
+    {
+        await using var database = new PostgreSqlBuilder("postgres:16-alpine").Build();
+        await database.StartAsync();
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseNpgsql(database.GetConnectionString()).Options;
+        var profile = new RiderProfile(73.5, 8.75);
+        var validation = new ModelValidationSummary(ModelValidationStatus.Passed, .047, .091);
+        var bands = new[]
+        {
+            new PowerBand("climb", "long", 215, TimeSpan.FromMinutes(50), 4, .7, ConfidenceLevel.Medium),
+            new PowerBand("flat", "short", 260, TimeSpan.FromMinutes(35), 5, .85, ConfidenceLevel.High)
+        };
+        var cells = DescentLimitModel.Conservative.Cells
+            .Select((cell, index) => cell with
+            {
+                SpeedCapMetresPerSecond = index == 8 ? .75 : 11 + index,
+                Evidence = TimeSpan.FromSeconds(90 + index),
+                ActivityCount = index + 2,
+                Confidence = index % 2 == 0 ? ConfidenceLevel.High : ConfidenceLevel.Medium,
+                IsFallback = index == 0
+            })
+            .ToArray();
+        var model = new RiderModel(
+            new PowerModel(bands, 238),
+            new PhysicalCoefficients(.966, 1.19, .0042, .305),
+            new DescentLimitModel(cells),
+            true,
+            "sequential-v8");
+
+        Guid id;
+        await using (var saveContext = new RouteTimerDbContext(options))
+        {
+            await saveContext.Database.MigrateAsync();
+            id = await new RiderModelRepository(saveContext).SaveAsync(model, profile, validation, CancellationToken.None);
+        }
+
+        await using var loadContext = new RouteTimerDbContext(options);
+        var loaded = await new RiderModelRepository(loadContext).GetAsync(id, CancellationToken.None);
+
+        Assert.NotNull(loaded);
+        Assert.Equal(profile, loaded.ProfileSnapshot);
+        Assert.Equal(validation, loaded.Validation);
+        Assert.Equal(model.WasCalibrated, loaded.WasCalibrated);
+        Assert.Equal(model.AlgorithmVersion, loaded.Model.AlgorithmVersion);
+        Assert.Equal(model.Coefficients, loaded.Model.Coefficients);
+        Assert.Equal(model.PowerModel.GlobalTypicalWatts, loaded.Model.PowerModel.GlobalTypicalWatts);
+        Assert.Equal(bands, loaded.Model.PowerModel.Bands);
+        Assert.True(loaded.DescentWasLearned);
+        Assert.Equal(cells, loaded.Model.DescentLimits.Cells);
+        Assert.Equal(.75, loaded.Model.DescentLimits.Cells[^1].SpeedCapMetresPerSecond);
+        Assert.Equal(9, await loadContext.RiderModelDescentLimits.CountAsync(cell => cell.ModelId == id));
+        Assert.True(await loadContext.RiderModels.Where(entity => entity.Id == id).Select(entity => entity.DescentWasLearned).SingleAsync());
+    }
+
     [Fact]
     public async Task Migrate_creates_the_stored_uploads_table_on_a_fresh_database()
     {

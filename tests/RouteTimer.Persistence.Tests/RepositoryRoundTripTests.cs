@@ -280,7 +280,6 @@ public sealed class RepositoryRoundTripTests
 
     // Break caught: malformed normalized cells are allowed to leak parser/domain exceptions or construct an invalid aggregate.
     [Theory]
-    [InlineData("Confidence", "Unknown")]
     [InlineData("EvidenceSeconds", "-1")]
     [InlineData("SpeedCapMetresPerSecond", "NaN")]
     public async Task Get_rider_model_rejects_malformed_persisted_descent_cells(string propertyName, string value)
@@ -297,6 +296,32 @@ public sealed class RepositoryRoundTripTests
             case "EvidenceSeconds": cell.EvidenceSeconds = double.Parse(value); break;
             case "SpeedCapMetresPerSecond": cell.SpeedCapMetresPerSecond = double.NaN; break;
         }
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => repository.GetAsync(id, CancellationToken.None));
+    }
+
+    // Break caught: Enum.TryParse accepts numeric or whitespace-normalized confidence text that was never canonically persisted.
+    [Theory]
+    [InlineData("1")]
+    [InlineData("0")]
+    [InlineData("+1")]
+    [InlineData("low")]
+    [InlineData("LOW")]
+    [InlineData("Low ")]
+    [InlineData(" Low")]
+    [InlineData("Unknown")]
+    [InlineData("Medium, High")]
+    public async Task Get_rider_model_rejects_noncanonical_persisted_descent_confidence(string confidence)
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new RiderModelRepository(context);
+        var model = new RiderModel(new PowerModel([], 200), PhysicalCoefficients.Default, DescentLimitModel.Conservative, false, "v1");
+        var id = await repository.SaveAsync(model, new RiderProfile(75, 10), new ModelValidationSummary(ModelValidationStatus.NotValidated, null, null), CancellationToken.None);
+        var cell = await context.RiderModelDescentLimits.FirstAsync();
+        cell.Confidence = confidence;
         await context.SaveChangesAsync();
         context.ChangeTracker.Clear();
 

@@ -127,7 +127,8 @@ public sealed class RiderModelRepository(RouteTimerDbContext context) : IRiderMo
                 !double.IsFinite(cell.SpeedCapMetresPerSecond) || cell.SpeedCapMetresPerSecond <= 0 || cell.SpeedCapMetresPerSecond > 20 ||
                 !double.IsFinite(cell.EvidenceSeconds) || cell.EvidenceSeconds < 0 || cell.EvidenceSeconds > TimeSpan.MaxValue.TotalSeconds ||
                 cell.ActivityCount < 0 ||
-                !Enum.TryParse<ConfidenceLevel>(cell.Confidence, out var confidence) || !Enum.IsDefined(confidence))
+                !Enum.TryParse<ConfidenceLevel>(cell.Confidence, out var confidence) || !Enum.IsDefined(confidence) ||
+                !string.Equals(cell.Confidence, Enum.GetName(confidence), StringComparison.Ordinal))
             {
                 throw new InvalidOperationException("Persisted descent cell data is malformed.");
             }
