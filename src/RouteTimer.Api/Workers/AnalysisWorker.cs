@@ -23,64 +23,78 @@ public sealed class AnalysisWorker(IServiceScopeFactory scopeFactory, TimeProvid
     {
         while (!stoppingToken.IsCancellationRequested)
         {
-            try
-            {
-                await ProcessIterationAsync(stoppingToken);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                // Expected during host shutdown; the loop condition above will exit next check.
-            }
-            catch (Exception exception)
-            {
-                // A bug in dispatch/completion code (not the handler itself) must not crash the host.
-                logger.LogError(exception, "Unexpected error in the analysis worker loop.");
-            }
+            await ProcessIterationAsync(stoppingToken);
         }
     }
 
+    /// <summary>
+    /// One full unit of work - claim, dispatch, complete/fail - wrapped in its own top-level safety net so
+    /// that a bug anywhere in this method's own code (not just a handler failure, which is handled by the
+    /// inner try/catch below) can never take the host down or stop subsequent iterations from running.
+    /// </summary>
     internal async Task ProcessIterationAsync(CancellationToken stoppingToken)
     {
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var jobs = scope.ServiceProvider.GetRequiredService<IJobQueue>();
-        var handlers = scope.ServiceProvider.GetServices<IJobHandler>();
-
-        var job = await jobs.ClaimAsync(workerId, timeProvider.GetUtcNow(), LeaseDuration, stoppingToken);
-        if (job is null)
-        {
-            await Task.Delay(IdlePollDelay, timeProvider, stoppingToken);
-            return;
-        }
-
-        var handler = handlers.FirstOrDefault(candidate => candidate.Handles == job.Type);
-        if (handler is null)
-        {
-            await jobs.FailAsync(job.Id, workerId, permanent: true, "no-handler", $"No handler registered for job type {job.Type}.", stoppingToken);
-            return;
-        }
-
-        using var renewalCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-        var renewalTask = RenewLeaseWhileHandlingAsync(jobs, job.Id, renewalCts.Token);
         try
         {
-            await handler.HandleAsync(job, stoppingToken);
-            await jobs.CompleteAsync(job.Id, workerId, stoppingToken);
+            await using var scope = scopeFactory.CreateAsyncScope();
+            var jobs = scope.ServiceProvider.GetRequiredService<IJobQueue>();
+            var handlers = scope.ServiceProvider.GetServices<IJobHandler>();
+
+            var job = await jobs.ClaimAsync(workerId, timeProvider.GetUtcNow(), LeaseDuration, stoppingToken);
+            if (job is null)
+            {
+                await Task.Delay(IdlePollDelay, timeProvider, stoppingToken);
+                return;
+            }
+
+            var handler = handlers.FirstOrDefault(candidate => candidate.Handles == job.Type);
+            if (handler is null)
+            {
+                await jobs.FailAsync(job.Id, workerId, permanent: true, "no-handler", $"No handler registered for job type {job.Type}.", stoppingToken);
+                return;
+            }
+
+            // The lease-renewal loop resolves its own IJobQueue from a scope separate from the one used to
+            // claim/dispatch/complete this job. IJobQueue implementations are typically backed by a
+            // per-scope EF Core DbContext, which is not safe for overlapping operations - sharing one scope
+            // between the renewal loop and the handler's own DB work (e.g. reading the upload, saving the
+            // parsed activity) would let the two race on the same DbContext for any job that outlives the
+            // renewal interval.
+            using var renewalCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+            await using var renewalScope = scopeFactory.CreateAsyncScope();
+            var renewalJobs = renewalScope.ServiceProvider.GetRequiredService<IJobQueue>();
+            var renewalTask = RenewLeaseWhileHandlingAsync(renewalJobs, job.Id, renewalCts.Token);
+            try
+            {
+                await handler.HandleAsync(job, stoppingToken);
+                await jobs.CompleteAsync(job.Id, workerId, stoppingToken);
+            }
+            catch (ActivityInputException exception)
+            {
+                await jobs.FailAsync(job.Id, workerId, permanent: true, exception.Code, exception.Message, stoppingToken);
+            }
+            catch (Exception exception)
+            {
+                // Full detail (including stack trace) goes to the log only - the stored diagnostic must stay
+                // safe, generic text; the queue's own bounded-retry logic decides when this becomes terminal.
+                logger.LogError(exception, "Unexpected error while processing job {JobId} of type {JobType}.", job.Id, job.Type);
+                await jobs.FailAsync(job.Id, workerId, permanent: false, "processing-error", "An unexpected error occurred while processing this job.", stoppingToken);
+            }
+            finally
+            {
+                renewalCts.Cancel();
+                await renewalTask;
+            }
         }
-        catch (ActivityInputException exception)
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
-            await jobs.FailAsync(job.Id, workerId, permanent: true, exception.Code, exception.Message, stoppingToken);
+            // Expected during host shutdown.
         }
         catch (Exception exception)
         {
-            // Full detail (including stack trace) goes to the log only - the stored diagnostic must stay
-            // safe, generic text; the queue's own bounded-retry logic decides when this becomes terminal.
-            logger.LogError(exception, "Unexpected error while processing job {JobId} of type {JobType}.", job.Id, job.Type);
-            await jobs.FailAsync(job.Id, workerId, permanent: false, "processing-error", "An unexpected error occurred while processing this job.", stoppingToken);
-        }
-        finally
-        {
-            renewalCts.Cancel();
-            await renewalTask;
+            // A bug in this method's own claim/dispatch/completion code (not the handler itself, which is
+            // caught above) must not crash the host or stop the next iteration from running.
+            logger.LogError(exception, "Unexpected error in the analysis worker loop.");
         }
     }
 
