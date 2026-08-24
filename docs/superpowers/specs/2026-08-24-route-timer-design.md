@@ -1,6 +1,6 @@
 # RouteTimer Application Design
 
-**Date:** 2026-08-24  
+**Date:** 2026-08-24
 **Status:** Approved in design review; awaiting review of this written specification
 
 ## 1. Purpose
