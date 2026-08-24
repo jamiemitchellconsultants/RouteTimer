@@ -21,8 +21,9 @@ public sealed class BuildModelJobHandlerTests
         var profiles = new FakeProfileRepository { Profile = SampleProfile };
         var activities = new FakeTrainingActivityRepository { Activities = ThreeEligibleActivities() };
         var builder = new FakePowerModelBuilder { Result = SampleModel };
+        var validator = new FakeModelValidator();
         var models = new FakeRiderModelRepository();
-        var handler = new BuildModelJobHandler(profiles, activities, builder, models);
+        var handler = new BuildModelJobHandler(profiles, activities, builder, validator, models);
         var job = MakeJob();
 
         await handler.HandleAsync(job, CancellationToken.None);
@@ -35,13 +36,15 @@ public sealed class BuildModelJobHandlerTests
         Assert.False(models.Saved.Value.WasCalibrated);
         Assert.Same(SampleProfile, builder.ReceivedProfile);
         Assert.Same(activities.Activities, builder.ReceivedActivities);
+        Assert.Same(SampleProfile, validator.ReceivedProfile);
+        Assert.Same(activities.Activities, validator.ReceivedActivities);
     }
 
     [Fact]
     public async Task Handle_throws_permanent_exception_when_profile_is_missing()
     {
         var profiles = new FakeProfileRepository { Profile = null };
-        var handler = new BuildModelJobHandler(profiles, new FakeTrainingActivityRepository(), new FakePowerModelBuilder(), new FakeRiderModelRepository());
+        var handler = new BuildModelJobHandler(profiles, new FakeTrainingActivityRepository(), new FakePowerModelBuilder(), new FakeModelValidator(), new FakeRiderModelRepository());
         var job = MakeJob();
 
         var exception = await Assert.ThrowsAsync<ModelBuildException>(() => handler.HandleAsync(job, CancellationToken.None));
@@ -54,7 +57,7 @@ public sealed class BuildModelJobHandlerTests
     {
         var profiles = new FakeProfileRepository { Profile = SampleProfile };
         var activities = new FakeTrainingActivityRepository { Activities = [IneligibleActivity()] };
-        var handler = new BuildModelJobHandler(profiles, activities, new FakePowerModelBuilder(), new FakeRiderModelRepository());
+        var handler = new BuildModelJobHandler(profiles, activities, new FakePowerModelBuilder(), new FakeModelValidator(), new FakeRiderModelRepository());
         var job = MakeJob();
 
         var exception = await Assert.ThrowsAsync<ModelBuildException>(() => handler.HandleAsync(job, CancellationToken.None));
@@ -73,7 +76,7 @@ public sealed class BuildModelJobHandlerTests
         var profiles = new FakeProfileRepository { Profile = SampleProfile };
         var activities = new FakeTrainingActivityRepository { Activities = [EligibleActivity(), EligibleActivity(), EligibleActivity()] };
         var builder = new FakePowerModelBuilder { ThrownException = new InvalidOperationException("No eligible power evidence is available.") };
-        var handler = new BuildModelJobHandler(profiles, activities, builder, new FakeRiderModelRepository());
+        var handler = new BuildModelJobHandler(profiles, activities, builder, new FakeModelValidator(), new FakeRiderModelRepository());
         var job = MakeJob();
 
         var exception = await Assert.ThrowsAsync<ModelBuildException>(() => handler.HandleAsync(job, CancellationToken.None));
@@ -82,33 +85,38 @@ public sealed class BuildModelJobHandlerTests
     }
 
     [Fact]
-    public async Task Handle_saves_insufficient_data_status_when_fewer_than_three_activities_are_eligible()
+    public async Task Handle_saves_whatever_insufficient_data_result_the_validator_reports()
     {
+        // The eligible-count threshold used to live in this handler; it now lives in IModelValidator
+        // (see ModelValidatorTests). This handler's job is just to pass the validator's verdict through
+        // unchanged to persistence.
         var profiles = new FakeProfileRepository { Profile = SampleProfile };
         var activities = new FakeTrainingActivityRepository { Activities = [EligibleActivity(), EligibleActivity(), IneligibleActivity()] };
         var builder = new FakePowerModelBuilder { Result = SampleModel };
+        var validator = new FakeModelValidator { Result = new ModelValidationSummary(ModelValidationStatus.InsufficientData, null, null) };
         var models = new FakeRiderModelRepository();
-        var handler = new BuildModelJobHandler(profiles, activities, builder, models);
+        var handler = new BuildModelJobHandler(profiles, activities, builder, validator, models);
         var job = MakeJob();
 
         await handler.HandleAsync(job, CancellationToken.None);
 
-        Assert.Equal(ModelValidationStatus.InsufficientData, models.Saved!.Value.Validation.Status);
+        Assert.Equal(validator.Result, models.Saved!.Value.Validation);
     }
 
     [Fact]
-    public async Task Handle_saves_not_validated_status_when_three_or_more_activities_are_eligible()
+    public async Task Handle_saves_whatever_passed_result_with_scores_the_validator_reports()
     {
         var profiles = new FakeProfileRepository { Profile = SampleProfile };
         var activities = new FakeTrainingActivityRepository { Activities = ThreeEligibleActivities() };
         var builder = new FakePowerModelBuilder { Result = SampleModel };
+        var validator = new FakeModelValidator { Result = new ModelValidationSummary(ModelValidationStatus.Passed, .05, .09) };
         var models = new FakeRiderModelRepository();
-        var handler = new BuildModelJobHandler(profiles, activities, builder, models);
+        var handler = new BuildModelJobHandler(profiles, activities, builder, validator, models);
         var job = MakeJob();
 
         await handler.HandleAsync(job, CancellationToken.None);
 
-        Assert.Equal(ModelValidationStatus.NotValidated, models.Saved!.Value.Validation.Status);
+        Assert.Equal(validator.Result, models.Saved!.Value.Validation);
     }
 
     private static AnalysisJob MakeJob() =>
@@ -167,6 +175,20 @@ public sealed class BuildModelJobHandlerTests
             }
 
             return Result!;
+        }
+    }
+
+    private sealed class FakeModelValidator : IModelValidator
+    {
+        public ModelValidationSummary Result { get; init; } = new(ModelValidationStatus.NotValidated, null, null);
+        public RiderProfile? ReceivedProfile { get; private set; }
+        public IReadOnlyList<CleanedActivity>? ReceivedActivities { get; private set; }
+
+        public ModelValidationSummary Validate(RiderProfile profile, IReadOnlyList<CleanedActivity> activities)
+        {
+            ReceivedProfile = profile;
+            ReceivedActivities = activities;
+            return Result;
         }
     }
 
