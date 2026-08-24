@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/RouteTimer.Api/RouteTimer.Api.csproj" />
+    <Project Path="src/RouteTimer.Client/RouteTimer.Client.csproj" />
+    <Project Path="src/RouteTimer.Contracts/RouteTimer.Contracts.csproj" />
+    <Project Path="src/RouteTimer.Domain/RouteTimer.Domain.csproj" />
+    <Project Path="src/RouteTimer.Persistence/RouteTimer.Persistence.csproj" />
+    <Project Path="src/RouteTimer.Services/RouteTimer.Services.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/RouteTimer.Api.Tests/RouteTimer.Api.Tests.csproj" />
+    <Project Path="tests/RouteTimer.Client.Tests/RouteTimer.Client.Tests.csproj" />
+    <Project Path="tests/RouteTimer.Domain.Tests/RouteTimer.Domain.Tests.csproj" />
+    <Project Path="tests/RouteTimer.EndToEnd.Tests/RouteTimer.EndToEnd.Tests.csproj" />
+    <Project Path="tests/RouteTimer.Persistence.Tests/RouteTimer.Persistence.Tests.csproj" />
+    <Project Path="tests/RouteTimer.Services.Tests/RouteTimer.Services.Tests.csproj" />
+  </Folder>
+</Solution>
