@@ -1,18 +1,60 @@
 @page "/profile"
+@inject HttpClient Http
+@using RouteTimer.Contracts.Profile
 
 <PageTitle>Profile | RouteTimer</PageTitle>
 
 <h1>Rider profile</h1>
 <p>Your rider and bike/equipment masses are required for realistic speed predictions.</p>
 
-<form>
+<form @onsubmit="SaveAsync" @onsubmit:preventDefault>
     <div>
         <label for="rider-weight">Rider weight (kg)</label>
-        <input id="rider-weight" type="number" min="30" max="250" step="0.1" required />
+        <input id="rider-weight" type="number" min="30" max="250" step="0.1" required @bind="riderWeightKg" />
     </div>
     <div>
         <label for="bike-weight">Bike and equipment weight (kg)</label>
-        <input id="bike-weight" type="number" min="3" max="60" step="0.1" required />
+        <input id="bike-weight" type="number" min="3" max="60" step="0.1" required @bind="bikeWeightKg" />
     </div>
     <button type="submit">Save profile</button>
 </form>
+@if (status is not null)
+{
+    <p role="status">@status</p>
+}
+
+@code {
+    private double riderWeightKg = 75;
+    private double bikeWeightKg = 10;
+    private string? status;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var profile = await Http.GetFromJsonAsync<ProfileResponse>("api/profile");
+            if (profile is not null)
+            {
+                riderWeightKg = profile.RiderWeightKg;
+                bikeWeightKg = profile.BikeAndEquipmentWeightKg;
+            }
+        }
+        catch (HttpRequestException)
+        {
+            // A new rider has no persisted profile yet.
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        try
+        {
+            using var response = await Http.PutAsJsonAsync("api/profile", new UpdateProfileRequest(riderWeightKg, bikeWeightKg));
+            status = response.IsSuccessStatusCode ? "Profile saved." : "Profile could not be saved.";
+        }
+        catch (HttpRequestException)
+        {
+            status = "Profile could not be saved.";
+        }
+    }
+}
