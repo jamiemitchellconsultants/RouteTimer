@@ -47,7 +47,22 @@ public sealed class BuildModelJobHandler(
             throw new ModelBuildException("no-eligible-activities", "No eligible training activities are available to build a model.");
         }
 
-        var powerModel = builder.Build(profile, allActivities);
+        // eligibleCount > 0 does not, by itself, guarantee the builder finds power evidence: today
+        // TrainingCleaner's eligibility thresholds happen to make the two equivalent, but that's an
+        // implicit cross-module invariant nothing enforces here. Translate the builder's generic
+        // InvalidOperationException into a permanent ModelBuildException rather than letting it fall
+        // through to AnalysisWorker's transient-failure path, where it would be retried three times
+        // (and logged as an error each time) before failing with an unhelpful generic diagnostic.
+        PowerModel powerModel;
+        try
+        {
+            powerModel = builder.Build(profile, allActivities);
+        }
+        catch (InvalidOperationException)
+        {
+            throw new ModelBuildException("no-power-evidence", "No eligible training activities have power data available.");
+        }
+
         var model = new RiderModel(powerModel, PhysicalCoefficients.Default, AlgorithmVersion);
 
         var status = eligibleCount < MinimumEligibleActivitiesForValidation
@@ -55,6 +70,9 @@ public sealed class BuildModelJobHandler(
             : ModelValidationStatus.NotValidated;
         var validation = new ModelValidationSummary(status, null, null);
 
+        // Calibration (fitting the physical coefficients to observed data) isn't implemented yet, so
+        // this handler always saves the default coefficients uncalibrated - matching the validation
+        // placeholder above, this is expected to change once calibration is built.
         await models.SaveAsync(model, profile, wasCalibrated: false, validation, cancellationToken);
     }
 }

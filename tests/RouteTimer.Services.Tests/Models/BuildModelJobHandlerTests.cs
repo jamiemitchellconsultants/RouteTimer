@@ -63,6 +63,25 @@ public sealed class BuildModelJobHandlerTests
     }
 
     [Fact]
+    public async Task Handle_throws_permanent_exception_when_the_builder_finds_no_power_evidence()
+    {
+        // eligibleCount > 0 passes (there's an eligible activity), but the builder itself still finds
+        // no power evidence to work with - the scenario the handler's own eligibility pre-check can't
+        // catch, since today it's only reachable via a fake builder (TrainingCleaner's real thresholds
+        // make this combination impossible in practice, which is exactly why the handler must not rely
+        // on that implicit, unenforced cross-module invariant).
+        var profiles = new FakeProfileRepository { Profile = SampleProfile };
+        var activities = new FakeTrainingActivityRepository { Activities = [EligibleActivity(), EligibleActivity(), EligibleActivity()] };
+        var builder = new FakePowerModelBuilder { ThrownException = new InvalidOperationException("No eligible power evidence is available.") };
+        var handler = new BuildModelJobHandler(profiles, activities, builder, new FakeRiderModelRepository());
+        var job = MakeJob();
+
+        var exception = await Assert.ThrowsAsync<ModelBuildException>(() => handler.HandleAsync(job, CancellationToken.None));
+
+        Assert.Equal("no-power-evidence", exception.Code);
+    }
+
+    [Fact]
     public async Task Handle_saves_insufficient_data_status_when_fewer_than_three_activities_are_eligible()
     {
         var profiles = new FakeProfileRepository { Profile = SampleProfile };
@@ -134,6 +153,7 @@ public sealed class BuildModelJobHandlerTests
     private sealed class FakePowerModelBuilder : IPowerModelBuilder
     {
         public PowerModel? Result { get; init; }
+        public InvalidOperationException? ThrownException { get; init; }
         public RiderProfile? ReceivedProfile { get; private set; }
         public IReadOnlyList<CleanedActivity>? ReceivedActivities { get; private set; }
 
@@ -141,6 +161,11 @@ public sealed class BuildModelJobHandlerTests
         {
             ReceivedProfile = profile;
             ReceivedActivities = activities;
+            if (ThrownException is not null)
+            {
+                throw ThrownException;
+            }
+
             return Result!;
         }
     }

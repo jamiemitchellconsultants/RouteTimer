@@ -348,6 +348,31 @@ public sealed class PostgresJobQueueTests
         Assert.Equal(2, jobs.Count);
     }
 
+    [Fact]
+    public async Task EnqueueIfNotPendingAsync_still_coalesces_to_the_same_job_after_a_transient_failure_returns_it_to_queued()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using var context = CreateContext(database);
+        await context.Database.MigrateAsync();
+        var queue = new PostgresJobQueue(context);
+        var subjectId = ModelSubject.Id;
+        var now = DateTimeOffset.UtcNow;
+
+        var firstId = await queue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None);
+        await queue.ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), CancellationToken.None);
+        // Transient (non-permanent) failure with attempts remaining returns the job to Queued rather
+        // than Failed - the unique index still guards it, so a later caller must still coalesce onto
+        // this same row instead of inserting a duplicate.
+        await queue.FailAsync(firstId, "worker-a", permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Transient failure.", CancellationToken.None);
+
+        var secondId = await queue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None);
+
+        Assert.Equal(firstId, secondId);
+        var jobs = await context.Jobs.AsNoTracking().Where(job => job.SubjectId == subjectId).ToListAsync();
+        var onlyJob = Assert.Single(jobs);
+        Assert.Equal(JobState.Queued.ToString(), onlyJob.State);
+    }
+
     /// <summary>
     /// Reproduces, deterministically, the narrow race the code guards against: a racing insert fails
     /// with a unique-index conflict against a job that is still Queued/Running at that exact instant,
