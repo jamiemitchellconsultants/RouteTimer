@@ -11,6 +11,15 @@ namespace RouteTimer.Persistence.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.Sql("""
+                DO $$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM predictions) THEN
+                        RAISE EXCEPTION 'legacy-predictions-not-supported: existing placeholder predictions cannot be upgraded without a retained GPX and model snapshot.';
+                    END IF;
+                END $$;
+                """);
+
             migrationBuilder.AddColumn<double>(
                 name: "AscentMetres",
                 table: "predictions",

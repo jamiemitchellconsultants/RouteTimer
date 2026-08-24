@@ -53,6 +53,23 @@ public sealed class PredictionWorkflowTests
         Assert.Equal("v2", predictions.Created[1].Model.Model.AlgorithmVersion);
     }
 
+    // Break caught: direct callers can retain an empty or over-limit GPX stream despite the documented upload boundary.
+    [Theory]
+    [InlineData("empty")]
+    [InlineData("oversized")]
+    public async Task Submit_rejects_empty_and_over_limit_gpx_streams(string kind)
+    {
+        var model = ModelSnapshot("current", 210);
+        var service = new PredictionSubmissionService(new FixedProfileRepository(new RiderProfile(75, 10)), new FixedModelRepository(model), new FakePredictionRepository(), TimeProvider.System);
+        await using var content = kind == "empty"
+            ? new MemoryStream()
+            : new MemoryStream(new byte[(50 * 1024 * 1024) + 1]);
+
+        var exception = await Assert.ThrowsAsync<PredictionSubmissionException>(() => service.SubmitAsync(new PredictionUpload("route.gpx", content), CancellationToken.None));
+
+        Assert.Equal(kind == "empty" ? "invalid-gpx-upload" : "gpx-too-large", exception.Code);
+    }
+
     // Break caught: the worker loads the current model/profile instead of the model id and profile captured by the prediction.
     [Fact]
     public async Task Handler_uses_captured_model_and_profile_when_current_values_change()
@@ -100,6 +117,54 @@ public sealed class PredictionWorkflowTests
         Assert.Equal("invalid-prediction-result", predictions.Failure?.Code);
     }
 
+    // Break caught: an uncalibrated or poor-validation model can be published as high confidence without a durable explanation.
+    [Theory]
+    [InlineData(false, ModelValidationStatus.Passed, ConfidenceLevel.Low, "uncalibrated-coefficients")]
+    [InlineData(true, ModelValidationStatus.Failed, ConfidenceLevel.Low, "model-validation-failed")]
+    [InlineData(true, ModelValidationStatus.InsufficientData, ConfidenceLevel.Medium, "model-validation-insufficient-data")]
+    [InlineData(true, ModelValidationStatus.NotValidated, ConfidenceLevel.Medium, "model-validation-not-validated")]
+    public async Task Handler_caps_confidence_and_persists_validation_warning(bool wasCalibrated, ModelValidationStatus validationStatus, ConfidenceLevel expectedConfidence, string expectedWarning)
+    {
+        var predictionId = Guid.NewGuid();
+        var model = ModelSnapshot("captured", 210, wasCalibrated, validationStatus);
+        var models = new FixedModelRepository(null) { ById = { [model.Id] = model } };
+        var predictions = new FakePredictionRepository
+        {
+            Processing = new PredictionForProcessing(predictionId,
+                new StoredUpload(Guid.NewGuid(), "route.gpx", "gpx", GpxBytes(), new byte[32], DateTimeOffset.UtcNow), model.Id, new RiderProfile(75, 10))
+        };
+        var handler = new PredictionJobHandler(predictions, models, new GpxRouteParser(), new RouteProcessor(RouteProcessingOptions.Default), new CapturingPredictor());
+
+        await handler.HandleAsync(new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 1, "worker", DateTimeOffset.UtcNow.AddMinutes(1), DateTimeOffset.UtcNow), CancellationToken.None);
+
+        Assert.Equal(expectedConfidence, predictions.Published!.Confidence);
+        Assert.Contains(expectedWarning, predictions.Published.Warnings);
+    }
+
+    // Break caught: NaN output or mismatched segment/time data is persisted instead of becoming a permanent prediction failure.
+    [Theory]
+    [InlineData("non-finite", "invalid-prediction-result")]
+    [InlineData("sequence", "prediction-sequence-mismatch")]
+    [InlineData("time", "prediction-time-mismatch")]
+    public async Task Handler_rejects_non_finite_sequence_and_time_inconsistencies(string kind, string expectedCode)
+    {
+        var predictionId = Guid.NewGuid();
+        var model = ModelSnapshot("captured", 210);
+        var predictions = new FakePredictionRepository
+        {
+            Processing = new PredictionForProcessing(predictionId,
+                new StoredUpload(Guid.NewGuid(), "route.gpx", "gpx", GpxBytes(), new byte[32], DateTimeOffset.UtcNow), model.Id, new RiderProfile(75, 10))
+        };
+        var handler = new PredictionJobHandler(predictions, new FixedModelRepository(null) { ById = { [model.Id] = model } }, new GpxRouteParser(),
+            new RouteProcessor(RouteProcessingOptions.Default), new InvalidResultPredictor(kind));
+
+        var exception = await Assert.ThrowsAsync<PredictionJobException>(() => handler.HandleAsync(
+            new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 1, "worker", DateTimeOffset.UtcNow.AddMinutes(1), DateTimeOffset.UtcNow), CancellationToken.None));
+
+        Assert.Equal(expectedCode, exception.Code);
+        Assert.Equal(expectedCode, predictions.Failure?.Code);
+    }
+
     private static PredictionUpload Upload() => new("route.gpx", new MemoryStream(GpxBytes()));
 
     private static byte[] GpxBytes() => """
@@ -109,11 +174,11 @@ public sealed class PredictionWorkflowTests
         </trkseg></trk></gpx>
         """u8.ToArray();
 
-    private static RiderModelSnapshot ModelSnapshot(string version, double watts)
+    private static RiderModelSnapshot ModelSnapshot(string version, double watts, bool wasCalibrated = false, ModelValidationStatus validationStatus = ModelValidationStatus.InsufficientData)
     {
         var model = new RiderModel(new PowerModel([], watts), PhysicalCoefficients.Default, version);
-        return new RiderModelSnapshot(Guid.NewGuid(), DateTimeOffset.UtcNow, new RiderProfile(75, 10), model, false,
-            new ModelValidationSummary(ModelValidationStatus.InsufficientData, null, null));
+        return new RiderModelSnapshot(Guid.NewGuid(), DateTimeOffset.UtcNow, new RiderProfile(75, 10), model, wasCalibrated,
+            new ModelValidationSummary(validationStatus, null, null));
     }
 
     private sealed class FixedProfileRepository(RiderProfile? profile) : IProfileRepository
@@ -166,8 +231,8 @@ public sealed class PredictionWorkflowTests
                 200,
                 5,
                 TimeSpan.FromSeconds(sample.SegmentDistanceMetres / 5),
-                ConfidenceLevel.Low)).ToList();
-            return new PredictionResult(segments, TimeSpan.FromSeconds(segments.Sum(segment => segment.MovingTime.TotalSeconds)), ConfidenceLevel.Low);
+                ConfidenceLevel.High)).ToList();
+            return new PredictionResult(segments, TimeSpan.FromSeconds(segments.Sum(segment => segment.MovingTime.TotalSeconds)), ConfidenceLevel.High);
         }
     }
 
@@ -177,5 +242,23 @@ public sealed class PredictionWorkflowTests
             route.Samples.Skip(1).Select(sample => new PredictionSegment(sample.Sequence, sample.SegmentDistanceMetres, sample.Gradient, -1, 5, TimeSpan.FromSeconds(1), ConfidenceLevel.Low)).ToList(),
             TimeSpan.FromSeconds(route.Samples.Count - 1),
             ConfidenceLevel.Low);
+    }
+
+    private sealed class InvalidResultPredictor(string kind) : IRoutePredictor
+    {
+        public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model)
+        {
+            var source = route.Samples.Skip(1).ToArray();
+            if (kind == "sequence") return new PredictionResult([], TimeSpan.Zero, ConfidenceLevel.Low);
+            var segments = source.Select(sample => new PredictionSegment(
+                sample.Sequence,
+                sample.SegmentDistanceMetres,
+                sample.Gradient,
+                kind == "non-finite" ? double.NaN : 200,
+                5,
+                TimeSpan.FromSeconds(1),
+                ConfidenceLevel.Low)).ToList();
+            return new PredictionResult(segments, kind == "time" ? TimeSpan.FromSeconds(99) : TimeSpan.FromSeconds(segments.Count), ConfidenceLevel.Low);
+        }
     }
 }

@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Encodings.Web;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -82,6 +83,24 @@ public sealed class PredictionEndpointTests
         Assert.Contains("model-not-ready", await modelMissing.Content.ReadAsStringAsync());
     }
 
+    // Break caught: more than one multipart file reaches SingleOrDefault and becomes an unhandled 500 instead of a stable client error.
+    [Fact]
+    public async Task Submission_rejects_multiple_files_with_a_stable_client_error()
+    {
+        await using var app = CreateRiderApp();
+        using var client = app.CreateClient();
+        using var form = new MultipartFormDataContent
+        {
+            { new ByteArrayContent(Encoding.UTF8.GetBytes("<gpx/>")), "first", "one.gpx" },
+            { new ByteArrayContent(Encoding.UTF8.GetBytes("<gpx/>")), "second", "two.gpx" }
+        };
+
+        using var response = await client.PostAsync("/api/predictions", form);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("prediction-gpx-required", await response.Content.ReadAsStringAsync());
+    }
+
     [Fact]
     public async Task Missing_prediction_and_job_return_not_found()
     {
@@ -90,6 +109,55 @@ public sealed class PredictionEndpointTests
 
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/predictions/{Guid.NewGuid()}")).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/jobs/{Guid.NewGuid()}")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Submission_rejects_empty_and_wrong_extension_uploads_with_stable_codes()
+    {
+        await using var app = CreateRiderApp();
+        await SeedProfileAndModelAsync(app.Services);
+        using var client = app.CreateClient();
+        using var empty = new MultipartFormDataContent { { new ByteArrayContent([]), "file", "route.gpx" } };
+        using var extension = new MultipartFormDataContent { { new ByteArrayContent([1]), "file", "route.txt" } };
+
+        using var emptyResponse = await client.PostAsync("/api/predictions", empty);
+        using var extensionResponse = await client.PostAsync("/api/predictions", extension);
+
+        Assert.Equal(HttpStatusCode.BadRequest, emptyResponse.StatusCode);
+        Assert.Contains("invalid-gpx-upload", await emptyResponse.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.BadRequest, extensionResponse.StatusCode);
+        Assert.Contains("prediction-gpx-required", await extensionResponse.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task History_detail_and_job_contracts_expose_snapshots_ordered_segments_and_no_summary_segment_payload()
+    {
+        await using var app = CreateRiderApp();
+        await SeedProfileAndModelAsync(app.Services);
+        using var client = app.CreateClient();
+        using var submitted = await client.PostAsync("/api/predictions", GpxForm());
+        var accepted = (await submitted.Content.ReadFromJsonAsync<PredictionSubmissionResponse>())!;
+        await PublishAsync(app.Services, accepted.PredictionId);
+        await SeedProfileAsync(app.Services, new RiderProfile(80, 11));
+
+        using var summaries = await client.GetAsync("/api/predictions");
+        using var detail = await client.GetAsync($"/api/predictions/{accepted.PredictionId}");
+        using var job = await client.GetAsync($"/api/jobs/{accepted.JobId}");
+        using var summaryJson = JsonDocument.Parse(await summaries.Content.ReadAsStringAsync());
+        using var detailJson = JsonDocument.Parse(await detail.Content.ReadAsStringAsync());
+        using var jobJson = JsonDocument.Parse(await job.Content.ReadAsStringAsync());
+
+        var summary = summaryJson.RootElement[0];
+        Assert.False(summary.TryGetProperty("segments", out _));
+        Assert.Equal(75, summary.GetProperty("riderWeightKg").GetDouble());
+        var segments = detailJson.RootElement.GetProperty("segments");
+        Assert.Equal(1, segments[0].GetProperty("sequence").GetInt32());
+        Assert.Equal(2, segments[1].GetProperty("sequence").GetInt32());
+        Assert.Equal("PredictRoute", jobJson.RootElement.GetProperty("type").GetString());
+        Assert.Equal("Queued", jobJson.RootElement.GetProperty("state").GetString());
+        Assert.Equal(0, jobJson.RootElement.GetProperty("attemptCount").GetInt32());
+        Assert.True(jobJson.RootElement.TryGetProperty("createdAt", out _));
+        Assert.True(jobJson.RootElement.TryGetProperty("leaseExpiresAt", out _));
     }
 
     private static MultipartFormDataContent GpxForm()
@@ -124,10 +192,19 @@ public sealed class PredictionEndpointTests
             new ModelValidationSummary(ModelValidationStatus.InsufficientData, null, null), CancellationToken.None);
     }
 
-    private static async Task SeedProfileAsync(IServiceProvider services)
+    private static async Task SeedProfileAsync(IServiceProvider services, RiderProfile? profile = null)
     {
         await using var scope = services.CreateAsyncScope();
-        await new ProfileRepository(scope.ServiceProvider.GetRequiredService<RouteTimerDbContext>()).SaveAsync(new RiderProfile(75, 10), CancellationToken.None);
+        await new ProfileRepository(scope.ServiceProvider.GetRequiredService<RouteTimerDbContext>()).SaveAsync(profile ?? new RiderProfile(75, 10), CancellationToken.None);
+    }
+
+    private static async Task PublishAsync(IServiceProvider services, Guid predictionId)
+    {
+        await using var scope = services.CreateAsyncScope();
+        await new PredictionRepository(scope.ServiceProvider.GetRequiredService<RouteTimerDbContext>()).PublishAsync(predictionId,
+            new RouteTimer.Services.Persistence.PredictionPublication(100, 5, TimeSpan.FromSeconds(20), 5, 200, ConfidenceLevel.Medium, ["default-coefficients"],
+                [new RouteTimer.Services.Persistence.PersistedPredictionSegment(2, 51.2, -2.2, 110, 100, 25, .05, .001, 200, 5, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(20), ConfidenceLevel.Medium),
+                 new RouteTimer.Services.Persistence.PersistedPredictionSegment(1, 51.1, -2.1, 105, 75, 25, .04, .002, 190, 4, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15), ConfidenceLevel.High)]), CancellationToken.None);
     }
 
     private sealed class RiderAuthenticationHandler(IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder)

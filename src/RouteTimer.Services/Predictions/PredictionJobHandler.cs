@@ -1,4 +1,5 @@
 using RouteTimer.Domain.Jobs;
+using RouteTimer.Domain.Models;
 using RouteTimer.Domain.Predictions;
 using RouteTimer.Services.Jobs;
 using RouteTimer.Services.Persistence;
@@ -29,7 +30,7 @@ public sealed class PredictionJobHandler(
             var parsed = await parser.ParseAsync(content, cancellationToken);
             var route = processor.Process(parsed.Points);
             var result = predictor.Predict(route, prediction.Profile, model.Model);
-            var publication = BuildPublication(route, result);
+            var publication = BuildPublication(route, result, model);
             await predictions.PublishAsync(prediction.Id, publication, cancellationToken);
         }
         catch (PredictionJobException exception)
@@ -45,7 +46,7 @@ public sealed class PredictionJobHandler(
         }
     }
 
-    private static PredictionPublication BuildPublication(RouteTimer.Domain.Routes.ProcessedRoute route, PredictionResult result)
+    private static PredictionPublication BuildPublication(RouteTimer.Domain.Routes.ProcessedRoute route, PredictionResult result, RiderModelSnapshot model)
     {
         var routeSegments = route.Samples.Skip(1).ToArray();
         if (routeSegments.Length != result.Segments.Count || !routeSegments.Select(sample => sample.Sequence).SequenceEqual(result.Segments.Select(segment => segment.Sequence)))
@@ -77,8 +78,39 @@ public sealed class PredictionJobHandler(
         var averageSpeed = result.MovingTime > TimeSpan.Zero ? route.DistanceMetres / result.MovingTime.TotalSeconds : 0;
         var averagePower = result.Segments.Count == 0 ? 0 : result.Segments.Average(segment => segment.PowerWatts);
         ValidateNonNegative(averageSpeed, averagePower);
-        return new PredictionPublication(route.DistanceMetres, route.AscentMetres, result.MovingTime, averageSpeed, averagePower, result.Confidence, [], persisted);
+        var (confidence, warnings) = ApplyModelWarnings(result.Confidence, model);
+        return new PredictionPublication(route.DistanceMetres, route.AscentMetres, result.MovingTime, averageSpeed, averagePower, confidence, warnings, persisted);
     }
+
+    private static (ConfidenceLevel Confidence, IReadOnlyList<string> Warnings) ApplyModelWarnings(ConfidenceLevel confidence, RiderModelSnapshot model)
+    {
+        var warnings = new List<string>();
+        if (!model.WasCalibrated)
+        {
+            warnings.Add("uncalibrated-coefficients");
+            confidence = ConfidenceLevel.Low;
+        }
+
+        switch (model.Validation.Status)
+        {
+            case ModelValidationStatus.Failed:
+                warnings.Add("model-validation-failed");
+                confidence = ConfidenceLevel.Low;
+                break;
+            case ModelValidationStatus.InsufficientData:
+                warnings.Add("model-validation-insufficient-data");
+                confidence = Min(confidence, ConfidenceLevel.Medium);
+                break;
+            case ModelValidationStatus.NotValidated:
+                warnings.Add("model-validation-not-validated");
+                confidence = Min(confidence, ConfidenceLevel.Medium);
+                break;
+        }
+
+        return (confidence, warnings);
+    }
+
+    private static ConfidenceLevel Min(ConfidenceLevel left, ConfidenceLevel right) => (ConfidenceLevel)Math.Min((int)left, (int)right);
 
     private static void ValidateFinite(params double[] values)
     {

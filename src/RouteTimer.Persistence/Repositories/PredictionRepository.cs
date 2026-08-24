@@ -15,19 +15,32 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
         await using var transaction = context.Database.IsRelational()
             ? await context.Database.BeginTransactionAsync(cancellationToken)
             : null;
-        var upload = await context.Uploads.SingleOrDefaultAsync(entity => entity.Kind == "gpx" && entity.Sha256 == creation.Upload.Sha256, cancellationToken);
-        if (upload is null)
+        StoredUploadEntity? upload;
+        if (context.Database.IsRelational())
         {
-            upload = new StoredUploadEntity
+            await context.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO stored_uploads ("Id", "Kind", "FileName", "Content", "Sha256", "CreatedAt")
+                VALUES ({creation.Upload.Id}, {creation.Upload.Kind}, {creation.Upload.FileName}, {creation.Upload.Content}, {creation.Upload.Sha256}, {creation.Upload.CreatedAt})
+                ON CONFLICT ("Kind", "Sha256") DO NOTHING;
+                """, cancellationToken);
+            upload = await context.Uploads.SingleAsync(entity => entity.Kind == "gpx" && entity.Sha256 == creation.Upload.Sha256, cancellationToken);
+        }
+        else
+        {
+            upload = await context.Uploads.SingleOrDefaultAsync(entity => entity.Kind == "gpx" && entity.Sha256 == creation.Upload.Sha256, cancellationToken);
+            if (upload is null)
             {
-                Id = creation.Upload.Id,
-                Kind = "gpx",
-                FileName = creation.Upload.FileName,
-                Content = creation.Upload.Content,
-                Sha256 = creation.Upload.Sha256,
-                CreatedAt = creation.Upload.CreatedAt
-            };
-            context.Uploads.Add(upload);
+                upload = new StoredUploadEntity
+                {
+                    Id = creation.Upload.Id,
+                    Kind = "gpx",
+                    FileName = creation.Upload.FileName,
+                    Content = creation.Upload.Content,
+                    Sha256 = creation.Upload.Sha256,
+                    CreatedAt = creation.Upload.CreatedAt
+                };
+                context.Uploads.Add(upload);
+            }
         }
 
         var prediction = new PredictionEntity

@@ -125,11 +125,12 @@ app.MapPost("/api/predictions", async (HttpRequest request, PredictionSubmission
             return Problem(StatusCodes.Status400BadRequest, ErrorCodes.MultipartRequired, "A multipart GPX upload is required.");
         }
 
-        var file = (await request.ReadFormAsync(cancellationToken)).Files.SingleOrDefault();
-        if (file is null || !file.FileName.EndsWith(".gpx", StringComparison.OrdinalIgnoreCase))
+        var files = (await request.ReadFormAsync(cancellationToken)).Files;
+        if (files.Count != 1 || !files[0].FileName.EndsWith(".gpx", StringComparison.OrdinalIgnoreCase))
         {
             return Problem(StatusCodes.Status400BadRequest, ErrorCodes.PredictionGpxRequired, "A single .gpx route upload is required.");
         }
+        var file = files[0];
         if (file.Length > 50L * 1024 * 1024)
         {
             return Problem(StatusCodes.Status413PayloadTooLarge, ErrorCodes.GpxTooLarge, "The GPX upload exceeds 50 MB.");
