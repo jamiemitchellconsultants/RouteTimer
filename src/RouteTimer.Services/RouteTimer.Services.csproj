@@ -4,6 +4,10 @@
     <ProjectReference Include="..\RouteTimer.Domain\RouteTimer.Domain.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Garmin.FIT.Sdk" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
