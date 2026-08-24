@@ -13,6 +13,8 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
     public DbSet<StoredUploadEntity> Uploads => Set<StoredUploadEntity>();
     public DbSet<TrainingActivityEntity> TrainingActivities => Set<TrainingActivityEntity>();
     public DbSet<ActivitySampleEntity> ActivitySamples => Set<ActivitySampleEntity>();
+    public DbSet<RiderModelEntity> RiderModels => Set<RiderModelEntity>();
+    public DbSet<PowerBandEntity> PowerBands => Set<PowerBandEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -34,6 +36,13 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
         job.Property(entity => entity.DiagnosticCode).HasMaxLength(128);
         job.Property(entity => entity.DiagnosticMessage).HasMaxLength(1024);
         job.HasIndex(entity => new { entity.State, entity.LeaseExpiresAt, entity.CreatedAt });
+
+        // Backs EnqueueIfNotPendingAsync's coalescing: at most one Queued/Running job may exist for a
+        // given (Type, SubjectId) pair, and the database enforces this even under concurrent inserts.
+        job.HasIndex(entity => new { entity.Type, entity.SubjectId })
+            .IsUnique()
+            .HasFilter("\"State\" IN ('Queued', 'Running')")
+            .HasDatabaseName("IX_analysis_jobs_active_type_subject");
 
         var profile = modelBuilder.Entity<RiderProfileEntity>();
         profile.ToTable("rider_profile");
@@ -79,6 +88,26 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
         activity.HasMany(entity => entity.Samples)
             .WithOne()
             .HasForeignKey(entity => entity.ActivityId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        var riderModel = modelBuilder.Entity<RiderModelEntity>();
+        riderModel.ToTable("rider_models");
+        riderModel.HasKey(entity => entity.Id);
+        riderModel.Property(entity => entity.CreatedAt).HasColumnType("timestamp with time zone");
+        riderModel.Property(entity => entity.AlgorithmVersion).HasMaxLength(128).IsRequired();
+        riderModel.Property(entity => entity.ValidationStatus).HasMaxLength(32).IsRequired();
+        riderModel.HasIndex(entity => entity.CreatedAt);
+
+        var powerBand = modelBuilder.Entity<PowerBandEntity>();
+        powerBand.ToTable("power_bands");
+        powerBand.HasKey(entity => new { entity.ModelId, entity.GradeKey, entity.DurationKey });
+        powerBand.Property(entity => entity.GradeKey).HasMaxLength(32).IsRequired();
+        powerBand.Property(entity => entity.DurationKey).HasMaxLength(32).IsRequired();
+        powerBand.Property(entity => entity.Confidence).HasMaxLength(32).IsRequired();
+
+        riderModel.HasMany(entity => entity.Bands)
+            .WithOne()
+            .HasForeignKey(entity => entity.ModelId)
             .OnDelete(DeleteBehavior.Cascade);
     }
 

@@ -11,6 +11,7 @@ using RouteTimer.Persistence.Repositories;
 using RouteTimer.Persistence.Jobs;
 using RouteTimer.Services.Activities;
 using RouteTimer.Services.Profile;
+using RouteTimer.Services.Models;
 using RouteTimer.Services.Persistence;
 using RouteTimer.Services.Training;
 using RouteTimer.Services.Jobs;
@@ -30,6 +31,7 @@ if (builder.Configuration.GetValue("Database:ApplyMigrations", false))
 }
 builder.Services.AddScoped<IStoredUploadRepository, StoredUploadRepository>();
 builder.Services.AddScoped<ITrainingActivityRepository, TrainingActivityRepository>();
+builder.Services.AddScoped<IRiderModelRepository, RiderModelRepository>();
 builder.Services.AddScoped<IJobQueue, PostgresJobQueue>();
 builder.Services.AddScoped<IProfileRepository, ProfileRepository>();
 builder.Services.AddScoped<TrainingUploadService>();
@@ -39,7 +41,9 @@ builder.Services.AddSingleton<IRouteProcessor>(_ => new RouteProcessor(RouteProc
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<IFitActivityParser, FitActivityParser>();
 builder.Services.AddSingleton<ITrainingCleaner>(_ => new TrainingCleaner(RouteProcessingOptions.Default));
+builder.Services.AddSingleton<IPowerModelBuilder, PowerModelBuilder>();
 builder.Services.AddScoped<IJobHandler, ParseTrainingJobHandler>();
+builder.Services.AddScoped<IJobHandler, BuildModelJobHandler>();
 builder.Services.AddHostedService<AnalysisWorker>();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>

@@ -2,6 +2,7 @@ using RouteTimer.Domain.Jobs;
 using RouteTimer.Services.Jobs;
 using Microsoft.EntityFrameworkCore;
 using RouteTimer.Persistence.Entities;
+using Npgsql;
 
 namespace RouteTimer.Persistence.Jobs;
 
@@ -17,6 +18,61 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
         context.Jobs.Add(new AnalysisJobEntity { Id = id, Type = type.ToString(), SubjectId = subjectId, State = JobState.Queued.ToString(), CreatedAt = DateTimeOffset.UtcNow });
         await context.SaveChangesAsync(cancellationToken);
         return id;
+    }
+
+    public async Task<Guid> EnqueueIfNotPendingAsync(JobType type, Guid subjectId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var attempt = await TryInsertActiveJobAsync(type, subjectId, cancellationToken);
+        if (attempt.HasValue)
+        {
+            return attempt.Value;
+        }
+
+        // The row that won the original race left the Queued/Running set (e.g. claimed and completed)
+        // in the narrow window between our failed insert and the fallback lookup above, so that lookup
+        // found nothing. The conflict that blocked us no longer exists, so retry the insert once more -
+        // it should now succeed cleanly. A second conflict here is left to propagate unhandled; this
+        // isn't a scenario that warrants unbounded retries.
+        var id = Guid.NewGuid();
+        context.Jobs.Add(new AnalysisJobEntity { Id = id, Type = type.ToString(), SubjectId = subjectId, State = JobState.Queued.ToString(), CreatedAt = DateTimeOffset.UtcNow });
+        await context.SaveChangesAsync(cancellationToken);
+        return id;
+    }
+
+    /// <summary>
+    /// Attempts a single insert of a new Queued job. On success, returns its id. On a unique-index
+    /// conflict (another caller already has an active job for this (type, subjectId)), looks up that
+    /// job and returns its id - unless it has already left the Queued/Running set by the time the
+    /// lookup runs, in which case this returns null so the caller can retry the insert.
+    /// </summary>
+    private async Task<Guid?> TryInsertActiveJobAsync(JobType type, Guid subjectId, CancellationToken cancellationToken)
+    {
+        var id = Guid.NewGuid();
+        var entity = new AnalysisJobEntity { Id = id, Type = type.ToString(), SubjectId = subjectId, State = JobState.Queued.ToString(), CreatedAt = DateTimeOffset.UtcNow };
+        context.Jobs.Add(entity);
+
+        try
+        {
+            await context.SaveChangesAsync(cancellationToken);
+            return id;
+        }
+        catch (DbUpdateException exception) when (exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+        {
+            // A concurrent caller won the race to insert the active (Type, SubjectId) row that the
+            // partial unique index guards. Detach our failed entity so it doesn't linger in the change
+            // tracker, then look up whichever job actually won and return its id instead.
+            context.Entry(entity).State = EntityState.Detached;
+
+            var queued = JobState.Queued.ToString();
+            var running = JobState.Running.ToString();
+            var existing = await context.Jobs
+                .Where(job => job.Type == entity.Type && job.SubjectId == subjectId && (job.State == queued || job.State == running))
+                .OrderBy(job => job.CreatedAt)
+                .FirstOrDefaultAsync(cancellationToken);
+            return existing?.Id;
+        }
     }
 
     public async Task<AnalysisJob?> ClaimAsync(string workerId, DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken)

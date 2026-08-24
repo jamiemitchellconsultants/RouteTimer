@@ -60,11 +60,19 @@ public sealed class TrainingActivityRepository(RouteTimerDbContext context) : IT
         var entity = await context.TrainingActivities
             .Include(activity => activity.Samples)
             .SingleOrDefaultAsync(activity => activity.Id == activityId, cancellationToken);
-        if (entity is null)
-        {
-            return null;
-        }
+        return entity is null ? null : ToDomain(entity);
+    }
 
+    public async Task<IReadOnlyList<CleanedActivity>> GetAllAsync(CancellationToken cancellationToken)
+    {
+        var entities = await context.TrainingActivities
+            .Include(activity => activity.Samples)
+            .ToListAsync(cancellationToken);
+        return entities.Select(ToDomain).ToList();
+    }
+
+    private static CleanedActivity ToDomain(TrainingActivityEntity entity)
+    {
         var samples = entity.Samples
             .OrderBy(sample => sample.Sequence)
             .Select(sample => new CleanRideSample(

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using RouteTimer.Domain.Jobs;
 using RouteTimer.Persistence;
 using RouteTimer.Persistence.Jobs;
@@ -282,5 +283,161 @@ public sealed class PostgresJobQueueTests
         var reloaded = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == id);
         Assert.Equal(JobState.Failed.ToString(), reloaded.State);
         Assert.Equal(3, reloaded.AttemptCount);
+    }
+
+    [Fact]
+    public async Task Concurrent_EnqueueIfNotPendingAsync_calls_for_the_same_subject_coalesce_to_a_single_job()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using (var migrationContext = CreateContext(database))
+        {
+            await migrationContext.Database.MigrateAsync();
+        }
+
+        var subjectId = ModelSubject.Id;
+        var enqueueTasks = new List<Task<Guid>>();
+        var contexts = new List<RouteTimerDbContext>();
+        try
+        {
+            for (var i = 0; i < 5; i++)
+            {
+                var workerContext = CreateContext(database);
+                contexts.Add(workerContext);
+                var queue = new PostgresJobQueue(workerContext);
+                enqueueTasks.Add(queue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None));
+            }
+
+            var results = await Task.WhenAll(enqueueTasks);
+
+            Assert.Single(results.Distinct());
+
+            await using var verifyContext = CreateContext(database);
+            var jobs = await verifyContext.Jobs
+                .Where(job => job.Type == JobType.BuildModel.ToString() && job.SubjectId == subjectId)
+                .ToListAsync();
+            var onlyJob = Assert.Single(jobs);
+            Assert.All(results, result => Assert.Equal(onlyJob.Id, result));
+        }
+        finally
+        {
+            foreach (var workerContext in contexts)
+            {
+                await workerContext.DisposeAsync();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task EnqueueIfNotPendingAsync_inserts_a_fresh_job_once_the_prior_one_reaches_a_terminal_state()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using var context = CreateContext(database);
+        await context.Database.MigrateAsync();
+        var queue = new PostgresJobQueue(context);
+        var subjectId = ModelSubject.Id;
+        var now = DateTimeOffset.UtcNow;
+
+        var firstId = await queue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None);
+        await queue.ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), CancellationToken.None);
+        await queue.CompleteAsync(firstId, "worker-a", CancellationToken.None);
+
+        var secondId = await queue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None);
+
+        Assert.NotEqual(firstId, secondId);
+        var jobs = await context.Jobs.AsNoTracking().Where(job => job.SubjectId == subjectId).ToListAsync();
+        Assert.Equal(2, jobs.Count);
+    }
+
+    [Fact]
+    public async Task EnqueueIfNotPendingAsync_still_coalesces_to_the_same_job_after_a_transient_failure_returns_it_to_queued()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using var context = CreateContext(database);
+        await context.Database.MigrateAsync();
+        var queue = new PostgresJobQueue(context);
+        var subjectId = ModelSubject.Id;
+        var now = DateTimeOffset.UtcNow;
+
+        var firstId = await queue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None);
+        await queue.ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), CancellationToken.None);
+        // Transient (non-permanent) failure with attempts remaining returns the job to Queued rather
+        // than Failed - the unique index still guards it, so a later caller must still coalesce onto
+        // this same row instead of inserting a duplicate.
+        await queue.FailAsync(firstId, "worker-a", permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Transient failure.", CancellationToken.None);
+
+        var secondId = await queue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None);
+
+        Assert.Equal(firstId, secondId);
+        var jobs = await context.Jobs.AsNoTracking().Where(job => job.SubjectId == subjectId).ToListAsync();
+        var onlyJob = Assert.Single(jobs);
+        Assert.Equal(JobState.Queued.ToString(), onlyJob.State);
+    }
+
+    /// <summary>
+    /// Reproduces, deterministically, the narrow race the code guards against: a racing insert fails
+    /// with a unique-index conflict against a job that is still Queued/Running at that exact instant,
+    /// but that job is claimed and completed (by a different connection) before the fallback lookup for
+    /// "who won" runs - so that lookup finds nothing. EnqueueIfNotPendingAsync must retry its insert in
+    /// that case rather than letting an InvalidOperationException from an empty sequence escape (which
+    /// would otherwise surface as a spurious failure of an unrelated, already-successful caller, e.g.
+    /// ParseTrainingJobHandler after it already saved a parsed activity).
+    ///
+    /// Postgres only checks the unique constraint against rows committed at insert time, so genuinely
+    /// reproducing "conflict, then the row disappears before the next statement" requires the completion
+    /// to happen inside the single await gap between the racing insert's failure and its own fallback
+    /// SELECT - not just "at some point during the test". A SaveChangesInterceptor gives us that precise
+    /// hook: EF Core invokes SaveChangesFailedAsync synchronously, while still inside the failing
+    /// SaveChangesAsync call, before the exception is handed back to our code's catch block.
+    /// </summary>
+    [Fact]
+    public async Task EnqueueIfNotPendingAsync_retries_once_when_the_conflicting_job_becomes_terminal_before_the_fallback_lookup_runs()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using (var migrationContext = CreateContext(database))
+        {
+            await migrationContext.Database.MigrateAsync();
+        }
+
+        var subjectId = ModelSubject.Id;
+        await using var completerContext = CreateContext(database);
+        var completerQueue = new PostgresJobQueue(completerContext);
+        var conflictingId = await completerQueue.EnqueueAsync(JobType.BuildModel, subjectId, CancellationToken.None);
+        await completerQueue.ClaimAsync("worker-a", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5), CancellationToken.None);
+
+        // Fires from inside the racing context's own failing SaveChangesAsync call - i.e. strictly
+        // between its failed insert and its fallback SELECT - and completes the conflicting job there,
+        // via a wholly separate connection, so the fallback SELECT is guaranteed to find nothing active.
+        var interceptor = new CompleteJobOnSaveFailureInterceptor(
+            () => completerQueue.CompleteAsync(conflictingId, "worker-a", CancellationToken.None));
+        var racingOptions = new DbContextOptionsBuilder<RouteTimerDbContext>()
+            .UseNpgsql(database.GetConnectionString())
+            .AddInterceptors(interceptor)
+            .Options;
+        await using var racingContext = new RouteTimerDbContext(racingOptions);
+        var racingQueue = new PostgresJobQueue(racingContext);
+
+        var resultId = await racingQueue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None);
+
+        Assert.True(interceptor.WasInvoked);
+        Assert.NotEqual(conflictingId, resultId);
+        var jobs = await completerContext.Jobs.AsNoTracking().Where(job => job.SubjectId == subjectId).ToListAsync();
+        Assert.Equal(2, jobs.Count);
+        var freshJob = Assert.Single(jobs, job => job.Id == resultId);
+        Assert.Equal(JobState.Queued.ToString(), freshJob.State);
+    }
+
+    /// <summary>Completes a specific job, via a caller-supplied callback, the moment the context this
+    /// interceptor is attached to fails a SaveChangesAsync call - used to land a completion inside the
+    /// otherwise-unreachable gap between a failed racing insert and its own fallback lookup.</summary>
+    private sealed class CompleteJobOnSaveFailureInterceptor(Func<Task> onSaveFailed) : SaveChangesInterceptor
+    {
+        public bool WasInvoked { get; private set; }
+
+        public override async Task SaveChangesFailedAsync(DbContextErrorEventData eventData, CancellationToken cancellationToken = default)
+        {
+            WasInvoked = true;
+            await onSaveFailed();
+            await base.SaveChangesFailedAsync(eventData, cancellationToken);
+        }
     }
 }

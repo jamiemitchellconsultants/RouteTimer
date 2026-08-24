@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using RouteTimer.Persistence;
@@ -11,9 +12,11 @@ using RouteTimer.Persistence;
 namespace RouteTimer.Persistence.Migrations
 {
     [DbContext(typeof(RouteTimerDbContext))]
-    partial class RouteTimerDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260824121055_AddRiderModels")]
+    partial class AddRiderModels
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -109,11 +112,6 @@ namespace RouteTimer.Persistence.Migrations
                         .HasColumnType("character varying(128)");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("Type", "SubjectId")
-                        .IsUnique()
-                        .HasDatabaseName("IX_analysis_jobs_active_type_subject")
-                        .HasFilter("\"State\" IN ('Queued', 'Running')");
 
                     b.HasIndex("State", "LeaseExpiresAt", "CreatedAt");
 
