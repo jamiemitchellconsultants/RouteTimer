@@ -4,3 +4,16 @@
 
 <h1>Route predictions</h1>
 <p>Upload an elevation-bearing GPX route to create a moving-time prediction.</p>
+
+<label for="gpx-upload">Prediction GPX file</label>
+<InputFile id="gpx-upload" OnChange="SelectFile" accept=".gpx" />
+@if (selectedFileName is not null)
+{
+    <p>@selectedFileName is ready to predict.</p>
+}
+
+@code {
+    private string? selectedFileName;
+
+    private void SelectFile(InputFileChangeEventArgs args) => selectedFileName = args.File.Name;
+}

@@ -4,3 +4,16 @@
 
 <h1>Training activities</h1>
 <p>Upload FIT activities containing GPS, elevation, speed, and power data.</p>
+
+<label for="fit-upload">FIT training files</label>
+<InputFile id="fit-upload" OnChange="SelectFiles" accept=".fit" multiple />
+@if (selectedCount > 0)
+{
+    <p>@selectedCount FIT file(s) ready to upload.</p>
+}
+
+@code {
+    private int selectedCount;
+
+    private void SelectFiles(InputFileChangeEventArgs args) => selectedCount = args.GetMultipleFiles().Count;
+}
