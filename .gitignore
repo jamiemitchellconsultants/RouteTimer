@@ -1,5 +1,7 @@
 .worktrees/
 .superpowers/
+.DS_Store
+RouteTimerExamples/
 bin/
 obj/
 TestResults/
