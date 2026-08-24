@@ -1,9 +1,12 @@
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using RouteTimer.Contracts.Profile;
+using RouteTimer.Services.Profile;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHealthChecks();
+builder.Services.AddSingleton<ProfileService>();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
@@ -23,7 +26,22 @@ app.MapHealthChecks("/health/live", new HealthCheckOptions
 {
     ResponseWriter = static (context, _) => context.Response.WriteAsync("Healthy")
 }).AllowAnonymous();
-app.MapGet("/api/profile", () => Results.Ok()).RequireAuthorization();
+app.MapGet("/api/profile", (ProfileService profiles) => profiles.Current is { } profile
+    ? Results.Ok(new ProfileResponse(profile.RiderWeightKg, profile.BikeAndEquipmentWeightKg))
+    : Results.NotFound()).RequireAuthorization();
+app.MapPut("/api/profile", async (UpdateProfileRequest request, ProfileService profiles, CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            var profile = await profiles.UpdateAsync(request.RiderWeightKg, request.BikeAndEquipmentWeightKg, cancellationToken);
+            return Results.Ok(new ProfileResponse(profile.RiderWeightKg, profile.BikeAndEquipmentWeightKg));
+        }
+        catch (ProfileValidationException exception)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["profile"] = [exception.Message] });
+        }
+    })
+    .RequireAuthorization();
 
 app.Run();
 
