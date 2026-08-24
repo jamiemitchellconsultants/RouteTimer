@@ -10,4 +10,8 @@ public sealed class AnalysisJobEntity
     public string? WorkerId { get; set; }
     public DateTimeOffset? LeaseExpiresAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
+
+    // Operator-facing diagnostic only: never store a stack trace or other internal detail here.
+    public string? DiagnosticCode { get; set; }
+    public string? DiagnosticMessage { get; set; }
 }

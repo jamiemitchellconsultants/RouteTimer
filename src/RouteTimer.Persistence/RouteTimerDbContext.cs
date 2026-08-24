@@ -27,6 +27,8 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
         job.Property(entity => entity.WorkerId).HasMaxLength(128);
         job.Property(entity => entity.LeaseExpiresAt).HasColumnType("timestamp with time zone");
         job.Property(entity => entity.CreatedAt).HasColumnType("timestamp with time zone");
+        job.Property(entity => entity.DiagnosticCode).HasMaxLength(128);
+        job.Property(entity => entity.DiagnosticMessage).HasMaxLength(1024);
         job.HasIndex(entity => new { entity.State, entity.LeaseExpiresAt, entity.CreatedAt });
 
         var profile = modelBuilder.Entity<RiderProfileEntity>();
