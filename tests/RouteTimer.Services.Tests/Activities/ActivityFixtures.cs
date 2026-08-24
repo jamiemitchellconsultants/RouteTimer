@@ -24,6 +24,20 @@ internal static class ActivityFixtures
         return new ParsedFitActivity("Gap", ActivitySport.Cycling, start, samples, TimeSpan.FromMinutes(12), 5000);
     }
 
+    public static ParsedFitActivity RideWithFilteredGapBoundary()
+    {
+        var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var samples = new[]
+        {
+            Sample(start, 0),
+            Sample(start, 5),
+            new RawRideSample(start.AddSeconds(16), null, 7, 200, 140, 85, true),
+            Sample(start, 21)
+        };
+
+        return new ParsedFitActivity("Filtered gap", ActivitySport.Cycling, start, samples, TimeSpan.FromMinutes(12), 5000);
+    }
+
     public static CleanedActivity CleanedTwoSectionsWithSharpBoundary()
     {
         var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);

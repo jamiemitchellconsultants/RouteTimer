@@ -52,8 +52,10 @@ public sealed class TrainingCleaner(RouteProcessingOptions routeOptions) : ITrai
         var samples = new List<CleanRideSample>();
         var elapsed = TimeSpan.Zero;
         RawRideSample? previousClean = null;
+        var pendingDiscontinuity = false;
         foreach (var (sample, crossesDiscontinuity) in movingCandidates)
         {
+            pendingDiscontinuity |= crossesDiscontinuity;
             if (!HasValidPosition(sample.Position))
             {
                 exclusions["missing-position"]++;
@@ -84,13 +86,14 @@ public sealed class TrainingCleaner(RouteProcessingOptions routeOptions) : ITrai
                 continue;
             }
 
-            if (previousClean is not null && !crossesDiscontinuity)
+            if (previousClean is not null && !pendingDiscontinuity)
             {
                 elapsed += sample.Timestamp - previousClean.Timestamp;
             }
 
-            samples.Add(new CleanRideSample(sample.Timestamp, elapsed, position, sample.SpeedMetresPerSecond.GetValueOrDefault(), sample.PowerWatts, sample.HeartRate, sample.Cadence, crossesDiscontinuity));
+            samples.Add(new CleanRideSample(sample.Timestamp, elapsed, position, sample.SpeedMetresPerSecond.GetValueOrDefault(), sample.PowerWatts, sample.HeartRate, sample.Cadence, pendingDiscontinuity));
             previousClean = sample;
+            pendingDiscontinuity = false;
         }
 
         var reasons = new List<string>();

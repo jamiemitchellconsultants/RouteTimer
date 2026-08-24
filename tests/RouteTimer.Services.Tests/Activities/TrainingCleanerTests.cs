@@ -19,6 +19,19 @@ public sealed class TrainingCleanerTests
     }
 
     [Fact]
+    public void Clean_marks_next_retained_sample_when_first_post_gap_candidate_is_filtered()
+    {
+        var parsed = ActivityFixtures.RideWithFilteredGapBoundary();
+
+        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed);
+
+        var boundary = Assert.Single(cleaned.Samples, sample => sample.CrossesDiscontinuity);
+        Assert.Equal(parsed.Samples[3].Timestamp, boundary.Timestamp);
+        Assert.Equal(TimeSpan.FromSeconds(5), boundary.MovingElapsed);
+        Assert.Equal(TimeSpan.FromSeconds(5), cleaned.MovingDuration);
+    }
+
+    [Fact]
     public void Clean_retains_recorded_zero_power_when_marking_a_gap()
     {
         var parsed = ActivityFixtures.WithPauseGapAndCoasting();
