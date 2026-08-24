@@ -96,9 +96,9 @@ public sealed class PredictionWorkflowTests
         Assert.NotNull(predictions.Published);
     }
 
-    // Break caught: invalid predictor output makes the job fail but leaves the prediction falsely queued.
+    // Break caught: invalid predictor output is classified for the queue without committing prediction state separately.
     [Fact]
-    public async Task Handler_marks_prediction_failed_when_persisted_values_are_negative()
+    public async Task Handler_classifies_invalid_prediction_without_persisting_failure_outside_the_queue()
     {
         var predictionId = Guid.NewGuid();
         var model = ModelSnapshot("captured", 210);
@@ -114,7 +114,7 @@ public sealed class PredictionWorkflowTests
         var exception = await Assert.ThrowsAsync<PredictionJobException>(() => handler.HandleAsync(job, CancellationToken.None));
 
         Assert.Equal("invalid-prediction-result", exception.Code);
-        Assert.Equal("invalid-prediction-result", predictions.Failure?.Code);
+        Assert.Null(predictions.Failure);
     }
 
     // Break caught: an uncalibrated or poor-validation model can be published as high confidence without a durable explanation.
@@ -162,7 +162,7 @@ public sealed class PredictionWorkflowTests
             new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 1, "worker", DateTimeOffset.UtcNow.AddMinutes(1), DateTimeOffset.UtcNow), CancellationToken.None));
 
         Assert.Equal(expectedCode, exception.Code);
-        Assert.Equal(expectedCode, predictions.Failure?.Code);
+        Assert.Null(predictions.Failure);
     }
 
     // Break caught: average predicted power gives equal influence to unequal-duration segments.
@@ -185,7 +185,7 @@ public sealed class PredictionWorkflowTests
     }
 
     [Fact]
-    public async Task Handler_marks_prediction_failed_only_on_the_terminal_transient_attempt()
+    public async Task Handler_leaves_transient_failures_for_the_queue_retry_policy()
     {
         var predictionId = Guid.NewGuid();
         var model = ModelSnapshot("captured", 210);
@@ -199,7 +199,7 @@ public sealed class PredictionWorkflowTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => handler.HandleAsync(new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 2, "worker", null, DateTimeOffset.UtcNow), CancellationToken.None));
         Assert.Null(predictions.Failure);
         await Assert.ThrowsAsync<InvalidOperationException>(() => handler.HandleAsync(new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 3, "worker", null, DateTimeOffset.UtcNow), CancellationToken.None));
-        Assert.Equal("processing-error", predictions.Failure?.Code);
+        Assert.Null(predictions.Failure);
     }
 
     private static PredictionUpload Upload() => new("route.gpx", new MemoryStream(GpxBytes()));

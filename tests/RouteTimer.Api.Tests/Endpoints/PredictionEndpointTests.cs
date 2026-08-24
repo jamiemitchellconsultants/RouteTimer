@@ -20,6 +20,7 @@ using RouteTimer.Domain.Physics;
 using RouteTimer.Domain.Profile;
 using RouteTimer.Persistence;
 using RouteTimer.Persistence.Repositories;
+using RouteTimer.Services.Persistence;
 
 namespace RouteTimer.Api.Tests.Endpoints;
 
@@ -177,6 +178,40 @@ public sealed class PredictionEndpointTests
     }
 
     [Fact]
+    public async Task Submission_uses_the_production_kestrel_body_limit()
+    {
+        await using var app = CreateRiderApp();
+        app.UseKestrel();
+        await SeedProfileAndModelAsync(app.Services);
+        using var client = app.CreateClient();
+        using var valid = new MultipartFormDataContent
+        {
+            { new ByteArrayContent(new byte[31 * 1024 * 1024]), "file", "route.gpx" }
+        };
+
+        using var response = await client.PostAsync("/api/predictions", valid);
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Submission_does_not_translate_persistence_invalid_operation_into_multipart_error()
+    {
+        await using var app = CreateRiderApp(services =>
+        {
+            services.RemoveAll<IPredictionRepository>();
+            services.AddScoped<IPredictionRepository, ThrowingPredictionRepository>();
+        });
+        await SeedProfileAndModelAsync(app.Services);
+        using var client = app.CreateClient();
+
+        using var response = await client.PostAsync("/api/predictions", GpxForm());
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.DoesNotContain("multipart-required", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task History_detail_and_job_contracts_expose_snapshots_ordered_segments_and_no_summary_segment_payload()
     {
         await using var app = CreateRiderApp();
@@ -214,7 +249,7 @@ public sealed class PredictionEndpointTests
         return form;
     }
 
-    private static WebApplicationFactory<Program> CreateRiderApp()
+    private static WebApplicationFactory<Program> CreateRiderApp(Action<IServiceCollection>? configure = null)
     {
         var databaseName = Guid.NewGuid().ToString();
         return new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
@@ -225,6 +260,7 @@ public sealed class PredictionEndpointTests
             services.AddDbContext<RouteTimerDbContext>(options => options.UseInMemoryDatabase(databaseName));
             services.RemoveAll<Microsoft.Extensions.Hosting.IHostedService>();
             services.AddAuthentication("test").AddScheme<AuthenticationSchemeOptions, RiderAuthenticationHandler>("test", _ => { });
+            configure?.Invoke(services);
         }));
     }
 
@@ -263,5 +299,16 @@ public sealed class PredictionEndpointTests
             if (Request.Headers["X-Test-Role"] != "non-rider") claims.Add(new Claim(ClaimTypes.Role, "rider"));
             return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(new ClaimsPrincipal(new ClaimsIdentity(claims, Scheme.Name)), Scheme.Name)));
         }
+    }
+
+    private sealed class ThrowingPredictionRepository : IPredictionRepository
+    {
+        public Task<QueuedPredictionSubmission> CreateQueuedAsync(QueuedPredictionCreation creation, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("simulated persistence failure");
+        public Task<PredictionForProcessing?> GetForProcessingAsync(Guid predictionId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task PublishAsync(Guid predictionId, PredictionPublication publication, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task FailAsync(Guid predictionId, string code, string message, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<IReadOnlyList<PredictionSummary>> GetSummariesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<PredictionDetail?> GetAsync(Guid predictionId, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 }

@@ -137,24 +137,10 @@ app.MapPost("/api/predictions", async (HttpRequest request, PredictionSubmission
             return Problem(StatusCodes.Status400BadRequest, ErrorCodes.MultipartRequired, "A multipart GPX upload is required.");
         }
 
+        IFormFileCollection files;
         try
         {
-            var files = (await request.ReadFormAsync(cancellationToken)).Files;
-            if (files.Count != 1 || !files[0].FileName.EndsWith(".gpx", StringComparison.OrdinalIgnoreCase))
-                return Problem(StatusCodes.Status400BadRequest, ErrorCodes.PredictionGpxRequired, "A single .gpx route upload is required.");
-            var file = files[0];
-            if (file.Length > 50L * 1024 * 1024)
-                return Problem(StatusCodes.Status413PayloadTooLarge, ErrorCodes.GpxTooLarge, "The GPX upload exceeds 50 MB.");
-            await using var input = file.OpenReadStream();
-            var accepted = await submissions.SubmitAsync(new PredictionUpload(file.FileName, input), cancellationToken);
-            return Results.Accepted($"/api/predictions/{accepted.PredictionId}", new PredictionSubmissionResponse(accepted.PredictionId, accepted.JobId, accepted.ModelId));
-        }
-        catch (PredictionSubmissionException exception)
-        {
-            var status = exception.Code is ErrorCodes.ProfileRequired or ErrorCodes.ModelNotReady
-                ? StatusCodes.Status409Conflict
-                : exception.Code == ErrorCodes.GpxTooLarge ? StatusCodes.Status413PayloadTooLarge : StatusCodes.Status400BadRequest;
-            return Problem(status, exception.Code, exception.Message);
+            files = (await request.ReadFormAsync(cancellationToken)).Files;
         }
         catch (BadHttpRequestException)
         {
@@ -168,13 +154,33 @@ app.MapPost("/api/predictions", async (HttpRequest request, PredictionSubmission
         {
             return Problem(StatusCodes.Status400BadRequest, ErrorCodes.MultipartRequired, "The multipart request is malformed.");
         }
-        catch (IOException exception) when (!exception.Message.Contains("limit", StringComparison.OrdinalIgnoreCase))
+        catch (ArgumentException)
         {
             return Problem(StatusCodes.Status400BadRequest, ErrorCodes.MultipartRequired, "The multipart request is malformed.");
         }
         catch (IOException)
         {
+            return Problem(StatusCodes.Status400BadRequest, ErrorCodes.MultipartRequired, "The multipart request is malformed.");
+        }
+
+        if (files.Count != 1 || !files[0].FileName.EndsWith(".gpx", StringComparison.OrdinalIgnoreCase))
+            return Problem(StatusCodes.Status400BadRequest, ErrorCodes.PredictionGpxRequired, "A single .gpx route upload is required.");
+        var file = files[0];
+        if (file.Length > 50L * 1024 * 1024)
             return Problem(StatusCodes.Status413PayloadTooLarge, ErrorCodes.GpxTooLarge, "The GPX upload exceeds 50 MB.");
+
+        try
+        {
+            await using var input = file.OpenReadStream();
+            var accepted = await submissions.SubmitAsync(new PredictionUpload(file.FileName, input), cancellationToken);
+            return Results.Accepted($"/api/predictions/{accepted.PredictionId}", new PredictionSubmissionResponse(accepted.PredictionId, accepted.JobId, accepted.ModelId));
+        }
+        catch (PredictionSubmissionException exception)
+        {
+            var status = exception.Code is ErrorCodes.ProfileRequired or ErrorCodes.ModelNotReady
+                ? StatusCodes.Status409Conflict
+                : exception.Code == ErrorCodes.GpxTooLarge ? StatusCodes.Status413PayloadTooLarge : StatusCodes.Status400BadRequest;
+            return Problem(status, exception.Code, exception.Message);
         }
     })
     .RequireAuthorization();

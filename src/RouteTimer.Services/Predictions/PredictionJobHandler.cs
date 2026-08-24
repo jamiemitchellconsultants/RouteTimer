@@ -33,21 +33,14 @@ public sealed class PredictionJobHandler(
             var publication = BuildPublication(route, result, model);
             await predictions.PublishAsync(prediction.Id, publication, cancellationToken);
         }
-        catch (PredictionJobException exception)
+        catch (PredictionJobException)
         {
-            await predictions.FailAsync(prediction.Id, exception.Code, exception.Message, cancellationToken);
             throw;
         }
         catch (Exception exception) when (exception is RouteInputException or PredictionCalculationException or ArgumentException)
         {
             const string code = "invalid-prediction-result";
-            await predictions.FailAsync(prediction.Id, code, "The route could not produce a valid prediction.", cancellationToken);
             throw new PredictionJobException(code, "The route could not produce a valid prediction.", exception);
-        }
-        catch (Exception) when (job.AttemptCount >= 3)
-        {
-            await predictions.FailAsync(prediction.Id, "processing-error", "An unexpected error occurred while processing this job.", cancellationToken);
-            throw;
         }
     }
 

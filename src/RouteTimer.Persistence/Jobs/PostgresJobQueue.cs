@@ -2,6 +2,7 @@ using RouteTimer.Domain.Jobs;
 using RouteTimer.Services.Jobs;
 using Microsoft.EntityFrameworkCore;
 using RouteTimer.Persistence.Entities;
+using RouteTimer.Services.Persistence;
 using Npgsql;
 
 namespace RouteTimer.Persistence.Jobs;
@@ -9,7 +10,7 @@ namespace RouteTimer.Persistence.Jobs;
 public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
 {
     /// <summary>Bounded retries: a job may be attempted at most this many times before it becomes permanently Failed.</summary>
-    public const int MaxAttempts = 3;
+    public const int MaxAttempts = JobRetryPolicy.MaxAttempts;
 
     public async Task<Guid> EnqueueAsync(JobType type, Guid subjectId, CancellationToken cancellationToken)
     {
@@ -145,10 +146,16 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
         ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
         cancellationToken.ThrowIfCancellationRequested();
 
+        await using var transaction = context.Database.IsRelational()
+            ? await context.Database.BeginTransactionAsync(cancellationToken)
+            : null;
+
         // The guarded read-then-save below happens on a single row keyed by its primary key, and every
         // mutation of an AnalysisJob row goes through ClaimAsync/RenewLeaseAsync/CompleteAsync/FailAsync -
         // none of which can interleave invisibly between this read and SaveChangesAsync - so this ownership
-        // check is race-free without an explicit transaction or FOR UPDATE.
+        // check is race-free without an explicit transaction or FOR UPDATE. The transaction is still
+        // required here because a terminal PredictRoute failure must commit the job and prediction state
+        // together.
         var running = JobState.Running.ToString();
         var job = await context.Jobs.SingleOrDefaultAsync(
             entity => entity.Id == jobId && entity.State == running && entity.WorkerId == workerId,
@@ -166,6 +173,17 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
             job.State = JobState.Failed.ToString();
             job.WorkerId = null;
             job.LeaseExpiresAt = null;
+
+            if (job.Type == JobType.PredictRoute.ToString())
+            {
+                var prediction = await context.Predictions.SingleOrDefaultAsync(entity => entity.Id == job.SubjectId, cancellationToken);
+                if (prediction is not null)
+                {
+                    prediction.State = PredictionState.Failed.ToString();
+                    prediction.Warnings = [$"{diagnosticCode ?? "processing-error"}: {diagnosticMessage ?? "The prediction job failed."}"];
+                    prediction.CompletedAt = DateTimeOffset.UtcNow;
+                }
+            }
         }
         else
         {
@@ -175,6 +193,7 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
         }
 
         await context.SaveChangesAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
         return true;
     }
 

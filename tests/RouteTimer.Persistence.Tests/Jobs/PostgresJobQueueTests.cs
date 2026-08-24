@@ -1,8 +1,13 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using RouteTimer.Domain.Jobs;
+using RouteTimer.Domain.Models;
+using RouteTimer.Domain.Physics;
+using RouteTimer.Domain.Profile;
 using RouteTimer.Persistence;
 using RouteTimer.Persistence.Jobs;
+using RouteTimer.Persistence.Repositories;
+using RouteTimer.Services.Persistence;
 using Testcontainers.PostgreSql;
 
 namespace RouteTimer.Persistence.Tests.Jobs;
@@ -162,6 +167,8 @@ public sealed class PostgresJobQueueTests
         Assert.True(result);
         var reloaded = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == id);
         Assert.Equal(JobState.Succeeded.ToString(), reloaded.State);
+        Assert.Null(reloaded.WorkerId);
+        Assert.Null(reloaded.LeaseExpiresAt);
     }
 
     [Fact]
@@ -203,6 +210,8 @@ public sealed class PostgresJobQueueTests
         Assert.Equal(JobState.Failed.ToString(), reloaded.State);
         Assert.Equal("invalid_fit", reloaded.DiagnosticCode);
         Assert.Equal("The FIT file could not be decoded.", reloaded.DiagnosticMessage);
+        Assert.Null(reloaded.WorkerId);
+        Assert.Null(reloaded.LeaseExpiresAt);
     }
 
     [Fact]
@@ -283,6 +292,76 @@ public sealed class PostgresJobQueueTests
         var reloaded = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == id);
         Assert.Equal(JobState.Failed.ToString(), reloaded.State);
         Assert.Equal(3, reloaded.AttemptCount);
+    }
+
+    [Fact]
+    public async Task FailAsync_terminal_predict_route_failure_updates_prediction_and_job_together()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using var context = CreateContext(database);
+        await context.Database.MigrateAsync();
+        var model = await SaveModelAsync(context);
+        var submission = await new PredictionRepository(context).CreateQueuedAsync(Creation(model), CancellationToken.None);
+        var queue = new PostgresJobQueue(context);
+        var now = DateTimeOffset.UtcNow;
+
+        for (var attempt = 1; attempt <= 2; attempt++)
+        {
+            Assert.NotNull(await queue.ClaimAsync($"worker-{attempt}", now.AddMinutes(attempt), TimeSpan.FromMinutes(2), CancellationToken.None));
+            Assert.True(await queue.FailAsync(submission.JobId, $"worker-{attempt}", permanent: false, "processing-error", "Transient failure.", CancellationToken.None));
+            var queued = await context.Predictions.AsNoTracking().SingleAsync(entity => entity.Id == submission.PredictionId);
+            Assert.Equal(PredictionState.Queued.ToString(), queued.State);
+        }
+
+        Assert.NotNull(await queue.ClaimAsync("worker-3", now.AddMinutes(3), TimeSpan.FromMinutes(2), CancellationToken.None));
+        Assert.True(await queue.FailAsync(submission.JobId, "worker-3", permanent: false, "processing-error", "Terminal failure.", CancellationToken.None));
+
+        var job = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == submission.JobId);
+        var prediction = await context.Predictions.AsNoTracking().SingleAsync(entity => entity.Id == submission.PredictionId);
+        Assert.Equal(JobState.Failed.ToString(), job.State);
+        Assert.Equal(PredictionState.Failed.ToString(), prediction.State);
+        Assert.Equal(new[] { "processing-error: Terminal failure." }, prediction.Warnings);
+        Assert.NotNull(prediction.CompletedAt);
+        Assert.Null(job.WorkerId);
+        Assert.Null(job.LeaseExpiresAt);
+    }
+
+    [Fact]
+    public async Task FailAsync_rolls_back_job_when_terminal_prediction_update_fails()
+    {
+        await using var database = await StartDatabaseAsync();
+        Guid jobId;
+        Guid predictionId;
+        await using (var setup = CreateContext(database))
+        {
+            await setup.Database.MigrateAsync();
+            var model = await SaveModelAsync(setup);
+            var submission = await new PredictionRepository(setup).CreateQueuedAsync(Creation(model), CancellationToken.None);
+            jobId = submission.JobId;
+            predictionId = submission.PredictionId;
+            await setup.Database.ExecuteSqlRawAsync("""
+                CREATE FUNCTION reject_prediction_failure() RETURNS trigger AS $$
+                BEGIN
+                    IF NEW."State" = 'Failed' THEN RAISE EXCEPTION 'forced-prediction-failure'; END IF;
+                    RETURN NEW;
+                END $$ LANGUAGE plpgsql;
+                CREATE TRIGGER reject_prediction_failure BEFORE UPDATE ON predictions FOR EACH ROW EXECUTE FUNCTION reject_prediction_failure();
+                """);
+        }
+
+        await using (var failingContext = CreateContext(database))
+        {
+            var queue = new PostgresJobQueue(failingContext);
+            Assert.NotNull(await queue.ClaimAsync("worker-a", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(2), CancellationToken.None));
+            await Assert.ThrowsAsync<DbUpdateException>(() => queue.FailAsync(jobId, "worker-a", permanent: true, "invalid-route", "Permanent failure.", CancellationToken.None));
+        }
+
+        await using var verify = CreateContext(database);
+        var job = await verify.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == jobId);
+        var prediction = await verify.Predictions.AsNoTracking().SingleAsync(entity => entity.Id == predictionId);
+        Assert.Equal(JobState.Running.ToString(), job.State);
+        Assert.Equal("worker-a", job.WorkerId);
+        Assert.Equal(PredictionState.Queued.ToString(), prediction.State);
     }
 
     [Fact]
@@ -424,6 +503,22 @@ public sealed class PostgresJobQueueTests
         Assert.Equal(2, jobs.Count);
         var freshJob = Assert.Single(jobs, job => job.Id == resultId);
         Assert.Equal(JobState.Queued.ToString(), freshJob.State);
+    }
+
+    private static QueuedPredictionCreation Creation(RiderModelSnapshot model) => new(
+        new StoredUpload(Guid.NewGuid(), "route.gpx", "gpx", [1, 2, 3], Enumerable.Repeat((byte)9, 32).ToArray(), DateTimeOffset.UtcNow),
+        model,
+        new RiderProfile(75, 10),
+        PredictionAssumptions.RoadCalmDryMovingOnly,
+        DateTimeOffset.UtcNow);
+
+    private static async Task<RiderModelSnapshot> SaveModelAsync(RouteTimerDbContext context)
+    {
+        var models = new RiderModelRepository(context);
+        var profile = new RiderProfile(75, 10);
+        var id = await models.SaveAsync(new RiderModel(new PowerModel([], 200), PhysicalCoefficients.Default, "v1"), profile, false,
+            new ModelValidationSummary(ModelValidationStatus.Passed, .05, .08), CancellationToken.None);
+        return (await models.GetAsync(id, CancellationToken.None))!;
     }
 
     /// <summary>Completes a specific job, via a caller-supplied callback, the moment the context this
