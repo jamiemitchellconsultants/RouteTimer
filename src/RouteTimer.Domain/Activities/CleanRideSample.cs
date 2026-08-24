@@ -10,4 +10,5 @@ public sealed record CleanRideSample(
     ushort? PowerWatts,
     byte? HeartRate,
     byte? Cadence,
-    bool CrossesDiscontinuity);
+    bool CrossesDiscontinuity,
+    double Gradient = 0);
