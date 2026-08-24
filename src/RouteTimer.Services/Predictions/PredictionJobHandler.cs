@@ -78,36 +78,46 @@ public sealed class PredictionJobHandler(
             ? result.Segments.Sum(segment => segment.PowerWatts * segment.MovingTime.TotalSeconds) / result.MovingTime.TotalSeconds
             : 0;
         ValidateNonNegative(averageSpeed, averagePower);
-        var (confidence, warnings) = ApplyModelWarnings(result.Confidence, model);
+        var (confidence, warnings) = ApplyModelWarnings(result.Confidence, result.Warnings, model);
         return new PredictionPublication(route.DistanceMetres, route.AscentMetres, result.MovingTime, averageSpeed, averagePower, confidence, warnings, persisted);
     }
 
-    private static (ConfidenceLevel Confidence, IReadOnlyList<string> Warnings) ApplyModelWarnings(ConfidenceLevel confidence, RiderModelSnapshot model)
+    private static (ConfidenceLevel Confidence, IReadOnlyList<string> Warnings) ApplyModelWarnings(
+        ConfidenceLevel confidence,
+        IReadOnlyList<string> predictorWarnings,
+        RiderModelSnapshot model)
     {
         var warnings = new List<string>();
+        var warningSet = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var warning in predictorWarnings) AddWarning(warning, warnings, warningSet);
         if (!model.WasCalibrated)
         {
-            warnings.Add("uncalibrated-coefficients");
+            AddWarning("uncalibrated-coefficients", warnings, warningSet);
             confidence = ConfidenceLevel.Low;
         }
 
         switch (model.Validation.Status)
         {
             case ModelValidationStatus.Failed:
-                warnings.Add("model-validation-failed");
+                AddWarning("model-validation-failed", warnings, warningSet);
                 confidence = ConfidenceLevel.Low;
                 break;
             case ModelValidationStatus.InsufficientData:
-                warnings.Add("model-validation-insufficient-data");
+                AddWarning("model-validation-insufficient-data", warnings, warningSet);
                 confidence = Min(confidence, ConfidenceLevel.Medium);
                 break;
             case ModelValidationStatus.NotValidated:
-                warnings.Add("model-validation-not-validated");
+                AddWarning("model-validation-not-validated", warnings, warningSet);
                 confidence = Min(confidence, ConfidenceLevel.Medium);
                 break;
         }
 
         return (confidence, warnings);
+    }
+
+    private static void AddWarning(string warning, ICollection<string> warnings, ISet<string> warningSet)
+    {
+        if (warningSet.Add(warning)) warnings.Add(warning);
     }
 
     private static ConfidenceLevel Min(ConfidenceLevel left, ConfidenceLevel right) => (ConfidenceLevel)Math.Min((int)left, (int)right);

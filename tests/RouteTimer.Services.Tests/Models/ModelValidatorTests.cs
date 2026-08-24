@@ -344,7 +344,7 @@ public sealed class ModelValidatorTests
 
     private static ProcessedRoute EmptyRoute() => new([], 0, 0);
 
-    private static PredictionResult PredictionOf(double movingSeconds) => new([], TimeSpan.FromSeconds(movingSeconds), ConfidenceLevel.High);
+    private static PredictionResult PredictionOf(double movingSeconds) => new([], TimeSpan.FromSeconds(movingSeconds), ConfidenceLevel.High, []);
 
     private sealed class FakePowerModelBuilder : IPowerModelBuilder
     {

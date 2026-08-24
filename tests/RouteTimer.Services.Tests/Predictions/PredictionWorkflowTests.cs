@@ -141,6 +141,55 @@ public sealed class PredictionWorkflowTests
         Assert.Contains(expectedWarning, predictions.Published.Warnings);
     }
 
+    // Break caught: rebuilding warnings from model state loses predictor reasons, reorders them, or persists duplicates.
+    [Fact]
+    public async Task Handler_preserves_predictor_warning_order_then_appends_deduplicated_model_warnings()
+    {
+        var predictionId = Guid.NewGuid();
+        var model = ModelSnapshot("captured", 210, wasCalibrated: false, ModelValidationStatus.Failed);
+        var predictions = new FakePredictionRepository
+        {
+            Processing = new PredictionForProcessing(predictionId,
+                new StoredUpload(Guid.NewGuid(), "route.gpx", "gpx", GpxBytes(), new byte[32], DateTimeOffset.UtcNow), model.Id, new RiderProfile(75, 10))
+        };
+        var predictorWarnings = new[]
+        {
+            "power-model-extrapolation",
+            "conservative-descent-limits",
+            "uncalibrated-coefficients",
+            "power-model-extrapolation",
+        };
+        var handler = new PredictionJobHandler(predictions, new FixedModelRepository(null) { ById = { [model.Id] = model } }, new GpxRouteParser(),
+            new RouteProcessor(RouteProcessingOptions.Default), new WarningPredictor(predictorWarnings));
+
+        await handler.HandleAsync(new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 1, "worker", null, DateTimeOffset.UtcNow), CancellationToken.None);
+
+        Assert.Equal(
+            ["power-model-extrapolation", "conservative-descent-limits", "uncalibrated-coefficients", "model-validation-failed"],
+            predictions.Published!.Warnings);
+    }
+
+    // Break caught: a simulator calculation failure publishes already-built segments before becoming a permanent job error.
+    [Fact]
+    public async Task Handler_does_not_publish_partial_output_when_simulation_fails()
+    {
+        var predictionId = Guid.NewGuid();
+        var model = ModelSnapshot("captured", 210);
+        var predictions = new FakePredictionRepository
+        {
+            Processing = new PredictionForProcessing(predictionId,
+                new StoredUpload(Guid.NewGuid(), "route.gpx", "gpx", GpxBytes(), new byte[32], DateTimeOffset.UtcNow), model.Id, new RiderProfile(75, 10))
+        };
+        var handler = new PredictionJobHandler(predictions, new FixedModelRepository(null) { ById = { [model.Id] = model } }, new GpxRouteParser(),
+            new RouteProcessor(RouteProcessingOptions.Default), new CalculationFailurePredictor());
+
+        var exception = await Assert.ThrowsAsync<PredictionJobException>(() => handler.HandleAsync(
+            new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 1, "worker", null, DateTimeOffset.UtcNow), CancellationToken.None));
+
+        Assert.Equal("invalid-prediction-result", exception.Code);
+        Assert.Null(predictions.Published);
+    }
+
     // Break caught: NaN output or mismatched segment/time data is persisted instead of becoming a permanent prediction failure.
     [Theory]
     [InlineData("non-finite", "invalid-prediction-result")]
@@ -269,7 +318,7 @@ public sealed class PredictionWorkflowTests
                 5,
                 TimeSpan.FromSeconds(sample.SegmentDistanceMetres / 5),
                 ConfidenceLevel.High)).ToList();
-            return new PredictionResult(segments, TimeSpan.FromSeconds(segments.Sum(segment => segment.MovingTime.TotalSeconds)), ConfidenceLevel.High);
+            return new PredictionResult(segments, TimeSpan.FromSeconds(segments.Sum(segment => segment.MovingTime.TotalSeconds)), ConfidenceLevel.High, []);
         }
     }
 
@@ -278,7 +327,8 @@ public sealed class PredictionWorkflowTests
         public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model) => new(
             route.Samples.Skip(1).Select(sample => new PredictionSegment(sample.Sequence, sample.SegmentDistanceMetres, sample.Gradient, -1, 5, TimeSpan.FromSeconds(1), ConfidenceLevel.Low)).ToList(),
             TimeSpan.FromSeconds(route.Samples.Count - 1),
-            ConfidenceLevel.Low);
+            ConfidenceLevel.Low,
+            []);
     }
 
     private sealed class InvalidResultPredictor(string kind) : IRoutePredictor
@@ -286,7 +336,7 @@ public sealed class PredictionWorkflowTests
         public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model)
         {
             var source = route.Samples.Skip(1).ToArray();
-            if (kind == "sequence") return new PredictionResult([], TimeSpan.Zero, ConfidenceLevel.Low);
+            if (kind == "sequence") return new PredictionResult([], TimeSpan.Zero, ConfidenceLevel.Low, []);
             var segments = source.Select(sample => new PredictionSegment(
                 sample.Sequence,
                 sample.SegmentDistanceMetres,
@@ -295,7 +345,7 @@ public sealed class PredictionWorkflowTests
                 5,
                 TimeSpan.FromSeconds(1),
                 ConfidenceLevel.Low)).ToList();
-            return new PredictionResult(segments, kind == "time" ? TimeSpan.FromSeconds(99) : TimeSpan.FromSeconds(segments.Count), ConfidenceLevel.Low);
+            return new PredictionResult(segments, kind == "time" ? TimeSpan.FromSeconds(99) : TimeSpan.FromSeconds(segments.Count), ConfidenceLevel.Low, []);
         }
     }
 
@@ -305,8 +355,30 @@ public sealed class PredictionWorkflowTests
         {
             var segments = route.Samples.Skip(1).Select((sample, index) => new PredictionSegment(sample.Sequence, sample.SegmentDistanceMetres, sample.Gradient,
                 index == 0 ? 100 : 200, 5, TimeSpan.FromSeconds(index == 0 ? 10 : 20), ConfidenceLevel.Low)).ToList();
-            return new PredictionResult(segments, TimeSpan.FromSeconds(30), ConfidenceLevel.Low);
+            return new PredictionResult(segments, TimeSpan.FromSeconds(30), ConfidenceLevel.Low, []);
         }
+    }
+
+    private sealed class WarningPredictor(IReadOnlyList<string> warnings) : IRoutePredictor
+    {
+        public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model)
+        {
+            var segments = route.Samples.Skip(1).Select(sample => new PredictionSegment(
+                sample.Sequence,
+                sample.SegmentDistanceMetres,
+                sample.Gradient,
+                200,
+                5,
+                TimeSpan.FromSeconds(sample.SegmentDistanceMetres / 5),
+                ConfidenceLevel.High)).ToList();
+            return new PredictionResult(segments, segments.Aggregate(TimeSpan.Zero, (sum, segment) => sum + segment.MovingTime), ConfidenceLevel.High, warnings);
+        }
+    }
+
+    private sealed class CalculationFailurePredictor : IRoutePredictor
+    {
+        public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model) =>
+            throw new PredictionCalculationException("Simulation could not progress.");
     }
 
     private sealed class ThrowingPredictor : IRoutePredictor
