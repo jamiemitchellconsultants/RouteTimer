@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using RouteTimer.Contracts.Profile;
 using RouteTimer.Contracts.Training;
 using RouteTimer.Contracts.Predictions;
+using RouteTimer.Api;
 using RouteTimer.Persistence;
 using RouteTimer.Persistence.Repositories;
 using RouteTimer.Services.Profile;
@@ -14,11 +15,16 @@ using RouteTimer.Services.Validation;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddHealthChecks();
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<RouteTimerDbContext>("database", tags: ["ready"]);
 builder.Services.AddSingleton<ProfileService>();
 var connectionString = builder.Configuration.GetConnectionString("RouteTimer")
     ?? "Host=localhost;Database=routetimer;Username=routetimer;Password=routetimer";
 builder.Services.AddDbContext<RouteTimerDbContext>(options => options.UseNpgsql(connectionString));
+if (builder.Configuration.GetValue("Database:ApplyMigrations", false))
+{
+    builder.Services.AddHostedService<DatabaseMigrationService>();
+}
 builder.Services.AddScoped<IStoredUploadRepository, StoredUploadRepository>();
 builder.Services.AddScoped<TrainingUploadService>();
 builder.Services.AddSingleton<IGpxRouteParser, GpxRouteParser>();
@@ -42,7 +48,12 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 app.MapHealthChecks("/health/live", new HealthCheckOptions
 {
+    Predicate = static _ => false,
     ResponseWriter = static (context, _) => context.Response.WriteAsync("Healthy")
+}).AllowAnonymous();
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = static registration => registration.Tags.Contains("ready")
 }).AllowAnonymous();
 app.MapGet("/api/profile", (ProfileService profiles) => profiles.Current is { } profile
     ? Results.Ok(new ProfileResponse(profile.RiderWeightKg, profile.BikeAndEquipmentWeightKg))
