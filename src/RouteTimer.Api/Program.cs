@@ -30,6 +30,8 @@ builder.Services.AddAuthorizationBuilder()
 
 var app = builder.Build();
 
+app.UseDefaultFiles();
+app.UseStaticFiles();
 app.MapHealthChecks("/health/live", new HealthCheckOptions
 {
     ResponseWriter = static (context, _) => context.Response.WriteAsync("Healthy")

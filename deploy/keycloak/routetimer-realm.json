@@ -1,0 +1,23 @@
+{
+  "realm": "routetimer",
+  "enabled": true,
+  "roles": { "realm": [{ "name": "rider", "description": "RouteTimer rider" }] },
+  "clients": [
+    {
+      "clientId": "routetimer-web",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "redirectUris": ["https://ROUTETIMER_HOSTNAME/authentication/login-callback"],
+      "webOrigins": ["https://ROUTETIMER_HOSTNAME"],
+      "defaultClientScopes": ["profile", "email", "roles"]
+    },
+    {
+      "clientId": "routetimer-api",
+      "enabled": true,
+      "bearerOnly": true,
+      "protocol": "openid-connect"
+    }
+  ]
+}

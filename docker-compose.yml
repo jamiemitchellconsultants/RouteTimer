@@ -1,0 +1,38 @@
+services:
+  routetimer-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${ROUTETIMER_DB_NAME:-routetimer}
+      POSTGRES_USER: ${ROUTETIMER_DB_USER:-routetimer}
+      POSTGRES_PASSWORD: ${ROUTETIMER_DB_PASSWORD:?set ROUTETIMER_DB_PASSWORD}
+    volumes:
+      - routetimer_postgres:/var/lib/postgresql/data
+    networks:
+      - routetimer-private
+
+  routetimer:
+    build:
+      context: .
+      args:
+        KEYCLOAK_AUTHORITY: ${KEYCLOAK_AUTHORITY:?set KEYCLOAK_AUTHORITY}
+        ROUTETIMER_HOSTNAME: ${ROUTETIMER_HOSTNAME:?set ROUTETIMER_HOSTNAME}
+    restart: unless-stopped
+    depends_on:
+      - routetimer-db
+    environment:
+      ConnectionStrings__RouteTimer: Host=routetimer-db;Database=${ROUTETIMER_DB_NAME:-routetimer};Username=${ROUTETIMER_DB_USER:-routetimer};Password=${ROUTETIMER_DB_PASSWORD:?set ROUTETIMER_DB_PASSWORD}
+      Keycloak__Authority: ${KEYCLOAK_AUTHORITY:?set KEYCLOAK_AUTHORITY}
+    networks:
+      - routetimer-private
+      - mcp-public
+
+volumes:
+  routetimer_postgres:
+
+networks:
+  routetimer-private:
+    internal: true
+  mcp-public:
+    external: true
+    name: mcp-public
