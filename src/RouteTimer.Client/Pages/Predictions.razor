@@ -1,4 +1,6 @@
 @page "/predictions"
+@inject HttpClient Http
+@using RouteTimer.Contracts.Predictions
 
 <PageTitle>Predictions | RouteTimer</PageTitle>
 
@@ -10,10 +12,57 @@
 @if (selectedFileName is not null)
 {
     <p>@selectedFileName is ready to predict.</p>
+    <button @onclick="SubmitAsync" disabled="@submitting">@(submitting ? "Checking route…" : "Create route preview")</button>
+}
+@if (preview is not null)
+{
+    <section aria-label="Route preview">
+        <h2>@preview.Name</h2>
+        <p>@Math.Round(preview.DistanceMetres / 1000, 1) km · @Math.Round(preview.AscentMetres) m ascent · @preview.SampleCount segments</p>
+    </section>
+}
+@if (status is not null)
+{
+    <p role="status">@status</p>
 }
 
 @code {
     private string? selectedFileName;
+    private IBrowserFile? selectedFile;
+    private bool submitting;
+    private string? status;
+    private PredictionRoutePreview? preview;
 
-    private void SelectFile(InputFileChangeEventArgs args) => selectedFileName = args.File.Name;
+    private void SelectFile(InputFileChangeEventArgs args)
+    {
+        selectedFile = args.File;
+        selectedFileName = selectedFile.Name;
+        status = null;
+        preview = null;
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (selectedFile is null) return;
+        submitting = true;
+        try
+        {
+            using var content = new MultipartFormDataContent();
+            content.Add(new StreamContent(selectedFile.OpenReadStream(50 * 1024 * 1024)), "file", selectedFile.Name);
+            using var response = await Http.PostAsync("api/predictions", content);
+            if (response.IsSuccessStatusCode)
+            {
+                preview = await response.Content.ReadFromJsonAsync<PredictionRoutePreview>();
+                status = preview is null ? "Route preview could not be read." : "Route preview created.";
+            }
+            else
+            {
+                status = "GPX route could not be processed.";
+            }
+        }
+        finally
+        {
+            submitting = false;
+        }
+    }
 }
