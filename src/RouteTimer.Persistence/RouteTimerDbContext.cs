@@ -1,4 +1,6 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using RouteTimer.Persistence.Entities;
 
 namespace RouteTimer.Persistence;
@@ -9,6 +11,8 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
     public DbSet<AnalysisJobEntity> Jobs => Set<AnalysisJobEntity>();
     public DbSet<RiderProfileEntity> Profiles => Set<RiderProfileEntity>();
     public DbSet<StoredUploadEntity> Uploads => Set<StoredUploadEntity>();
+    public DbSet<TrainingActivityEntity> TrainingActivities => Set<TrainingActivityEntity>();
+    public DbSet<ActivitySampleEntity> ActivitySamples => Set<ActivitySampleEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -27,6 +31,8 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
         job.Property(entity => entity.WorkerId).HasMaxLength(128);
         job.Property(entity => entity.LeaseExpiresAt).HasColumnType("timestamp with time zone");
         job.Property(entity => entity.CreatedAt).HasColumnType("timestamp with time zone");
+        job.Property(entity => entity.DiagnosticCode).HasMaxLength(128);
+        job.Property(entity => entity.DiagnosticMessage).HasMaxLength(1024);
         job.HasIndex(entity => new { entity.State, entity.LeaseExpiresAt, entity.CreatedAt });
 
         var profile = modelBuilder.Entity<RiderProfileEntity>();
@@ -43,5 +49,51 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
         upload.Property(entity => entity.Sha256).HasColumnType("bytea").HasMaxLength(32).IsRequired();
         upload.Property(entity => entity.CreatedAt).HasColumnType("timestamp with time zone");
         upload.HasIndex(entity => new { entity.Kind, entity.Sha256 }).IsUnique();
+
+        var activity = modelBuilder.Entity<TrainingActivityEntity>();
+        activity.ToTable("training_activities");
+        activity.HasKey(entity => entity.Id);
+        activity.Property(entity => entity.UploadId).IsRequired();
+        activity.Property(entity => entity.Name).HasMaxLength(512).IsRequired();
+        activity.Property(entity => entity.Eligibility).HasMaxLength(32).IsRequired();
+        activity.Property(entity => entity.CreatedAt).HasColumnType("timestamp with time zone");
+        activity.Property(entity => entity.ExclusionCounts)
+            .HasConversion(
+                counts => JsonSerializer.Serialize(counts, JsonOptions),
+                json => JsonSerializer.Deserialize<Dictionary<string, int>>(json, JsonOptions) ?? new Dictionary<string, int>())
+            .HasColumnType("jsonb")
+            .Metadata.SetValueComparer(DictionaryComparer);
+        activity.Property(entity => entity.ReasonCodes)
+            .HasConversion(
+                codes => JsonSerializer.Serialize(codes, JsonOptions),
+                json => JsonSerializer.Deserialize<List<string>>(json, JsonOptions) ?? new List<string>())
+            .HasColumnType("jsonb")
+            .Metadata.SetValueComparer(ListComparer);
+        activity.HasIndex(entity => entity.UploadId);
+
+        var sample = modelBuilder.Entity<ActivitySampleEntity>();
+        sample.ToTable("activity_samples");
+        sample.HasKey(entity => new { entity.ActivityId, entity.Sequence });
+        sample.Property(entity => entity.Timestamp).HasColumnType("timestamp with time zone");
+
+        activity.HasMany(entity => entity.Samples)
+            .WithOne()
+            .HasForeignKey(entity => entity.ActivityId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
+
+    private static readonly JsonSerializerOptions JsonOptions = new();
+
+    private static readonly ValueComparer<IReadOnlyDictionary<string, int>> DictionaryComparer = new(
+        (left, right) => DictionaryEquals(left ?? new Dictionary<string, int>(), right ?? new Dictionary<string, int>()),
+        dictionary => dictionary.Aggregate(0, (hash, pair) => hash ^ HashCode.Combine(pair.Key, pair.Value)),
+        dictionary => dictionary.ToDictionary(pair => pair.Key, pair => pair.Value));
+
+    private static bool DictionaryEquals(IReadOnlyDictionary<string, int> left, IReadOnlyDictionary<string, int> right) =>
+        left.Count == right.Count && left.All(pair => right.TryGetValue(pair.Key, out var value) && value == pair.Value);
+
+    private static readonly ValueComparer<IReadOnlyList<string>> ListComparer = new(
+        (left, right) => (left ?? new List<string>()).SequenceEqual(right ?? new List<string>()),
+        list => list.Aggregate(0, (hash, value) => HashCode.Combine(hash, value)),
+        list => list.ToList());
 }

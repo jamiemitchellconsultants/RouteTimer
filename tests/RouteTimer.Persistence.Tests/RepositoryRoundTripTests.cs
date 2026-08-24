@@ -3,7 +3,9 @@ using RouteTimer.Persistence;
 using RouteTimer.Persistence.Entities;
 using RouteTimer.Persistence.Repositories;
 using RouteTimer.Services.Persistence;
+using RouteTimer.Domain.Activities;
 using RouteTimer.Domain.Profile;
+using RouteTimer.Domain.Routes;
 
 namespace RouteTimer.Persistence.Tests;
 
@@ -78,5 +80,92 @@ public sealed class RepositoryRoundTripTests
 
         Assert.Equal(new RiderProfile(76, 11), await repository.GetAsync(CancellationToken.None));
         Assert.Single(context.Profiles);
+    }
+
+    [Fact]
+    public async Task Get_upload_returns_the_stored_bytes_and_returns_null_for_an_unknown_id()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new StoredUploadRepository(context);
+        var hash = Enumerable.Repeat((byte)3, 32).ToArray();
+        var uploadId = Guid.NewGuid();
+        var createdAt = DateTimeOffset.UtcNow;
+
+        await repository.StoreIfAbsentAsync(new StoredUpload(uploadId, "ride.fit", "fit", [1, 2, 3, 4], hash, createdAt), CancellationToken.None);
+
+        var found = await repository.GetAsync(uploadId, CancellationToken.None);
+        var missing = await repository.GetAsync(Guid.NewGuid(), CancellationToken.None);
+
+        Assert.NotNull(found);
+        Assert.Equal("ride.fit", found.FileName);
+        Assert.Equal("fit", found.Kind);
+        Assert.Equal(new byte[] { 1, 2, 3, 4 }, found.Content);
+        Assert.Equal(hash, found.Sha256);
+        Assert.Equal(createdAt, found.CreatedAt);
+        Assert.Null(missing);
+    }
+
+    [Fact]
+    public async Task Save_training_activity_round_trips_samples_and_quality_summary()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new TrainingActivityRepository(context);
+        var uploadId = Guid.NewGuid();
+        var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var samples = new[]
+        {
+            new CleanRideSample(start, TimeSpan.Zero, new GeoPoint(51.1, -2.1, 100), 5.0, 180, 140, 85, false, 0.5),
+            new CleanRideSample(start.AddSeconds(5), TimeSpan.FromSeconds(5), new GeoPoint(51.2, -2.2, 105), 6.0, null, 141, 86, true, -1.5),
+            new CleanRideSample(start.AddSeconds(10), TimeSpan.FromSeconds(10), new GeoPoint(51.3, -2.3, 110), 7.0, 200, null, null, false, 0)
+        };
+        var quality = new ActivityQuality(
+            ActivityEligibility.Eligible,
+            PositionCoverage: 1.0,
+            ElevationCoverage: 0.95,
+            SpeedCoverage: 1.0,
+            PowerCoverage: 0.66,
+            ExclusionCounts: new Dictionary<string, int> { ["gap"] = 1, ["pause"] = 2 },
+            ReasonCodes: ["low-power-coverage", "elevation-gap"]);
+        var activity = new CleanedActivity("Morning Ride", samples, TimeSpan.FromSeconds(10), quality);
+
+        var activityId = await repository.SaveAsync(uploadId, activity, CancellationToken.None);
+        var loaded = await repository.GetAsync(activityId, CancellationToken.None);
+        var missing = await repository.GetAsync(Guid.NewGuid(), CancellationToken.None);
+
+        Assert.NotNull(loaded);
+        Assert.Equal("Morning Ride", loaded.Name);
+        Assert.Equal(TimeSpan.FromSeconds(10), loaded.MovingDuration);
+        Assert.Equal(samples.Length, loaded.Samples.Count);
+        Assert.Equal(samples, loaded.Samples);
+        Assert.Equal(ActivityEligibility.Eligible, loaded.Quality.Eligibility);
+        Assert.Equal(1.0, loaded.Quality.PositionCoverage);
+        Assert.Equal(0.95, loaded.Quality.ElevationCoverage);
+        Assert.Equal(1.0, loaded.Quality.SpeedCoverage);
+        Assert.Equal(0.66, loaded.Quality.PowerCoverage);
+        Assert.Equal(new Dictionary<string, int> { ["gap"] = 1, ["pause"] = 2 }, loaded.Quality.ExclusionCounts);
+        Assert.Equal(new[] { "low-power-coverage", "elevation-gap" }, loaded.Quality.ReasonCodes);
+        Assert.Null(missing);
+
+        var storedActivity = await context.TrainingActivities.SingleAsync();
+        Assert.Equal(uploadId, storedActivity.UploadId);
+    }
+
+    [Fact]
+    public async Task Exclusion_counts_value_comparer_is_order_independent()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var property = context.Model
+            .FindEntityType(typeof(TrainingActivityEntity))!
+            .FindProperty(nameof(TrainingActivityEntity.ExclusionCounts))!;
+        var comparer = property.GetValueComparer();
+
+        var inOneOrder = new Dictionary<string, int> { ["gap"] = 1, ["pause"] = 2, ["dropout"] = 3 };
+        var inAnotherOrder = new Dictionary<string, int> { ["dropout"] = 3, ["gap"] = 1, ["pause"] = 2 };
+
+        Assert.True(comparer.Equals(inOneOrder, inAnotherOrder));
+        Assert.Equal(comparer.GetHashCode(inOneOrder), comparer.GetHashCode(inAnotherOrder));
     }
 }

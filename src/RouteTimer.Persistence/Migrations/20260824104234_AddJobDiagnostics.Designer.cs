@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using RouteTimer.Persistence;
@@ -11,9 +12,11 @@ using RouteTimer.Persistence;
 namespace RouteTimer.Persistence.Migrations
 {
     [DbContext(typeof(RouteTimerDbContext))]
-    partial class RouteTimerDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260824104234_AddJobDiagnostics")]
+    partial class AddJobDiagnostics
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -21,52 +24,6 @@ namespace RouteTimer.Persistence.Migrations
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
-
-            modelBuilder.Entity("RouteTimer.Persistence.Entities.ActivitySampleEntity", b =>
-                {
-                    b.Property<Guid>("ActivityId")
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("Sequence")
-                        .HasColumnType("integer");
-
-                    b.Property<byte?>("Cadence")
-                        .HasColumnType("smallint");
-
-                    b.Property<bool>("CrossesDiscontinuity")
-                        .HasColumnType("boolean");
-
-                    b.Property<double>("ElevationMetres")
-                        .HasColumnType("double precision");
-
-                    b.Property<double>("Gradient")
-                        .HasColumnType("double precision");
-
-                    b.Property<byte?>("HeartRate")
-                        .HasColumnType("smallint");
-
-                    b.Property<double>("Latitude")
-                        .HasColumnType("double precision");
-
-                    b.Property<double>("Longitude")
-                        .HasColumnType("double precision");
-
-                    b.Property<double>("MovingElapsedSeconds")
-                        .HasColumnType("double precision");
-
-                    b.Property<int?>("PowerWatts")
-                        .HasColumnType("integer");
-
-                    b.Property<double>("SpeedMetresPerSecond")
-                        .HasColumnType("double precision");
-
-                    b.Property<DateTimeOffset>("Timestamp")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("ActivityId", "Sequence");
-
-                    b.ToTable("activity_samples", (string)null);
-                });
 
             modelBuilder.Entity("RouteTimer.Persistence.Entities.AnalysisJobEntity", b =>
                 {
@@ -198,72 +155,6 @@ namespace RouteTimer.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("stored_uploads", (string)null);
-                });
-
-            modelBuilder.Entity("RouteTimer.Persistence.Entities.TrainingActivityEntity", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<double>("ElevationCoverage")
-                        .HasColumnType("double precision");
-
-                    b.Property<string>("Eligibility")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<string>("ExclusionCounts")
-                        .IsRequired()
-                        .HasColumnType("jsonb");
-
-                    b.Property<double>("MovingDurationSeconds")
-                        .HasColumnType("double precision");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(512)
-                        .HasColumnType("character varying(512)");
-
-                    b.Property<double>("PositionCoverage")
-                        .HasColumnType("double precision");
-
-                    b.Property<double>("PowerCoverage")
-                        .HasColumnType("double precision");
-
-                    b.Property<string>("ReasonCodes")
-                        .IsRequired()
-                        .HasColumnType("jsonb");
-
-                    b.Property<double>("SpeedCoverage")
-                        .HasColumnType("double precision");
-
-                    b.Property<Guid>("UploadId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("UploadId");
-
-                    b.ToTable("training_activities", (string)null);
-                });
-
-            modelBuilder.Entity("RouteTimer.Persistence.Entities.ActivitySampleEntity", b =>
-                {
-                    b.HasOne("RouteTimer.Persistence.Entities.TrainingActivityEntity", null)
-                        .WithMany("Samples")
-                        .HasForeignKey("ActivityId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("RouteTimer.Persistence.Entities.TrainingActivityEntity", b =>
-                {
-                    b.Navigation("Samples");
                 });
 #pragma warning restore 612, 618
         }

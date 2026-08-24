@@ -37,6 +37,9 @@ public sealed class TrainingUploadServiceTests
         public List<(JobType Type, Guid SubjectId)> Enqueued { get; } = [];
         public Task<Guid> EnqueueAsync(JobType type, Guid subjectId, CancellationToken cancellationToken) { Enqueued.Add((type, subjectId)); return Task.FromResult(Guid.NewGuid()); }
         public Task<AnalysisJob?> ClaimAsync(string workerId, DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken) => Task.FromResult<AnalysisJob?>(null);
+        public Task<bool> RenewLeaseAsync(Guid jobId, string workerId, DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken) => Task.FromResult(false);
+        public Task<bool> CompleteAsync(Guid jobId, string workerId, CancellationToken cancellationToken) => Task.FromResult(false);
+        public Task<bool> FailAsync(Guid jobId, string workerId, bool permanent, string? diagnosticCode, string? diagnosticMessage, CancellationToken cancellationToken) => Task.FromResult(false);
     }
 
     private sealed class InMemoryStoredUploadRepository : IStoredUploadRepository
@@ -54,5 +57,8 @@ public sealed class TrainingUploadServiceTests
             Uploads.Add(upload);
             return Task.FromResult(true);
         }
+
+        public Task<StoredUpload?> GetAsync(Guid id, CancellationToken cancellationToken) =>
+            Task.FromResult(Uploads.SingleOrDefault(upload => upload.Id == id));
     }
 }
