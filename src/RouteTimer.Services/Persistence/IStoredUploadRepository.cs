@@ -5,4 +5,6 @@ public sealed record StoredUpload(Guid Id, string FileName, string Kind, byte[] 
 public interface IStoredUploadRepository
 {
     Task<bool> StoreIfAbsentAsync(StoredUpload upload, CancellationToken cancellationToken);
+
+    Task<StoredUpload?> GetAsync(Guid id, CancellationToken cancellationToken);
 }

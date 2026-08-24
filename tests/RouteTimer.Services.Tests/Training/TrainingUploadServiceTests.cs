@@ -57,5 +57,8 @@ public sealed class TrainingUploadServiceTests
             Uploads.Add(upload);
             return Task.FromResult(true);
         }
+
+        public Task<StoredUpload?> GetAsync(Guid id, CancellationToken cancellationToken) =>
+            Task.FromResult(Uploads.SingleOrDefault(upload => upload.Id == id));
     }
 }
