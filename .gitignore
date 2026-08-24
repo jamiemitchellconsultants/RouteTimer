@@ -1,0 +1,10 @@
+.worktrees/
+.superpowers/
+bin/
+obj/
+TestResults/
+.env
+.env.*
+!.env.example
+node_modules/
+wwwroot/vendor/
