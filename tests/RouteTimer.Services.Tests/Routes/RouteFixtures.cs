@@ -1,7 +1,16 @@
+using RouteTimer.Domain.Routes;
+
 namespace RouteTimer.Services.Tests.Routes;
 
 internal static class RouteFixtures
 {
+    public static IReadOnlyList<GeoPoint> PointsExactlyTwentyFiveMetresApart() =>
+    [
+        new(0, 0, 0),
+        new(0, 0.00022483, 2.5),
+        new(0, 0.00044966, 5)
+    ];
+
     public static IReadOnlyList<(double Latitude, double Longitude, double ElevationMetres)> StraightClimb(
         double lengthMetres,
         double riseMetres,

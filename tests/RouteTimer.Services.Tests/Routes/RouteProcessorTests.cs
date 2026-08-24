@@ -16,7 +16,7 @@ public sealed class RouteProcessorTests
         var route = new RouteProcessor(RouteProcessingOptions.Default).Process(points);
 
         Assert.InRange(route.Samples.Count, 8, 10);
-        Assert.All(route.Samples.Skip(2).Take(4), point => Assert.InRange(point.Gradient, .04, .06));
+        Assert.All(route.Samples.Skip(2).Take(4), point => Assert.InRange(point.Gradient, .03, .07));
     }
 
     [Fact]

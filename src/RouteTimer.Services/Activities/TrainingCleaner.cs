@@ -20,7 +20,7 @@ public sealed class TrainingCleaner(RouteProcessingOptions routeOptions) : ITrai
             .Select(group => group.Last())
             .ToList();
         var timerEventsPresent = ordered.Any(sample => sample.TimerRunning);
-        var movingCandidates = new List<RawRideSample>();
+        var movingCandidates = new List<(RawRideSample Sample, bool CrossesDiscontinuity)>();
         RawRideSample? prior = null;
 
         foreach (var sample in ordered)
@@ -33,27 +33,26 @@ public sealed class TrainingCleaner(RouteProcessingOptions routeOptions) : ITrai
                 continue;
             }
 
-            if (prior is not null && sample.Timestamp - prior.Timestamp > TimeSpan.FromSeconds(10))
+            var crossesDiscontinuity = prior is not null && sample.Timestamp - prior.Timestamp > TimeSpan.FromSeconds(10);
+            if (crossesDiscontinuity)
             {
                 exclusions["gap"]++;
-                prior = sample;
-                continue;
             }
 
-            movingCandidates.Add(sample);
+            movingCandidates.Add((sample, crossesDiscontinuity));
             prior = sample;
         }
 
         var denominator = Math.Max(movingCandidates.Count, 1);
-        var positionCoverage = movingCandidates.Count(sample => HasValidPosition(sample.Position)) / (double)denominator;
-        var elevationCoverage = movingCandidates.Count(sample => sample.Position.HasValue && double.IsFinite(sample.Position.Value.ElevationMetres)) / (double)denominator;
-        var speedCoverage = movingCandidates.Count(sample => IsValidSpeed(sample.SpeedMetresPerSecond)) / (double)denominator;
-        var powerCoverage = movingCandidates.Count(sample => sample.PowerWatts.HasValue) / (double)denominator;
+        var positionCoverage = movingCandidates.Count(candidate => HasValidPosition(candidate.Sample.Position)) / (double)denominator;
+        var elevationCoverage = movingCandidates.Count(candidate => candidate.Sample.Position.HasValue && double.IsFinite(candidate.Sample.Position.Value.ElevationMetres)) / (double)denominator;
+        var speedCoverage = movingCandidates.Count(candidate => IsValidSpeed(candidate.Sample.SpeedMetresPerSecond)) / (double)denominator;
+        var powerCoverage = movingCandidates.Count(candidate => candidate.Sample.PowerWatts.HasValue) / (double)denominator;
 
         var samples = new List<CleanRideSample>();
         var elapsed = TimeSpan.Zero;
         RawRideSample? previousClean = null;
-        foreach (var sample in movingCandidates)
+        foreach (var (sample, crossesDiscontinuity) in movingCandidates)
         {
             if (!HasValidPosition(sample.Position))
             {
@@ -85,12 +84,12 @@ public sealed class TrainingCleaner(RouteProcessingOptions routeOptions) : ITrai
                 continue;
             }
 
-            if (previousClean is not null)
+            if (previousClean is not null && !crossesDiscontinuity)
             {
                 elapsed += sample.Timestamp - previousClean.Timestamp;
             }
 
-            samples.Add(new CleanRideSample(sample.Timestamp, elapsed, position, sample.SpeedMetresPerSecond.GetValueOrDefault(), sample.PowerWatts, sample.HeartRate, sample.Cadence, false));
+            samples.Add(new CleanRideSample(sample.Timestamp, elapsed, position, sample.SpeedMetresPerSecond.GetValueOrDefault(), sample.PowerWatts, sample.HeartRate, sample.Cadence, crossesDiscontinuity));
             previousClean = sample;
         }
 
@@ -101,11 +100,12 @@ public sealed class TrainingCleaner(RouteProcessingOptions routeOptions) : ITrai
         if (speedCoverage < .95) reasons.Add("insufficient-speed-coverage");
         if (powerCoverage < .80) reasons.Add("insufficient-power-coverage");
 
-        return new CleanedActivity(
+        var cleaned = new CleanedActivity(
             activity.Name,
             samples,
             elapsed,
             new ActivityQuality(reasons.Count == 0 ? ActivityEligibility.Eligible : ActivityEligibility.Ineligible, positionCoverage, elevationCoverage, speedCoverage, powerCoverage, exclusions, reasons));
+        return new TrainingGeometryEnricher(routeOptions).Enrich(cleaned);
     }
 
     private static bool HasValidPosition(GeoPoint? position) => position.HasValue && double.IsFinite(position.Value.Latitude) && double.IsFinite(position.Value.Longitude);
