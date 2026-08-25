@@ -11,11 +11,15 @@ namespace RouteTimer.Services.Tests.Training;
 
 public sealed class ParseTrainingJobHandlerTests
 {
+    private static readonly DateTimeOffset SampleStartedAt = new(2026, 8, 1, 9, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset SampleEndedAt = new(2026, 8, 1, 9, 30, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset SampleCleanedEndedAt = new(2026, 8, 1, 9, 25, 0, TimeSpan.Zero);
+
     private static readonly ParsedFitActivity SampleParsed = new(
         "Morning Ride",
         ActivitySport.Cycling,
-        DateTimeOffset.UtcNow,
-        DateTimeOffset.UtcNow.AddMinutes(30),
+        SampleStartedAt,
+        SampleEndedAt,
         "Garmin",
         "Edge",
         [],
@@ -28,7 +32,7 @@ public sealed class ParseTrainingJobHandlerTests
         [],
         TimeSpan.FromMinutes(25),
         new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []),
-        ActivityFixtures.Metadata("ride.fit", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddMinutes(25), "Garmin", "Edge", 10_000, 250));
+        ActivityFixtures.Metadata("ride.fit", SampleStartedAt, SampleCleanedEndedAt, "Garmin", "Edge", 10_000, 250));
 
     [Fact]
     public async Task Handle_parses_cleans_and_saves_the_upload_referenced_by_the_job()

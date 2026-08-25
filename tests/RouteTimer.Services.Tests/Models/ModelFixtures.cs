@@ -72,7 +72,7 @@ internal static class ModelFixtures
     {
         var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero).AddDays(index);
         var sample = new CleanRideSample(start + elapsed, elapsed, new GeoPoint(51 + (index * 0.01), -2, 100), 7, watts, null, null, false, gradient);
-        return new CleanedActivity($"Ride{index}", [sample], movingDuration, new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []), ActivityFixtures.Metadata($"ride-{index}.fit", start, start + elapsed));
+        return new CleanedActivity($"Ride{index}", [sample], movingDuration, new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []), ActivityFixtures.Metadata($"ride-{index}.fit", start, start + elapsed, null, null, null, null));
     }
 
     /// <summary>
@@ -97,7 +97,7 @@ internal static class ModelFixtures
             ],
             TimeSpan.FromMinutes(90),
             new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []),
-            ActivityFixtures.Metadata("ride-1.fit", new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 1, 1, 13, 30, 0, TimeSpan.Zero)));
+            ActivityFixtures.Metadata("ride-1.fit", new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 1, 1, 13, 30, 0, TimeSpan.Zero), null, null, null, null));
 
         var activity2 = new CleanedActivity(
             "Ride2",
@@ -107,7 +107,7 @@ internal static class ModelFixtures
             ],
             TimeSpan.FromMinutes(200),
             new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []),
-            ActivityFixtures.Metadata("ride-2.fit", new DateTimeOffset(2026, 1, 2, 12, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 1, 2, 15, 20, 0, TimeSpan.Zero)));
+            ActivityFixtures.Metadata("ride-2.fit", new DateTimeOffset(2026, 1, 2, 12, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 1, 2, 15, 20, 0, TimeSpan.Zero), null, null, null, null));
 
         return [activity1, activity2];
     }
@@ -152,6 +152,6 @@ internal static class ModelFixtures
             new CleanRideSample(start, TimeSpan.Zero, new GeoPoint(51, -2, 100), 7, watts, null, null, false, 0),
             new CleanRideSample(start.AddMinutes(20), TimeSpan.FromMinutes(20), new GeoPoint(51.01, -2, 100), 7, watts, null, null, false, 0)
         };
-        return new CleanedActivity("Ride", samples, TimeSpan.FromMinutes(20), new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []), ActivityFixtures.Metadata("ride.fit", start, start.AddMinutes(20)));
+        return new CleanedActivity("Ride", samples, TimeSpan.FromMinutes(20), new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []), ActivityFixtures.Metadata("ride.fit", start, start.AddMinutes(20), null, null, null, null));
     }
 }

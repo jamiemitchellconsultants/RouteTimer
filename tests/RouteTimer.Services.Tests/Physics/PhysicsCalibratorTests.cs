@@ -264,7 +264,7 @@ internal static class PhysicsFixtures
             samples,
             TimeSpan.FromSeconds(intervalCount * 10),
             new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []),
-            ActivityFixtures.Metadata($"{name}.fit", Epoch.AddDays(activityIndex), samples[^1].Timestamp));
+            ActivityFixtures.Metadata($"{name}.fit", Epoch.AddDays(activityIndex), samples[^1].Timestamp, null, null, null, null));
     }
 
     private static IntervalValues SyntheticInterval(

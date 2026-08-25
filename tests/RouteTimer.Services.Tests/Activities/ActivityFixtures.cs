@@ -13,15 +13,15 @@ internal static class ActivityFixtures
     public static TrainingActivityMetadata Metadata(
         string sourceFileName,
         DateTimeOffset startedAt,
-        DateTimeOffset? endedAt = null,
-        string? deviceManufacturer = null,
-        string? deviceProduct = null,
-        double? distanceMetres = null,
-        double? ascentMetres = null) =>
+        DateTimeOffset endedAt,
+        string? deviceManufacturer,
+        string? deviceProduct,
+        double? distanceMetres,
+        double? ascentMetres) =>
         new(
             sourceFileName,
             startedAt,
-            endedAt ?? startedAt,
+            endedAt,
             deviceManufacturer,
             deviceProduct,
             distanceMetres,
@@ -64,7 +64,7 @@ internal static class ActivityFixtures
             CleanSample(start, 5, 1, false),
             CleanSample(start, 20, 100, true)
         };
-        return new CleanedActivity("Sections", samples, TimeSpan.FromSeconds(5), EligibleQuality(), Metadata("sections.fit", start, start.AddSeconds(20)));
+        return new CleanedActivity("Sections", samples, TimeSpan.FromSeconds(5), EligibleQuality(), Metadata("sections.fit", start, start.AddSeconds(20), null, null, null, null));
     }
 
     public static CleanedActivity CleanedFrom(IReadOnlyList<GeoPoint> points)
@@ -72,7 +72,7 @@ internal static class ActivityFixtures
         var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
         var samples = points.Select((point, index) => new CleanRideSample(
             start.AddSeconds(index * 5), TimeSpan.FromSeconds(index * 5), point, 7, 200, 140, 85, false)).ToList();
-        return new CleanedActivity("Geometry", samples, TimeSpan.FromSeconds((points.Count - 1) * 5), EligibleQuality(), Metadata("geometry.fit", start, start.AddSeconds((points.Count - 1) * 5)));
+        return new CleanedActivity("Geometry", samples, TimeSpan.FromSeconds((points.Count - 1) * 5), EligibleQuality(), Metadata("geometry.fit", start, start.AddSeconds((points.Count - 1) * 5), null, null, null, null));
     }
 
     public static IReadOnlyList<GeoPoint> NonlinearElevationPoints() =>
