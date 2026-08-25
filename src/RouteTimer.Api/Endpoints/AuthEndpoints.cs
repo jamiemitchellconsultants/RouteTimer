@@ -32,6 +32,16 @@ public static class AuthEndpoints
             // limit, an unauthenticated caller could post a body that large here and make
             // System.Text.Json materialise roughly a gigabyte of UTF-16 before SetupAsync/LoginAsync
             // ever run. 4096 bytes is generous for a JSON object holding one passphrase string.
+            // LocalCredentialService.MaximumPassphraseLength is a second, independent bound, not a
+            // backstop for this one: it runs after deserialization, on the string System.Text.Json
+            // already allocated, so it caps hasher work but does nothing to prevent that
+            // allocation -- this RequestSizeLimitAttribute is the only layer that does. Confirmed
+            // (via a standalone probe app, not this test suite -- WebApplicationFactory's TestServer
+            // does not implement IHttpMaxRequestBodySizeFeature, so the 413 path cannot be exercised
+            // in-process) that Microsoft.AspNetCore.Routing.EndpointRoutingMiddleware applies this
+            // metadata to a real Kestrel server automatically. That is framework behaviour, not
+            // something this codebase controls, and CI does not exercise it -- re-run the probe
+            // after any .NET major-version upgrade rather than assuming it still holds.
             routes.MapPost("/api/auth/setup", SetupAsync).AllowAnonymous().WithMetadata(new RequestSizeLimitAttribute(4096));
             routes.MapPost("/api/auth/login", LoginAsync).AllowAnonymous().WithMetadata(new RequestSizeLimitAttribute(4096));
             // LogoutAsync's single-HttpContext-parameter shape matches RequestDelegate closely

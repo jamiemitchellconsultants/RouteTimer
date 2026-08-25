@@ -43,6 +43,9 @@ builder.Services.AddScoped<IJobProgressReporter, JobProgressReporter>();
 builder.Services.AddScoped<IProfileRepository, ProfileRepository>();
 builder.Services.AddScoped<ILocalCredentialRepository, LocalCredentialRepository>();
 builder.Services.AddScoped<LocalCredentialService>();
+builder.Services.AddSingleton(sp => new CredentialRevalidationCache(
+    sp.GetRequiredService<TimeProvider>(),
+    TimeSpan.FromSeconds(CredentialRevalidationCache.DefaultTtlSeconds)));
 builder.Services.AddScoped<IPredictionRepository, PredictionRepository>();
 builder.Services.AddScoped<IJobRepository, JobRepository>();
 builder.Services.AddScoped<TrainingUploadService>();
@@ -135,10 +138,16 @@ else
             // while leaving any session already issued fully valid for up to 30 more days.
             // Re-validating on every request closes that: once the row is gone, the very next
             // request the existing cookie is used on gets signed out instead of let through.
+            // The check is routed through CredentialRevalidationCache rather than calling
+            // LocalCredentialService directly: this handler runs for every cookie-bearing
+            // request -- API calls, static files, health checks -- and a Blazor WASM boot alone
+            // fetches 100+ files, each of which would otherwise be its own database read for a
+            // row that essentially never changes.
             options.Events.OnValidatePrincipal = async context =>
             {
+                var cache = context.HttpContext.RequestServices.GetRequiredService<CredentialRevalidationCache>();
                 var credentials = context.HttpContext.RequestServices.GetRequiredService<LocalCredentialService>();
-                if (await credentials.IsSetupRequiredAsync(context.HttpContext.RequestAborted))
+                if (await cache.IsSetupRequiredAsync(credentials, context.HttpContext.RequestAborted))
                 {
                     context.RejectPrincipal();
                     await context.HttpContext.SignOutAsync(LocalAuthenticationDefaults.AuthenticationScheme);
@@ -156,6 +165,14 @@ builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 
 
 var app = builder.Build();
 
+// Despite being registered first, this does NOT run before authentication/authorization: when
+// UseAuthentication/UseAuthorization are not called explicitly, WebApplication auto-inserts them
+// ahead of any user middleware regardless of source order, so the actual sequence is routing ->
+// authentication -> authorization -> this middleware -> endpoint. A cross-site request carrying no
+// (or an invalid) cookie is therefore rejected 401 by authorization before ever reaching here. That
+// is not a security gap: the load-bearing case -- a cross-site request that DOES carry a valid
+// cookie, which is what SameSite=Strict alone fails to stop -- passes authentication/authorization
+// (the cookie is genuine) and is still rejected 403 here, before the endpoint runs.
 app.UseSameOriginEnforcement();
 app.UseDefaultFiles();
 app.UseStaticFiles();

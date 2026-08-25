@@ -42,9 +42,12 @@ public sealed class LocalCredentialService(ILocalCredentialRepository credential
     public const int MinimumPassphraseLength = 12;
 
     /// <summary>
-    /// An upper bound purely to cap how much work the hasher does and how much memory an anonymous
-    /// caller can make it allocate before any other validation runs -- generous enough that no real
-    /// passphrase ever brushes against it.
+    /// An upper bound purely to cap how much work the hasher does on an implausibly long string --
+    /// generous enough that no real passphrase ever brushes against it. This runs after the request
+    /// body has already been deserialized, so it does nothing to stop the large allocation a huge
+    /// body would cause; that is the endpoint's RequestSizeLimitAttribute's job (see
+    /// AuthEndpoints.MapAuthEndpoints), which runs first and is the only layer that actually
+    /// prevents it.
     /// </summary>
     public const int MaximumPassphraseLength = 256;
 

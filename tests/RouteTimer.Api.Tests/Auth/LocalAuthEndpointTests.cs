@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using RouteTimer.Api.Auth;
 using RouteTimer.Contracts.Auth;
 using RouteTimer.Services.Persistence;
 
@@ -350,6 +351,13 @@ public sealed class LocalAuthEndpointTests
         // credential". The cookie is a self-contained, data-protected ticket with no server-side
         // session store, so nothing re-checks the credential unless OnValidatePrincipal does --
         // this proves it does, and that a session survives right up until the row is actually gone.
+        //
+        // The revalidation check is cached for CredentialRevalidationCache.DefaultTtlSeconds (30s)
+        // in production, which would make this test either flaky or slow if left at the real
+        // default -- a check performed milliseconds after the previous one would just replay the
+        // cached answer. A zero-TTL cache override removes that variable entirely rather than
+        // weakening what this test proves: every check goes to the (fake) repository, so revocation
+        // is exercised on its own, with the TTL's own behaviour covered separately below.
         var repository = new AuthConfigEndpointTests.FakeLocalCredentialRepository(null);
         await using var app = new RouteTimerApiFactory()
             .WithAuthMode("Local")
@@ -357,6 +365,8 @@ public sealed class LocalAuthEndpointTests
             {
                 services.RemoveAll<ILocalCredentialRepository>();
                 services.AddSingleton<ILocalCredentialRepository>(repository);
+                services.RemoveAll<CredentialRevalidationCache>();
+                services.AddSingleton(new CredentialRevalidationCache(TimeProvider.System, TimeSpan.Zero));
             });
         using var client = app.CreateClient();
         await client.PostAsJsonAsync("/api/auth/setup", new SetLocalCredentialRequest(Passphrase), CancellationToken.None);
@@ -368,6 +378,41 @@ public sealed class LocalAuthEndpointTests
 
         using var afterDeletion = await client.GetAsync("/api/profile", CancellationToken.None);
         Assert.Equal(HttpStatusCode.Unauthorized, afterDeletion.StatusCode);
+    }
+
+    [Fact]
+    public async Task Revocation_is_deferred_until_the_cache_ttl_elapses_and_takes_effect_after()
+    {
+        // Proves the caching behaviour itself: a credential deletion within the TTL window is not
+        // yet visible (the whole point -- this is what turns a ~100-request WASM boot into one
+        // database read), and becomes visible on the first check after the TTL elapses. Uses a
+        // manually-advanced clock rather than a real delay so the test is neither slow nor flaky.
+        var repository = new AuthConfigEndpointTests.FakeLocalCredentialRepository(null);
+        var clock = new ManualTimeProvider();
+        var ttl = TimeSpan.FromSeconds(CredentialRevalidationCache.DefaultTtlSeconds);
+        await using var app = new RouteTimerApiFactory()
+            .WithAuthMode("Local")
+            .WithServices(services =>
+            {
+                services.RemoveAll<ILocalCredentialRepository>();
+                services.AddSingleton<ILocalCredentialRepository>(repository);
+                services.RemoveAll<CredentialRevalidationCache>();
+                services.AddSingleton(new CredentialRevalidationCache(clock, ttl));
+            });
+        using var client = app.CreateClient();
+        await client.PostAsJsonAsync("/api/auth/setup", new SetLocalCredentialRequest(Passphrase), CancellationToken.None);
+        using var beforeDeletion = await client.GetAsync("/api/profile", CancellationToken.None);
+        Assert.NotEqual(HttpStatusCode.Unauthorized, beforeDeletion.StatusCode);
+
+        repository.Clear();
+
+        using var stillWithinTtl = await client.GetAsync("/api/profile", CancellationToken.None);
+        Assert.NotEqual(HttpStatusCode.Unauthorized, stillWithinTtl.StatusCode);
+
+        clock.Advance(ttl + TimeSpan.FromSeconds(1));
+
+        using var afterTtlElapses = await client.GetAsync("/api/profile", CancellationToken.None);
+        Assert.Equal(HttpStatusCode.Unauthorized, afterTtlElapses.StatusCode);
     }
 
     private static RouteTimerApiFactory LocalApp(string? initialHash) =>
@@ -398,5 +443,15 @@ public sealed class LocalAuthEndpointTests
 
         public Task SetAsync(string passwordHash, CancellationToken cancellationToken) =>
             throw new NotSupportedException("Not used by this test.");
+    }
+
+    /// <summary>A clock that only moves when told to, so cache-TTL tests are deterministic rather than racing a real timer.</summary>
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private DateTimeOffset now = DateTimeOffset.UtcNow;
+
+        public override DateTimeOffset GetUtcNow() => now;
+
+        public void Advance(TimeSpan by) => now += by;
     }
 }

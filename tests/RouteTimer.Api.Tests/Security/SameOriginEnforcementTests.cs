@@ -83,6 +83,38 @@ public sealed class SameOriginEnforcementTests
         Assert.NotEqual(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
+    [Fact]
+    public async Task A_head_request_is_exempt_even_when_reported_cross_site()
+    {
+        // HEAD is a safe method, same reasoning as GET.
+        await using var app = new RouteTimerApiFactory().WithRiderAuthentication();
+        using var client = app.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Head, "/api/profile");
+        request.Headers.Add(SecFetchSiteHeader, "cross-site");
+
+        using var response = await client.SendAsync(request, CancellationToken.None);
+
+        Assert.NotEqual(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task An_options_request_is_exempt_even_when_reported_cross_site()
+    {
+        // The load-bearing reason for this one: a CORS preflight is an OPTIONS request and carries
+        // Sec-Fetch-Site too. If this middleware rejected it, CORS would silently stop working the
+        // moment anyone configured it -- and the failure would show up as an opaque preflight error
+        // with nothing pointing back here. OPTIONS itself never carries out a mutation; the browser
+        // only sends the real PUT/POST/DELETE after a successful preflight.
+        await using var app = new RouteTimerApiFactory().WithRiderAuthentication();
+        using var client = app.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Options, "/api/profile");
+        request.Headers.Add(SecFetchSiteHeader, "cross-site");
+
+        using var response = await client.SendAsync(request, CancellationToken.None);
+
+        Assert.NotEqual(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
     private static async Task<HttpResponseMessage> SendWithSecFetchSiteAsync(HttpClient client, string secFetchSite)
     {
         using var request = new HttpRequestMessage(HttpMethod.Put, "/api/profile")
