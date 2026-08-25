@@ -1,0 +1,86 @@
+@using RouteTimer.Contracts.Predictions
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<div class="prediction-visualization__map-shell">
+    <div id="@containerId" class="prediction-visualization__map" data-testid="prediction-visualization-map"></div>
+</div>
+
+@code {
+    private readonly string componentId = $"route-map-{Guid.NewGuid():N}";
+    private readonly string containerId = $"route-map-canvas-{Guid.NewGuid():N}";
+    private IJSObjectReference? module;
+    private string? initializedSignature;
+    private DotNetObjectReference<RouteMap>? dotNetReference;
+
+    [Parameter]
+    public IReadOnlyList<PredictionSegmentResponse> Segments { get; set; } = [];
+
+    [Parameter]
+    public string TileUrl { get; set; } = string.Empty;
+
+    [Parameter]
+    public string TileAttribution { get; set; } = string.Empty;
+
+    [Parameter]
+    public int SelectedSequence { get; set; }
+
+    [Parameter]
+    public EventCallback<int> SequenceSelected { get; set; }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Segments.Count == 0 || string.IsNullOrWhiteSpace(TileUrl) || string.IsNullOrWhiteSpace(TileAttribution))
+        {
+            return;
+        }
+
+        module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/route-visualization.js");
+        dotNetReference ??= DotNetObjectReference.Create(this);
+
+        var signature = BuildSignature();
+        if (!string.Equals(signature, initializedSignature, StringComparison.Ordinal))
+        {
+            await module.InvokeVoidAsync(
+                "initializeMap",
+                componentId,
+                containerId,
+                Segments,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["url"] = TileUrl,
+                    ["attribution"] = TileAttribution
+                },
+                dotNetReference);
+            initializedSignature = signature;
+        }
+
+        await SelectAsync(SelectedSequence);
+    }
+
+    [JSInvokable]
+    public async Task OnSequenceSelected(int sequence) => await InvokeAsync(() => SequenceSelected.InvokeAsync(sequence));
+
+    public async Task SelectAsync(int sequence)
+    {
+        if (module is null)
+        {
+            return;
+        }
+
+        await module.InvokeVoidAsync("selectMapSequence", componentId, sequence);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (module is not null)
+        {
+            await module.InvokeVoidAsync("disposeMap", componentId);
+            await module.DisposeAsync();
+        }
+
+        dotNetReference?.Dispose();
+    }
+
+    private string BuildSignature() => $"{TileUrl}|{TileAttribution}|{string.Join(',', Segments.Select(segment => segment.Sequence))}";
+}

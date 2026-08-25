@@ -1,5 +1,7 @@
 using System.Globalization;
 using Bunit;
+using Bunit.JSInterop;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using RouteTimer.Client.Api;
 using RouteTimer.Client.Pages;
@@ -12,7 +14,25 @@ public sealed class PredictionDetailPageTests : BunitContext
 {
     private readonly FakeRouteTimerApiClient api = new();
 
-    public PredictionDetailPageTests() => Services.AddSingleton<IRouteTimerApiClient>(api);
+    public PredictionDetailPageTests()
+    {
+        Services.AddSingleton<IRouteTimerApiClient>(api);
+        Services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["MapTiles:Url"] = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                ["MapTiles:Attribution"] = "&copy; OpenStreetMap contributors"
+            })
+            .Build());
+
+        var module = JSInterop.SetupModule("./js/route-visualization.js");
+        module.SetupVoid("initializeMap", _ => true).SetVoidResult();
+        module.SetupVoid("initializeProfiles", _ => true).SetVoidResult();
+        module.SetupVoid("selectMapSequence", _ => true).SetVoidResult();
+        module.SetupVoid("selectProfileSequence", _ => true).SetVoidResult();
+        module.SetupVoid("disposeMap", _ => true).SetVoidResult();
+        module.SetupVoid("disposeProfiles", _ => true).SetVoidResult();
+    }
 
     [Fact]
     public void PredictionDetail_shows_loading_while_the_prediction_is_being_loaded()
@@ -95,8 +115,9 @@ public sealed class PredictionDetailPageTests : BunitContext
             Assert.Contains("Medium confidence", cut.Markup, StringComparison.Ordinal);
 
             var visualization = cut.Find("[data-testid=prediction-detail-visualization]");
-            Assert.Equal("1,2", visualization.GetAttribute("data-sequences"));
-            Assert.Contains("2 route segments ready for visualization.", visualization.TextContent, StringComparison.Ordinal);
+            Assert.Contains("Selected segment 1", visualization.TextContent, StringComparison.Ordinal);
+            Assert.Contains("0.5 km", visualization.TextContent, StringComparison.Ordinal);
+            Assert.Contains("29.5 km/h", visualization.TextContent, StringComparison.Ordinal);
             Assert.Contains("sorted for visualization", cut.Find("[data-testid=prediction-detail-order-warning]").TextContent, StringComparison.Ordinal);
         });
     }

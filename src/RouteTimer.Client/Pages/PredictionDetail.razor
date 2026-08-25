@@ -161,9 +161,8 @@ else
 
         @if (visualizationReady)
         {
-            <div data-testid="prediction-detail-visualization"
-                 data-sequences="@string.Join(',', orderedSegments.Select(segment => segment.Sequence))">
-                <p>@orderedSegments.Count route segments ready for visualization.</p>
+            <div data-testid="prediction-detail-visualization">
+                <PredictionVisualization Segments="orderedSegments" />
             </div>
         }
         else

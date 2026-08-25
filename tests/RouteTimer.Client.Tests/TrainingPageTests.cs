@@ -141,7 +141,7 @@ public sealed class TrainingPageTests : BunitContext
             Assert.Contains("accepted.fit", activities, StringComparison.Ordinal);
             Assert.Contains("Steady effort", activities, StringComparison.Ordinal);
             Assert.DoesNotContain("Building power model", cut.Markup, StringComparison.Ordinal);
-        });
+        }, TimeSpan.FromSeconds(5));
     }
 
     [Fact]

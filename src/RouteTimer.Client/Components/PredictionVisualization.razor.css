@@ -1,0 +1,51 @@
+.prediction-visualization {
+    display: grid;
+    gap: 1rem;
+}
+
+.prediction-visualization__selection {
+    padding: 0.75rem 1rem;
+    border-radius: 0.75rem;
+    background: #f3f6f8;
+    border: 1px solid #d8e1e8;
+}
+
+.prediction-visualization__map-shell,
+.prediction-visualization__profile-card {
+    background: #ffffff;
+    border: 1px solid #d8e1e8;
+    border-radius: 0.75rem;
+    padding: 0.75rem;
+}
+
+.prediction-visualization__map {
+    width: 100%;
+    min-height: 24rem;
+    border-radius: 0.5rem;
+}
+
+.prediction-visualization__profiles {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+}
+
+.prediction-visualization__profile-card h3 {
+    font-size: 1rem;
+    margin-bottom: 0.5rem;
+}
+
+.prediction-visualization__chart-shell {
+    position: relative;
+    min-height: 16rem;
+}
+
+@media (max-width: 768px) {
+    .prediction-visualization__map {
+        min-height: 18rem;
+    }
+
+    .prediction-visualization__chart-shell {
+        min-height: 14rem;
+    }
+}

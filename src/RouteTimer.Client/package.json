@@ -1,0 +1,13 @@
+{
+  "name": "routetimer-client-assets",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:vendor": "node scripts/build-vendor.mjs",
+    "test": "node --test wwwroot/js/route-visualization.test.mjs"
+  },
+  "dependencies": {
+    "chart.js": "4.5.1",
+    "leaflet": "1.9.4"
+  }
+}
