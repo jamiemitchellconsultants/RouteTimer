@@ -1,53 +1,476 @@
 @page "/training"
-@inject HttpClient Http
+@implements IDisposable
+@using RouteTimer.Client.Api
+@using RouteTimer.Client.Components
+@using RouteTimer.Client.Formatting
+@using RouteTimer.Client.Jobs
+@using RouteTimer.Contracts.Jobs
+@using RouteTimer.Contracts.Models
+@using RouteTimer.Contracts.Training
+@using RouteTimer.Contracts.Uploads
+@inject IRouteTimerApiClient Api
+@inject JobPoller JobPoller
 
 <PageTitle>Training | RouteTimer</PageTitle>
 
 <h1>Training activities</h1>
-<p>Upload FIT activities containing GPS, elevation, speed, and power data.</p>
+<p>Upload FIT rides, review activity quality, and remove evidence that no longer fits your rider model.</p>
 
-<label for="fit-upload">FIT training files</label>
-<InputFile id="fit-upload" OnChange="SelectFiles" accept=".fit" multiple />
-@if (selectedCount > 0)
-{
-    <p>@selectedCount FIT file(s) ready to upload.</p>
-    <button @onclick="UploadAsync" disabled="@uploading">@(uploading ? "Uploading…" : "Upload training files")</button>
-}
-@if (status is not null)
-{
-    <p role="status">@status</p>
-}
+<section class="training-page">
+    <section class="training-panel">
+        <h2>Upload FIT training files</h2>
+        <label for="fit-upload">FIT training files</label>
+        <InputFile id="fit-upload" OnChange="SelectFiles" accept=".fit" multiple />
+
+        @if (tooManyFilesSelected)
+        {
+            <p data-testid="training-too-many-files" class="training-message training-message--warning">
+                Please select a maximum of @UploadLimits.MaximumTrainingFiles training files at once.
+            </p>
+        }
+        else if (selectedFiles.Count == 0)
+        {
+            <p data-testid="training-upload-empty" class="training-message">Select one or more FIT files to upload.</p>
+        }
+        else
+        {
+            <div class="training-upload-actions">
+                <p>@selectedFiles.Count file(s) ready to upload.</p>
+                <button data-testid="training-upload-submit" class="training-button" @onclick="UploadAsync" disabled="@isUploading">
+                    @(isUploading ? "Uploading…" : "Upload training files")
+                </button>
+            </div>
+        }
+
+        @if (uploadResults.Count > 0)
+        {
+            <div data-testid="training-upload-results" class="training-results">
+                @foreach (var result in uploadResults)
+                {
+                    <article class="training-result">
+                        <p><strong>@result.FileName</strong></p>
+                        <p>@RouteTimerText.Sentence(result.Outcome)</p>
+                        @if (!string.IsNullOrWhiteSpace(result.ErrorCode))
+                        {
+                            <p>@result.ErrorCode</p>
+                        }
+                        @if (GetUploadJob(result.JobId) is { } job)
+                        {
+                            <JobProgress Job="@job" />
+                        }
+                    </article>
+                }
+            </div>
+        }
+    </section>
+
+    <section class="training-panel">
+        <h2>Rider model status</h2>
+
+        @if (modelLoading)
+        {
+            <p>Loading rider model status...</p>
+        }
+        else if (modelProblem is not null || modelFallbackProblem)
+        {
+            <ProblemMessage Problem="@modelProblem" FallbackMessage="We could not load the rider model status." />
+        }
+        else if (modelStatus is not null)
+        {
+            <div class="training-model-status">
+                <p>@(modelStatus.IsReady ? "Ready" : "Not ready")</p>
+                @if (!string.IsNullOrWhiteSpace(modelStatus.BlockingReason))
+                {
+                    <p>@modelStatus.BlockingReason</p>
+                }
+                @if (modelStatus.RebuildJob is not null)
+                {
+                    <JobProgress Job="@modelStatus.RebuildJob" />
+                }
+            </div>
+        }
+    </section>
+
+    <section class="training-panel">
+        <h2>Uploaded activities</h2>
+
+        @if (activitiesLoading)
+        {
+            <p>Loading training activities...</p>
+        }
+        else if (activitiesProblem is not null || activitiesFallbackProblem)
+        {
+            <div data-testid="training-activities-error">
+                <ProblemMessage Problem="@activitiesProblem" FallbackMessage="We could not load your training activities." />
+            </div>
+        }
+        else if (activities.Count == 0)
+        {
+            <p>No training activities uploaded yet.</p>
+        }
+        else
+        {
+            <ul data-testid="training-activities-list" class="training-activity-list">
+                @foreach (var activity in activities)
+                {
+                    <li data-testid="training-activity-item" class="training-activity">
+                        <div class="training-activity__header">
+                            <div>
+                                <h3>@activity.SourceFileName</h3>
+                                <p>@RouteTimerFormat.Timestamp(activity.CreatedAt)</p>
+                            </div>
+
+                            <div class="training-activity__actions">
+                                <a href="@($"training/{activity.Id}")">View detail</a>
+                                <button data-testid="@($"training-delete-request-{activity.Id}")"
+                                        class="training-button training-button--secondary"
+                                        @onclick="@(() => RequestDelete(activity.Id))"
+                                        disabled="@isDeleting">
+                                    Delete
+                                </button>
+                            </div>
+                        </div>
+
+                        <p>@RouteTimerText.Sentence(activity.Eligibility)</p>
+                        <p>
+                            @RouteTimerFormat.Distance(activity.DistanceMetres)
+                            · @RouteTimerFormat.Ascent(activity.AscentMetres)
+                            · @RouteTimerFormat.Duration(activity.MovingSeconds)
+                        </p>
+
+                        @if (activity.ReasonCodes.Count > 0)
+                        {
+                            <ul class="training-reasons">
+                                @foreach (var reason in activity.ReasonCodes.OrderBy(reason => reason, StringComparer.Ordinal))
+                                {
+                                    <li>@RouteTimerText.Sentence(reason)</li>
+                                }
+                            </ul>
+                        }
+
+                        @if (confirmingDeleteId == activity.Id)
+                        {
+                            <div data-testid="training-delete-confirmation" class="training-delete-confirmation">
+                                <p>Deleting this activity removes its retained training evidence and queues a new rider-model build. Historical predictions will not change.</p>
+                                <div class="training-delete-confirmation__actions">
+                                    <button data-testid="training-delete-confirm"
+                                            class="training-button training-button--danger"
+                                            @onclick="ConfirmDeleteAsync"
+                                            disabled="@isDeleting">
+                                        @(isDeleting ? "Deleting…" : "Delete activity")
+                                    </button>
+                                    <button data-testid="training-delete-cancel"
+                                            class="training-button training-button--secondary"
+                                            @onclick="CancelDelete"
+                                            disabled="@isDeleting">
+                                        Cancel
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+</section>
 
 @code {
-    private int selectedCount;
-    private IReadOnlyList<IBrowserFile> files = [];
-    private bool uploading;
-    private string? status;
+    private readonly CancellationTokenSource pageCancellation = new();
+    private readonly Dictionary<Guid, JobResponse> uploadJobs = new();
+    private IReadOnlyList<IBrowserFile> selectedFiles = [];
+    private IReadOnlyList<TrainingUploadFileResponse> uploadResults = [];
+    private IReadOnlyList<TrainingActivitySummaryResponse> activities = [];
+    private ModelStatusResponse? modelStatus;
+    private ApiProblemException? activitiesProblem;
+    private ApiProblemException? modelProblem;
+    private bool activitiesFallbackProblem;
+    private bool modelFallbackProblem;
+    private bool activitiesLoading = true;
+    private bool modelLoading = true;
+    private bool tooManyFilesSelected;
+    private bool isUploading;
+    private bool isDeleting;
+    private Guid? confirmingDeleteId;
+    private Guid? activeRebuildJobId;
+    private CancellationTokenSource? activeUploadCancellation;
+    private CancellationTokenSource? activeDeleteCancellation;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Task.WhenAll(LoadActivitiesAsync(), LoadModelStatusAsync());
+    }
+
+    public void Dispose()
+    {
+        activeUploadCancellation?.Cancel();
+        activeUploadCancellation?.Dispose();
+        activeDeleteCancellation?.Cancel();
+        activeDeleteCancellation?.Dispose();
+        pageCancellation.Cancel();
+        pageCancellation.Dispose();
+    }
 
     private void SelectFiles(InputFileChangeEventArgs args)
     {
-        files = args.GetMultipleFiles();
-        selectedCount = files.Count;
-        status = null;
+        tooManyFilesSelected = false;
+
+        try
+        {
+            selectedFiles = args.GetMultipleFiles(UploadLimits.MaximumTrainingFiles);
+        }
+        catch (InvalidOperationException)
+        {
+            selectedFiles = [];
+            tooManyFilesSelected = true;
+        }
     }
 
     private async Task UploadAsync()
     {
-        uploading = true;
+        if (isUploading || tooManyFilesSelected || selectedFiles.Count == 0)
+        {
+            return;
+        }
+
+        isUploading = true;
+        uploadResults = [];
+        uploadJobs.Clear();
+
         try
         {
-            using var content = new MultipartFormDataContent();
-            foreach (var file in files)
-            {
-                content.Add(new StreamContent(file.OpenReadStream(50 * 1024 * 1024)), "files", file.Name);
-            }
+            activeUploadCancellation?.Dispose();
+            activeUploadCancellation = CancellationTokenSource.CreateLinkedTokenSource(pageCancellation.Token);
 
-            using var response = await Http.PostAsync("api/training/uploads", content);
-            status = response.IsSuccessStatusCode ? "Training files submitted for analysis." : "Training upload could not be submitted.";
+            var files = selectedFiles
+                .Select(file => new ClientFileUpload(
+                    file.Name,
+                    file.Size,
+                    () => file.OpenReadStream(UploadLimits.MaximumFileBytes, pageCancellation.Token)))
+                .ToArray();
+
+            var response = await Api.UploadTrainingActivitiesAsync(files, activeUploadCancellation.Token);
+            uploadResults = response.Files.ToArray();
+            selectedFiles = [];
+
+            foreach (var jobId in uploadResults
+                         .Where(result => result.JobId is not null)
+                         .Select(result => result.JobId!.Value)
+                         .Distinct())
+            {
+                _ = PollUploadJobAsync(jobId);
+            }
+        }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+            return;
         }
         finally
         {
-            uploading = false;
+            if (!pageCancellation.IsCancellationRequested)
+            {
+                isUploading = false;
+            }
+
+            activeUploadCancellation?.Dispose();
+            activeUploadCancellation = null;
         }
     }
+
+    private void RequestDelete(Guid activityId) => confirmingDeleteId = activityId;
+
+    private void CancelDelete() => confirmingDeleteId = null;
+
+    private async Task ConfirmDeleteAsync()
+    {
+        if (isDeleting || confirmingDeleteId is null)
+        {
+            return;
+        }
+
+        isDeleting = true;
+        var activityId = confirmingDeleteId.Value;
+
+        try
+        {
+            activeDeleteCancellation?.Dispose();
+            activeDeleteCancellation = CancellationTokenSource.CreateLinkedTokenSource(pageCancellation.Token);
+
+            var deleted = await Api.DeleteTrainingActivityAsync(activityId, activeDeleteCancellation.Token);
+            if (deleted)
+            {
+                activities = activities.Where(activity => activity.Id != activityId).ToArray();
+            }
+
+            confirmingDeleteId = null;
+
+            await LoadActivitiesAsync(showLoading: false);
+            await LoadModelStatusAsync(showLoading: false);
+        }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (!pageCancellation.IsCancellationRequested)
+            {
+                isDeleting = false;
+            }
+
+            activeDeleteCancellation?.Dispose();
+            activeDeleteCancellation = null;
+        }
+    }
+
+    private async Task PollUploadJobAsync(Guid jobId)
+    {
+        try
+        {
+            await JobPoller.PollAsync(
+                jobId,
+                async job =>
+                {
+                    uploadJobs[jobId] = job;
+                    await InvokeAsync(StateHasChanged);
+                },
+                pageCancellation.Token);
+
+            if (!pageCancellation.IsCancellationRequested)
+            {
+                await LoadActivitiesAsync(showLoading: false);
+                await LoadModelStatusAsync(showLoading: false);
+            }
+        }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task PollRebuildJobAsync(Guid jobId)
+    {
+        try
+        {
+            await JobPoller.PollAsync(
+                jobId,
+                async job =>
+                {
+                    if (modelStatus is not null)
+                    {
+                        modelStatus = modelStatus with { RebuildJob = job };
+                        await InvokeAsync(StateHasChanged);
+                    }
+                },
+                pageCancellation.Token);
+
+            if (!pageCancellation.IsCancellationRequested)
+            {
+                await LoadModelStatusAsync(showLoading: false);
+            }
+        }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            if (activeRebuildJobId == jobId)
+            {
+                activeRebuildJobId = null;
+            }
+        }
+    }
+
+    private async Task LoadActivitiesAsync(bool showLoading = true)
+    {
+        if (showLoading)
+        {
+            activitiesLoading = true;
+        }
+
+        try
+        {
+            activities = (await Api.GetTrainingActivitiesAsync(pageCancellation.Token))
+                .OrderByDescending(activity => activity.CreatedAt)
+                .ToArray();
+            activitiesProblem = null;
+            activitiesFallbackProblem = false;
+        }
+        catch (ApiProblemException problem)
+        {
+            activitiesProblem = problem;
+            activitiesFallbackProblem = false;
+        }
+        catch (HttpRequestException)
+        {
+            activitiesProblem = null;
+            activitiesFallbackProblem = true;
+        }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (!pageCancellation.IsCancellationRequested)
+            {
+                activitiesLoading = false;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
+
+    private async Task LoadModelStatusAsync(bool showLoading = true)
+    {
+        if (showLoading)
+        {
+            modelLoading = true;
+        }
+
+        try
+        {
+            modelStatus = await Api.GetModelStatusAsync(pageCancellation.Token);
+            modelProblem = null;
+            modelFallbackProblem = false;
+
+            if (modelStatus.RebuildJob is not null
+                && !IsTerminal(modelStatus.RebuildJob)
+                && activeRebuildJobId != modelStatus.RebuildJob.Id)
+            {
+                activeRebuildJobId = modelStatus.RebuildJob.Id;
+                _ = PollRebuildJobAsync(modelStatus.RebuildJob.Id);
+            }
+        }
+        catch (ApiProblemException problem)
+        {
+            modelProblem = problem;
+            modelFallbackProblem = false;
+        }
+        catch (HttpRequestException)
+        {
+            modelProblem = null;
+            modelFallbackProblem = true;
+        }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (!pageCancellation.IsCancellationRequested)
+            {
+                modelLoading = false;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
+
+    private JobResponse? GetUploadJob(Guid? jobId) =>
+        jobId is not null && uploadJobs.TryGetValue(jobId.Value, out var job)
+            ? job
+            : null;
+
+    private static bool IsTerminal(JobResponse job) =>
+        job.State.Equals("Succeeded", StringComparison.OrdinalIgnoreCase)
+        || job.State.Equals("Failed", StringComparison.OrdinalIgnoreCase)
+        || job.State.Equals("Cancelled", StringComparison.OrdinalIgnoreCase);
 }

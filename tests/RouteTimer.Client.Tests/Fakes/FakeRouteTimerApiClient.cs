@@ -12,7 +12,9 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
     public Func<CancellationToken, Task<ProfileResponse?>>? OnGetProfileAsync { get; set; }
     public Func<UpdateProfileRequest, CancellationToken, Task<ProfileResponse>>? OnUpdateProfileAsync { get; set; }
     public Func<CancellationToken, Task<IReadOnlyList<TrainingActivitySummaryResponse>>>? OnGetTrainingActivitiesAsync { get; set; }
-    public Func<CancellationToken, Task<TrainingUploadBatchResponse>>? OnUploadTrainingActivitiesAsync { get; set; }
+    public Func<Guid, CancellationToken, Task<TrainingActivityDetailResponse?>>? OnGetTrainingActivityAsync { get; set; }
+    public Func<IReadOnlyList<ClientFileUpload>, CancellationToken, Task<TrainingUploadBatchResponse>>? OnUploadTrainingActivitiesAsync { get; set; }
+    public Func<Guid, CancellationToken, Task<bool>>? OnDeleteTrainingActivityAsync { get; set; }
     public Func<CancellationToken, Task<ModelStatusResponse>>? OnGetModelStatusAsync { get; set; }
     public Func<CancellationToken, Task<IReadOnlyList<PredictionSummaryResponse>>>? OnGetPredictionsAsync { get; set; }
 
@@ -22,6 +24,9 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
     public List<CancellationToken> RequestedProfiles { get; } = [];
     public List<(UpdateProfileRequest Request, CancellationToken CancellationToken)> UpdatedProfiles { get; } = [];
     public List<CancellationToken> RequestedTrainingActivities { get; } = [];
+    public List<(Guid ActivityId, CancellationToken CancellationToken)> RequestedTrainingActivityDetails { get; } = [];
+    public List<(IReadOnlyList<ClientFileUpload> Files, CancellationToken CancellationToken)> UploadedTrainingActivities { get; } = [];
+    public List<(Guid ActivityId, CancellationToken CancellationToken)> DeletedTrainingActivities { get; } = [];
     public List<CancellationToken> RequestedModelStatuses { get; } = [];
     public List<CancellationToken> RequestedPredictions { get; } = [];
 
@@ -49,13 +54,29 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
             : throw new NotSupportedException();
     }
 
-    public Task<TrainingActivityDetailResponse?> GetTrainingActivityAsync(Guid id, CancellationToken ct) => throw new NotSupportedException();
-    public Task<TrainingUploadBatchResponse> UploadTrainingActivitiesAsync(IReadOnlyList<ClientFileUpload> files, CancellationToken ct) =>
-        OnUploadTrainingActivitiesAsync is not null
-            ? OnUploadTrainingActivitiesAsync(ct)
+    public Task<TrainingActivityDetailResponse?> GetTrainingActivityAsync(Guid id, CancellationToken ct)
+    {
+        RequestedTrainingActivityDetails.Add((id, ct));
+        return OnGetTrainingActivityAsync is not null
+            ? OnGetTrainingActivityAsync(id, ct)
             : throw new NotSupportedException();
+    }
 
-    public Task<bool> DeleteTrainingActivityAsync(Guid id, CancellationToken ct) => throw new NotSupportedException();
+    public Task<TrainingUploadBatchResponse> UploadTrainingActivitiesAsync(IReadOnlyList<ClientFileUpload> files, CancellationToken ct)
+    {
+        UploadedTrainingActivities.Add((files.ToArray(), ct));
+        return OnUploadTrainingActivitiesAsync is not null
+            ? OnUploadTrainingActivitiesAsync(files, ct)
+            : throw new NotSupportedException();
+    }
+
+    public Task<bool> DeleteTrainingActivityAsync(Guid id, CancellationToken ct)
+    {
+        DeletedTrainingActivities.Add((id, ct));
+        return OnDeleteTrainingActivityAsync is not null
+            ? OnDeleteTrainingActivityAsync(id, ct)
+            : throw new NotSupportedException();
+    }
 
     public Task<ModelStatusResponse> GetModelStatusAsync(CancellationToken ct)
     {
@@ -64,8 +85,6 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
             ? OnGetModelStatusAsync(ct)
             : throw new NotSupportedException();
     }
-
-    public Task<ModelRebuildResponse> RebuildModelAsync(CancellationToken ct) => throw new NotSupportedException();
 
     public Task<IReadOnlyList<PredictionSummaryResponse>> GetPredictionsAsync(CancellationToken ct)
     {
