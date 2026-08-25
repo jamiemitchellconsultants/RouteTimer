@@ -100,6 +100,34 @@ if (authMode == AuthMode.Keycloak)
             };
         });
 }
+else
+{
+    builder.Services.AddAuthentication(LocalAuthenticationDefaults.AuthenticationScheme)
+        .AddCookie(LocalAuthenticationDefaults.AuthenticationScheme, options =>
+        {
+            options.Cookie.Name = LocalAuthenticationDefaults.CookieName;
+            options.Cookie.HttpOnly = true;
+            options.Cookie.SameSite = SameSiteMode.Strict;
+            // Local mode is expected to run over plain HTTP on loopback, where an
+            // unconditionally Secure cookie would never be sent. SameAsRequest marks it
+            // Secure whenever the request itself arrived over HTTPS.
+            options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+            options.SlidingExpiration = true;
+            options.ExpireTimeSpan = TimeSpan.FromDays(30);
+            // This is an API, not a server-rendered site: answer with status codes rather
+            // than redirecting to a login page that does not exist on the server.
+            options.Events.OnRedirectToLogin = context =>
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                return Task.CompletedTask;
+            };
+            options.Events.OnRedirectToAccessDenied = context =>
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                return Task.CompletedTask;
+            };
+        });
+}
 var riderPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
         .RequireAuthenticatedUser()
         .RequireRole("rider")

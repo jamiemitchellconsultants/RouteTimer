@@ -46,6 +46,29 @@ public sealed class LocalCredentialServiceTests
     }
 
     [Fact]
+    public async Task Setup_rejects_a_passphrase_padded_with_leading_or_trailing_whitespace()
+    {
+        var service = new LocalCredentialService(new InMemoryLocalCredentialRepository(), NullLogger<LocalCredentialService>.Instance);
+
+        // "a" plus eleven trailing spaces satisfies the minimum length but carries almost no real
+        // entropy once trimmed -- this must be refused rather than silently trimmed and hashed.
+        var result = await service.SetupAsync("a" + new string(' ', 11), CancellationToken.None);
+
+        Assert.Equal(LocalCredentialSetupResult.Padded, result);
+        Assert.True(await service.IsSetupRequiredAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Setup_accepts_a_passphrase_with_internal_whitespace_that_is_not_leading_or_trailing()
+    {
+        var service = new LocalCredentialService(new InMemoryLocalCredentialRepository(), NullLogger<LocalCredentialService>.Instance);
+
+        var result = await service.SetupAsync("correct horse battery staple", CancellationToken.None);
+
+        Assert.Equal(LocalCredentialSetupResult.Configured, result);
+    }
+
+    [Fact]
     public async Task Verify_accepts_the_configured_passphrase_and_rejects_others()
     {
         var service = new LocalCredentialService(new InMemoryLocalCredentialRepository(), NullLogger<LocalCredentialService>.Instance);

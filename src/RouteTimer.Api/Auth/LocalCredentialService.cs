@@ -8,7 +8,15 @@ public enum LocalCredentialSetupResult
 {
     Configured,
     AlreadyConfigured,
-    TooShort
+    TooShort,
+
+    /// <summary>
+    /// The passphrase has leading or trailing whitespace. Rejected rather than trimmed: silently
+    /// trimming would validate one string while hashing another, and a passphrase padded to the
+    /// minimum length (e.g. "a" followed by eleven spaces) would otherwise pass length validation
+    /// while carrying almost no real entropy.
+    /// </summary>
+    Padded
 }
 
 /// <summary>
@@ -41,6 +49,11 @@ public sealed class LocalCredentialService(ILocalCredentialRepository credential
         if (string.IsNullOrWhiteSpace(passphrase) || passphrase.Length < MinimumPassphraseLength)
         {
             return LocalCredentialSetupResult.TooShort;
+        }
+
+        if (passphrase.Length != passphrase.Trim().Length)
+        {
+            return LocalCredentialSetupResult.Padded;
         }
 
         await credentials.SetAsync(Hasher.HashPassword(HashSubject, passphrase), cancellationToken);
