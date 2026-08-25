@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RouteTimer.Persistence;
@@ -27,6 +28,11 @@ public sealed class RouteTimerApiFactory(bool authenticateAsRider = false, Actio
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        builder.ConfigureAppConfiguration((_, configuration) =>
+            configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["GarminAdapter:BaseUrl"] = "http://garmin-adapter.invalid/"
+            }));
         builder.ConfigureTestServices(services =>
         {
             services.RemoveAll<DbContextOptions<RouteTimerDbContext>>();

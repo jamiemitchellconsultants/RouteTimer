@@ -5,12 +5,14 @@ using Microsoft.EntityFrameworkCore;
 using RouteTimer.Api;
 using RouteTimer.Api.Auth;
 using RouteTimer.Api.Endpoints;
+using RouteTimer.Api.Garmin;
 using RouteTimer.Api.Workers;
 using RouteTimer.Contracts.Uploads;
 using RouteTimer.Persistence;
 using RouteTimer.Persistence.Repositories;
 using RouteTimer.Persistence.Jobs;
 using RouteTimer.Services.Activities;
+using RouteTimer.Services.Garmin;
 using RouteTimer.Services.Profile;
 using RouteTimer.Services.Models;
 using RouteTimer.Services.Physics;
@@ -50,6 +52,14 @@ builder.Services.AddScoped<ModelRebuildService>();
 builder.Services.AddScoped<PredictionSubmissionService>();
 builder.Services.AddScoped<PredictionQueryService>();
 builder.Services.AddScoped<PredictionDeletionService>();
+builder.Services.AddHttpClient<IGarminAdapterClient, GarminAdapterClient>(client =>
+{
+    var baseUrl = builder.Configuration["GarminAdapter:BaseUrl"]
+        ?? throw new InvalidOperationException("GarminAdapter:BaseUrl is required.");
+    client.BaseAddress = new Uri(baseUrl, UriKind.Absolute);
+    client.Timeout = TimeSpan.FromMinutes(2);
+})
+.RedactLoggedHeaders(["X-RouteTimer-Garmin-Token"]);
 builder.Services.AddSingleton<IGpxRouteParser, GpxRouteParser>();
 builder.Services.AddSingleton<IRouteProcessor>(_ => new RouteProcessor(RouteProcessingOptions.Default));
 builder.Services.AddSingleton(TimeProvider.System);
