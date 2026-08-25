@@ -61,14 +61,14 @@ public sealed class PredictionVisualizationTests : BunitContext
         cut.WaitForAssertion(() =>
         {
             Assert.Contains("1.0 km", cut.Find("[data-testid=prediction-visualization-selection]").TextContent, StringComparison.Ordinal);
-            Assert.Equal(2, module.Invocations["selectProfileSequence"][0].Arguments.Last());
+            Assert.Equal(2, module.Invocations["selectProfileSequence"][^1].Arguments.Last());
         });
 
         await profiles.Instance.OnSequenceSelected(1);
         cut.WaitForAssertion(() =>
         {
             Assert.Contains("0.5 km", cut.Find("[data-testid=prediction-visualization-selection]").TextContent, StringComparison.Ordinal);
-            Assert.Equal(1, module.Invocations["selectMapSequence"][0].Arguments.Last());
+            Assert.Equal(1, module.Invocations["selectMapSequence"][^1].Arguments.Last());
         });
     }
 
@@ -115,7 +115,7 @@ public sealed class PredictionVisualizationTests : BunitContext
     }
 
     [Fact]
-    public void PredictionVisualization_disposes_map_profiles_and_dotnet_references()
+    public async Task PredictionVisualization_disposes_map_profiles_and_dotnet_references()
     {
         Services.AddSingleton<IConfiguration>(BuildConfiguration(includeTiles: true));
         var module = SetupVisualizationModule();
@@ -124,14 +124,10 @@ public sealed class PredictionVisualizationTests : BunitContext
         var mapReference = GetDotNetReference(cut.FindComponent<RouteMap>().Instance, "dotNetReference");
         var profileReference = GetDotNetReference(cut.FindComponent<RouteProfiles>().Instance, "dotNetReference");
 
-        cut.Dispose();
+        await DisposeComponentsAsync();
 
-        cut.WaitForAssertion(() =>
-        {
-            Assert.Single(module.Invocations["disposeMap"]);
-            Assert.Single(module.Invocations["disposeProfiles"]);
-        });
-
+        Assert.Single(module.Invocations["disposeMap"]);
+        Assert.Single(module.Invocations["disposeProfiles"]);
         Assert.ThrowsAny<ObjectDisposedException>(() => _ = mapReference.Value);
         Assert.ThrowsAny<ObjectDisposedException>(() => _ = profileReference.Value);
     }
