@@ -35,6 +35,7 @@ The approved Step 9 API/UI plan has been implemented in the isolated `codex/step
 Verification completed:
 
 - API: 66 passed.
+- Client: 64 passed.
 - Domain: 15 passed.
 - Persistence: 143 passed.
 - Services: 270 passed.
@@ -42,9 +43,22 @@ Verification completed:
 - Client build: passed with zero warnings and zero errors.
 - EndToEnd: no discovered tests.
 
-Known remaining verification failures:
+The three bUnit failures previously recorded here are resolved. All three were defects in
+the tests rather than in the components:
 
-- Two visualization bUnit tests do not yet observe the expected synchronized selection/disposal interop calls.
-- The training upload bUnit workflow test does not yet observe its expected post-upload activity/model refresh.
+- The synchronized-selection test asserted on the first `selectMapSequence`/`selectProfileSequence`
+  interop call, which is always the initial highlight pushed by `OnAfterRenderAsync`, never the
+  propagated selection. It now asserts on the most recent call.
+- The disposal test called `IRenderedComponent<T>.Dispose()`, which releases the test-side handle
+  without unmounting the component, so `RouteMap`/`RouteProfiles` `DisposeAsync` never ran. It now
+  awaits `BunitContext.DisposeComponentsAsync()`.
+- The training upload workflow test advanced `FakeTimeProvider` twice without waiting in between,
+  so the second advance fired before the rider-model rebuild poller had registered its timer and
+  that timer could never elapse. Both training tests now wait for the poller to be parked on its
+  timer before each advance.
 
-The worktree is clean at the current committed head. Deployment/browser acceptance and the undiscovered EndToEnd suite remain outside this execution environment.
+`RouteMap` and `RouteProfiles` additionally now skip pushing an unchanged selection to JS, so a
+render that does not change the selection no longer repeats the interop call.
+
+Deployment/browser acceptance and the undiscovered EndToEnd suite remain outside this execution
+environment.
