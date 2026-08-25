@@ -203,7 +203,7 @@ Errors use RFC problem details with a stable string `code` extension.
 - `404 Not Found`: requested activity, model/job subject, prediction, or job is absent;
 - `409 Conflict`: profile missing, model not ready, no eligible training evidence, or another state conflict prevents the operation;
 - `413 Payload Too Large`: a file exceeds the configured limit;
-- `422 Unprocessable Entity`: an uploaded FIT/GPX file is syntactically delivered but semantically unusable; and
+- `422 Unprocessable Entity`: reserved for semantic validation deliberately performed synchronously at an endpoint boundary; and
 - `500 Internal Server Error`: a safe generic title/detail with no stack trace or persistence information.
 
 Per-file mixed FIT upload outcomes remain inside the `202 Accepted` response rather than turning one invalid file into a batch-level problem.
@@ -360,7 +360,7 @@ EF pending-model verification must report no changes after the migration.
 
 ### API
 
-Authenticated integration tests cover every verb/path, response DTO shape, `202/204/400/404/409/413/422` behavior, mixed FIT batch outcomes, authorization, stable problem codes, ordered prediction detail, and removal of the obsolete upload path.
+Authenticated integration tests cover every verb/path, response DTO shape, `202/204/400/404/409/413` behavior, mixed FIT batch outcomes, authorization, stable problem codes, ordered prediction detail, and removal of the obsolete upload path. No Step 9 upload endpoint emits `422` by decoding content twice; the status remains reserved for a future synchronous semantic boundary.
 
 ### Client
 
