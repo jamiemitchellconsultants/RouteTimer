@@ -271,6 +271,7 @@ public sealed class PredictionRepositoryTests
             Assert.Equal(PredictionState.Succeeded.ToString(), prediction.State);
             Assert.Equal(JobState.Running.ToString(), job.State);
             Assert.True(published);
+            Assert.Single(segments);
         }
     }
 
@@ -409,7 +410,8 @@ public sealed class PredictionRepositoryTests
         return (await models.GetAsync(id, CancellationToken.None))!;
     }
 
-    private static PredictionPublication Publication() => new(100, 5, TimeSpan.FromSeconds(20), 5, 200, ConfidenceLevel.Medium, ["default-coefficients"], []);
+    private static PredictionPublication Publication() => new(100, 5, TimeSpan.FromSeconds(20), 5, 200, ConfidenceLevel.Medium, ["default-coefficients"],
+        [new PersistedPredictionSegment(1, 51.1, -2.1, 105, 100, 100, .04, .001, 200, 5, TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(20), ConfidenceLevel.Medium)]);
 
     private static async Task<PostgreSqlContainer> StartDatabaseAsync()
     {
