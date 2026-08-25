@@ -2,7 +2,6 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
-using Microsoft.AspNetCore.WebUtilities;
 using RouteTimer.Api.Garmin;
 using RouteTimer.Services.Garmin;
 
@@ -188,12 +187,9 @@ public sealed class GarminAdapterClientTests
     }
 
     [Fact]
-    public async Task Download_fit_rejects_decodable_noncanonical_token_header()
+    public async Task Download_fit_rejects_nonzero_unused_base64_pad_bits()
     {
-        var canonical = Base64Url("{\"token\":\"x\"}");
-        var noncanonical = canonical + "=";
-        Assert.Equal(WebEncoders.Base64UrlDecode(canonical), WebEncoders.Base64UrlDecode(noncanonical));
-        var client = CreateClient((_, _) => Task.FromResult(FitResponse(noncanonical)));
+        var client = CreateClient((_, _) => Task.FromResult(FitResponse("e31")));
 
         var exception = await Assert.ThrowsAsync<GarminAdapterException>(() => client.DownloadFitAsync("token-json", "123", CancellationToken.None));
 
