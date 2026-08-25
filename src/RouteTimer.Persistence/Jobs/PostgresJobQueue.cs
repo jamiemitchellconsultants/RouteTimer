@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using RouteTimer.Domain.Jobs;
 using RouteTimer.Services.Jobs;
 using Microsoft.EntityFrameworkCore;
@@ -7,7 +8,7 @@ using Npgsql;
 
 namespace RouteTimer.Persistence.Jobs;
 
-public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
+public sealed class PostgresJobQueue(RouteTimerDbContext context, TimeProvider timeProvider) : IJobQueue
 {
     /// <summary>Bounded retries: a job may be attempted at most this many times before it becomes permanently Failed.</summary>
     public const int MaxAttempts = JobRetryPolicy.MaxAttempts;
@@ -16,7 +17,7 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
     {
         cancellationToken.ThrowIfCancellationRequested();
         var id = Guid.NewGuid();
-        var createdAt = DateTimeOffset.UtcNow;
+        var createdAt = timeProvider.GetUtcNow();
         context.Jobs.Add(CreateQueuedJob(id, type, subjectId, createdAt));
         await context.SaveChangesAsync(cancellationToken);
         return id;
@@ -49,7 +50,7 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
         // once more - it should now succeed cleanly. A second conflict here is left to propagate
         // unhandled; this isn't a scenario that warrants unbounded retries.
         var id = Guid.NewGuid();
-        context.Jobs.Add(CreateQueuedJob(id, type, subjectId, DateTimeOffset.UtcNow));
+        context.Jobs.Add(CreateQueuedJob(id, type, subjectId, timeProvider.GetUtcNow()));
         await context.SaveChangesAsync(cancellationToken);
         return id;
     }
@@ -63,7 +64,7 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
     private async Task<Guid?> TryInsertQueuedJobAsync(JobType type, Guid subjectId, CancellationToken cancellationToken)
     {
         var id = Guid.NewGuid();
-        var entity = CreateQueuedJob(id, type, subjectId, DateTimeOffset.UtcNow);
+        var entity = CreateQueuedJob(id, type, subjectId, timeProvider.GetUtcNow());
         context.Jobs.Add(entity);
 
         try
@@ -185,9 +186,7 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
 
         var queued = JobState.Queued.ToString();
         var running = JobState.Running.ToString();
-        var job = await context.Jobs.SingleOrDefaultAsync(
-            entity => entity.Id == jobId && (entity.State == queued || entity.State == running),
-            cancellationToken);
+        var job = await LockJobAsync(jobId, entity => entity.State == queued || entity.State == running, cancellationToken);
         if (job is null)
         {
             return false;
@@ -207,6 +206,7 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
             var prediction = await context.Predictions.SingleOrDefaultAsync(entity => entity.Id == job.SubjectId, cancellationToken);
             if (prediction is not null)
             {
+                await context.Entry(prediction).ReloadAsync(cancellationToken);
                 prediction.State = PredictionState.Cancelled.ToString();
                 prediction.Warnings = ["prediction-cancelled"];
                 prediction.CompletedAt = now;
@@ -250,16 +250,8 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
             ? await context.Database.BeginTransactionAsync(cancellationToken)
             : null;
 
-        // The guarded read-then-save below happens on a single row keyed by its primary key, and every
-        // mutation of an AnalysisJob row goes through ClaimAsync/RenewLeaseAsync/CompleteAsync/FailAsync -
-        // none of which can interleave invisibly between this read and SaveChangesAsync - so this ownership
-        // check is race-free without an explicit transaction or FOR UPDATE. The transaction is still
-        // required here because a terminal PredictRoute failure must commit the job and prediction state
-        // together.
         var running = JobState.Running.ToString();
-        var job = await context.Jobs.SingleOrDefaultAsync(
-            entity => entity.Id == jobId && entity.State == running && entity.WorkerId == workerId,
-            cancellationToken);
+        var job = await LockJobAsync(jobId, entity => entity.State == running && entity.WorkerId == workerId, cancellationToken);
         if (job is null)
         {
             return false;
@@ -282,6 +274,7 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
                 var prediction = await context.Predictions.SingleOrDefaultAsync(entity => entity.Id == job.SubjectId, cancellationToken);
                 if (prediction is not null)
                 {
+                    await context.Entry(prediction).ReloadAsync(cancellationToken);
                     prediction.State = PredictionState.Failed.ToString();
                     prediction.Warnings = [$"{diagnosticCode ?? "processing-error"}: {diagnosticMessage ?? "The prediction job failed."}"];
                     prediction.CompletedAt = now;
@@ -300,6 +293,44 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
         await context.SaveChangesAsync(cancellationToken);
         if (transaction is not null) await transaction.CommitAsync(cancellationToken);
         return true;
+    }
+
+    private async Task<AnalysisJobEntity?> LockJobAsync(
+        Guid jobId,
+        Expression<Func<AnalysisJobEntity, bool>> statePredicate,
+        CancellationToken cancellationToken)
+    {
+        if (context.Database.IsRelational())
+        {
+            var matchingIds = await context.Database.SqlQuery<Guid>(
+                $"""
+                SELECT "Id" AS "Value" FROM analysis_jobs
+                WHERE "Id" = {jobId}
+                FOR UPDATE
+                """).ToListAsync(cancellationToken);
+            if (matchingIds.Count == 0)
+            {
+                return null;
+            }
+        }
+
+        var job = await context.Jobs.SingleOrDefaultAsync(entity => entity.Id == jobId, cancellationToken);
+        if (job is null)
+        {
+            return null;
+        }
+
+        if (context.Database.IsRelational())
+        {
+            await context.Entry(job).ReloadAsync(cancellationToken);
+        }
+
+        if (!statePredicate.Compile()(job))
+        {
+            return null;
+        }
+
+        return job;
     }
 
     private static AnalysisJobEntity CreateQueuedJob(Guid id, JobType type, Guid subjectId, DateTimeOffset createdAt) =>

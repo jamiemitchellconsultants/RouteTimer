@@ -236,8 +236,8 @@ public sealed class PredictionEndpointTests
         Assert.Equal(1, segments[0].GetProperty("sequence").GetInt32());
         Assert.Equal(2, segments[1].GetProperty("sequence").GetInt32());
         Assert.Equal("PredictRoute", jobJson.RootElement.GetProperty("type").GetString());
-        Assert.Equal("Queued", jobJson.RootElement.GetProperty("state").GetString());
-        Assert.Equal(0, jobJson.RootElement.GetProperty("attemptCount").GetInt32());
+        Assert.Equal("Succeeded", jobJson.RootElement.GetProperty("state").GetString());
+        Assert.Equal(1, jobJson.RootElement.GetProperty("attemptCount").GetInt32());
         Assert.True(jobJson.RootElement.TryGetProperty("createdAt", out _));
         Assert.True(jobJson.RootElement.TryGetProperty("leaseExpiresAt", out _));
     }
@@ -284,10 +284,26 @@ public sealed class PredictionEndpointTests
     private static async Task PublishAsync(IServiceProvider services, Guid predictionId)
     {
         await using var scope = services.CreateAsyncScope();
-        await new PredictionRepository(scope.ServiceProvider.GetRequiredService<RouteTimerDbContext>()).PublishAsync(predictionId,
+        var context = scope.ServiceProvider.GetRequiredService<RouteTimerDbContext>();
+        var job = await context.Jobs.SingleAsync(entity => entity.SubjectId == predictionId && entity.Type == "PredictRoute");
+        var now = DateTimeOffset.UtcNow;
+        job.State = "Running";
+        job.ProgressStage = "running";
+        job.AttemptCount = 1;
+        job.StartedAt = now;
+        job.UpdatedAt = now;
+        job.WorkerId = "endpoint-test-worker";
+        await context.SaveChangesAsync();
+        Assert.True(await new PredictionRepository(context).TryPublishAsync(predictionId, job.Id, job.WorkerId,
             new RouteTimer.Services.Persistence.PredictionPublication(100, 5, TimeSpan.FromSeconds(20), 5, 200, ConfidenceLevel.Medium, ["default-coefficients"],
                 [new RouteTimer.Services.Persistence.PersistedPredictionSegment(2, 51.2, -2.2, 110, 100, 25, .05, .001, 200, 5, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(20), ConfidenceLevel.Medium),
-                 new RouteTimer.Services.Persistence.PersistedPredictionSegment(1, 51.1, -2.1, 105, 75, 25, .04, .002, 190, 4, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15), ConfidenceLevel.High)]), CancellationToken.None);
+                 new RouteTimer.Services.Persistence.PersistedPredictionSegment(1, 51.1, -2.1, 105, 75, 25, .04, .002, 190, 4, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15), ConfidenceLevel.High)]), CancellationToken.None));
+        job.State = "Succeeded";
+        job.ProgressPercent = 100;
+        job.ProgressStage = "completed";
+        job.CompletedAt = now;
+        job.WorkerId = null;
+        await context.SaveChangesAsync();
     }
 
     private sealed class RiderAuthenticationHandler(IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder)
@@ -306,7 +322,7 @@ public sealed class PredictionEndpointTests
         public Task<QueuedPredictionSubmission> CreateQueuedAsync(QueuedPredictionCreation creation, CancellationToken cancellationToken) =>
             throw new InvalidOperationException("simulated persistence failure");
         public Task<PredictionForProcessing?> GetForProcessingAsync(Guid predictionId, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task PublishAsync(Guid predictionId, PredictionPublication publication, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> TryPublishAsync(Guid predictionId, Guid jobId, string workerId, PredictionPublication publication, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task FailAsync(Guid predictionId, string code, string message, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<IReadOnlyList<PredictionSummary>> GetSummariesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<PredictionDetail?> GetAsync(Guid predictionId, CancellationToken cancellationToken) => throw new NotSupportedException();

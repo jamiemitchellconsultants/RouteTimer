@@ -52,7 +52,11 @@ public sealed class PredictionJobHandler(
                 throw new PredictionJobException("invalid-prediction-result", "The prediction contains overflowing time values.", exception);
             }
 
-            await predictions.PublishAsync(prediction.Id, publication, cancellationToken);
+            var workerId = job.WorkerId ?? throw new InvalidOperationException("A claimed prediction job is required.");
+            if (!await predictions.TryPublishAsync(prediction.Id, job.Id, workerId, publication, cancellationToken))
+            {
+                throw new OperationCanceledException("The prediction job is no longer owned by this worker.", cancellationToken);
+            }
         }
         catch (PredictionJobException)
         {

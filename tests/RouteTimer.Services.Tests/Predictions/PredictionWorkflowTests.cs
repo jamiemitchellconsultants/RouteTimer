@@ -130,6 +130,28 @@ public sealed class PredictionWorkflowTests
         Assert.Equal(capturedModel.Model, predictor.Model);
         Assert.Equal(new RiderProfile(75, 10), predictor.Profile);
         Assert.NotNull(predictions.Published);
+        Assert.Equal((predictionId, job.Id, job.WorkerId!), predictions.PublicationOwner);
+    }
+
+    // Break caught: losing the job lease immediately before publication is treated as successful handling.
+    [Fact]
+    public async Task Handler_translates_rejected_owner_guarded_publication_to_cancellation()
+    {
+        var predictionId = Guid.NewGuid();
+        var model = ModelSnapshot("captured", 210);
+        var predictions = new FakePredictionRepository
+        {
+            Processing = new PredictionForProcessing(predictionId,
+                new StoredUpload(Guid.NewGuid(), "route.gpx", "gpx", GpxBytes(), new byte[32], DateTimeOffset.UtcNow), model.Id, new RiderProfile(75, 10)),
+            PublishResult = false
+        };
+        var handler = new PredictionJobHandler(predictions, new FixedModelRepository(null) { ById = { [model.Id] = model } }, new GpxRouteParser(),
+            new RouteProcessor(RouteProcessingOptions.Default), new CapturingPredictor());
+
+        var exception = await Assert.ThrowsAsync<OperationCanceledException>(() => handler.HandleAsync(RunningJob(predictionId), CancellationToken.None));
+
+        Assert.Equal("The prediction job is no longer owned by this worker.", exception.Message);
+        Assert.Null(predictions.Published);
     }
 
     // Break caught: invalid predictor output is classified for the queue without committing prediction state separately.
@@ -457,7 +479,9 @@ public sealed class PredictionWorkflowTests
         public List<QueuedPredictionCreation> Created { get; } = [];
         public PredictionForProcessing? Processing { get; init; }
         public Exception? PublishException { get; init; }
+        public bool PublishResult { get; init; } = true;
         public PredictionPublication? Published { get; private set; }
+        public (Guid PredictionId, Guid JobId, string WorkerId)? PublicationOwner { get; private set; }
         public (string Code, string Message)? Failure { get; private set; }
         public Task<QueuedPredictionSubmission> CreateQueuedAsync(QueuedPredictionCreation creation, CancellationToken cancellationToken)
         {
@@ -466,11 +490,13 @@ public sealed class PredictionWorkflowTests
         }
 
         public Task<PredictionForProcessing?> GetForProcessingAsync(Guid predictionId, CancellationToken cancellationToken) => Task.FromResult(Processing);
-        public Task PublishAsync(Guid predictionId, PredictionPublication publication, CancellationToken cancellationToken)
+        public Task<bool> TryPublishAsync(Guid predictionId, Guid jobId, string workerId, PredictionPublication publication, CancellationToken cancellationToken)
         {
             if (PublishException is not null) throw PublishException;
+            if (!PublishResult) return Task.FromResult(false);
             Published = publication;
-            return Task.CompletedTask;
+            PublicationOwner = (predictionId, jobId, workerId);
+            return Task.FromResult(true);
         }
         public Task FailAsync(Guid predictionId, string code, string message, CancellationToken cancellationToken) { Failure = (code, message); return Task.CompletedTask; }
         public Task<IReadOnlyList<PredictionSummary>> GetSummariesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();

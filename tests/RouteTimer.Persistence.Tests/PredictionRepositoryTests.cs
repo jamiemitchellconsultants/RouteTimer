@@ -40,9 +40,13 @@ public sealed class PredictionRepositoryTests
         var model = await SaveModelAsync(context);
         var repository = new PredictionRepository(context);
         var created = await repository.CreateQueuedAsync(Creation(model), CancellationToken.None);
-        await repository.PublishAsync(created.PredictionId, new PredictionPublication(100, 5, TimeSpan.FromSeconds(20), 5, 200, ConfidenceLevel.Medium, ["default-coefficients"],
+        var job = await context.Jobs.SingleAsync(entity => entity.Id == created.JobId);
+        job.State = "Running";
+        job.WorkerId = "worker-a";
+        await context.SaveChangesAsync();
+        Assert.True(await repository.TryPublishAsync(created.PredictionId, created.JobId, "worker-a", new PredictionPublication(100, 5, TimeSpan.FromSeconds(20), 5, 200, ConfidenceLevel.Medium, ["default-coefficients"],
             [new PersistedPredictionSegment(2, 51.2, -2.2, 110, 100, 25, .05, .001, 200, 5, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(20), ConfidenceLevel.Medium),
-             new PersistedPredictionSegment(1, 51.1, -2.1, 105, 75, 25, .04, .002, 190, 4, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15), ConfidenceLevel.High)]), CancellationToken.None);
+             new PersistedPredictionSegment(1, 51.1, -2.1, 105, 75, 25, .04, .002, 190, 4, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15), ConfidenceLevel.High)]), CancellationToken.None));
 
         var summary = Assert.Single(await repository.GetSummariesAsync(CancellationToken.None));
         var detail = await repository.GetAsync(created.PredictionId, CancellationToken.None);
@@ -52,6 +56,57 @@ public sealed class PredictionRepositoryTests
         Assert.Equal(new[] { 1, 2 }, detail.Segments.Select(segment => segment.Sequence));
         Assert.Equal(TimeSpan.FromSeconds(20), detail.MovingTime);
         Assert.Null(await repository.GetAsync(Guid.NewGuid(), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task TryPublish_requires_the_matching_running_owned_prediction_job()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var model = await SaveModelAsync(context);
+        var created = await new PredictionRepository(context).CreateQueuedAsync(Creation(model), CancellationToken.None);
+        var repository = new PredictionRepository(context);
+
+        Assert.False(await repository.TryPublishAsync(created.PredictionId, created.JobId, "worker-a", Publication(), CancellationToken.None));
+
+        var job = await context.Jobs.SingleAsync(entity => entity.Id == created.JobId);
+        job.State = "Running";
+        job.WorkerId = "worker-b";
+        await context.SaveChangesAsync();
+        Assert.False(await repository.TryPublishAsync(created.PredictionId, created.JobId, "worker-a", Publication(), CancellationToken.None));
+        Assert.Equal(PredictionState.Queued.ToString(), (await context.Predictions.SingleAsync(entity => entity.Id == created.PredictionId)).State);
+    }
+
+    // Break caught: a worker can publish after cancellation because publication checks only the prediction id.
+    [Fact]
+    public async Task TryPublish_after_cancellation_returns_false_and_preserves_the_cancelled_prediction()
+    {
+        await using var database = new PostgreSqlBuilder("postgres:16-alpine").Build();
+        await database.StartAsync();
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseNpgsql(database.GetConnectionString()).Options;
+        Guid predictionId;
+        Guid jobId;
+        await using (var setup = new RouteTimerDbContext(options))
+        {
+            await setup.Database.MigrateAsync();
+            var model = await SaveModelAsync(setup);
+            var created = await new PredictionRepository(setup).CreateQueuedAsync(Creation(model), CancellationToken.None);
+            predictionId = created.PredictionId;
+            jobId = created.JobId;
+            var queue = new RouteTimer.Persistence.Jobs.PostgresJobQueue(setup, TimeProvider.System);
+            Assert.NotNull(await queue.ClaimAsync("worker-a", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(2), CancellationToken.None));
+            Assert.True(await queue.CancelAsync(jobId, DateTimeOffset.UtcNow, CancellationToken.None));
+        }
+
+        await using var context = new RouteTimerDbContext(options);
+        var published = await new PredictionRepository(context)
+            .TryPublishAsync(predictionId, jobId, "worker-a", Publication(), CancellationToken.None);
+
+        var prediction = await context.Predictions.AsNoTracking().SingleAsync(entity => entity.Id == predictionId);
+        Assert.False(published);
+        Assert.Equal(PredictionState.Cancelled.ToString(), prediction.State);
+        Assert.Equal(["prediction-cancelled"], prediction.Warnings);
+        Assert.Empty(await context.PredictionSegments.AsNoTracking().Where(entity => entity.PredictionId == predictionId).ToListAsync());
     }
 
     // Break caught: concurrent identical GPX submissions race through the pre-insert lookup and one surfaces a unique-constraint server error.
@@ -158,4 +213,6 @@ public sealed class PredictionRepositoryTests
         var id = await models.SaveAsync(new RiderModel(new PowerModel([], 200), PhysicalCoefficients.Default, DescentLimitModel.Conservative, false, "v1"), profile, validation, CancellationToken.None);
         return (await models.GetAsync(id, CancellationToken.None))!;
     }
+
+    private static PredictionPublication Publication() => new(100, 5, TimeSpan.FromSeconds(20), 5, 200, ConfidenceLevel.Medium, ["default-coefficients"], []);
 }

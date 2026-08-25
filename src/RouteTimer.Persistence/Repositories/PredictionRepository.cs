@@ -92,12 +92,40 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
             new RiderProfile(prediction.RiderWeightKg, prediction.BikeWeightKg));
     }
 
-    public async Task PublishAsync(Guid predictionId, PredictionPublication publication, CancellationToken cancellationToken)
+    public async Task<bool> TryPublishAsync(Guid predictionId, Guid jobId, string workerId, PredictionPublication publication, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(publication);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
         await using var transaction = context.Database.IsRelational()
             ? await context.Database.BeginTransactionAsync(cancellationToken)
             : null;
+
+        var running = "Running";
+        var predictRoute = "PredictRoute";
+        if (context.Database.IsRelational())
+        {
+            var matchingJob = await context.Database.SqlQuery<Guid>(
+                $"""
+                SELECT "Id" AS "Value" FROM analysis_jobs
+                WHERE "Id" = {jobId}
+                  AND "SubjectId" = {predictionId}
+                  AND "Type" = {predictRoute}
+                  AND "State" = {running}
+                  AND "WorkerId" = {workerId}
+                FOR UPDATE
+                """).ToListAsync(cancellationToken);
+            if (matchingJob.Count == 0)
+            {
+                return false;
+            }
+        }
+        else if (!await context.Jobs.AnyAsync(entity =>
+                     entity.Id == jobId && entity.SubjectId == predictionId && entity.Type == predictRoute &&
+                     entity.State == running && entity.WorkerId == workerId, cancellationToken))
+        {
+            return false;
+        }
+
         var prediction = await context.Predictions.Include(entity => entity.Segments).SingleOrDefaultAsync(entity => entity.Id == predictionId, cancellationToken)
             ?? throw new InvalidOperationException("Prediction does not exist.");
         prediction.Segments.Clear();
@@ -133,6 +161,7 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
         prediction.CompletedAt = DateTimeOffset.UtcNow;
         await context.SaveChangesAsync(cancellationToken);
         if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        return true;
     }
 
     public async Task FailAsync(Guid predictionId, string code, string message, CancellationToken cancellationToken)
