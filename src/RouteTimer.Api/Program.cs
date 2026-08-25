@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Cryptography;
 using RouteTimer.Api;
 using RouteTimer.Api.Auth;
 using RouteTimer.Api.Endpoints;
@@ -43,6 +44,7 @@ builder.Services.AddScoped<IJobProgressReporter, JobProgressReporter>();
 builder.Services.AddScoped<IProfileRepository, ProfileRepository>();
 builder.Services.AddScoped<IPredictionRepository, PredictionRepository>();
 builder.Services.AddScoped<IJobRepository, JobRepository>();
+builder.Services.AddScoped<IGarminConnectionRepository, GarminConnectionRepository>();
 builder.Services.AddScoped<TrainingUploadService>();
 builder.Services.AddScoped<TrainingActivityQueryService>();
 builder.Services.AddScoped<TrainingActivityDeletionService>();
@@ -52,6 +54,35 @@ builder.Services.AddScoped<ModelRebuildService>();
 builder.Services.AddScoped<PredictionSubmissionService>();
 builder.Services.AddScoped<PredictionQueryService>();
 builder.Services.AddScoped<PredictionDeletionService>();
+var encodedGarminKey = builder.Configuration["Garmin:TokenEncryptionKey"]
+    ?? throw new InvalidOperationException("Garmin:TokenEncryptionKey is required.");
+byte[] garminKey;
+try
+{
+    garminKey = Convert.FromBase64String(encodedGarminKey);
+}
+catch (FormatException exception)
+{
+    throw new InvalidOperationException("Garmin:TokenEncryptionKey must be base64.", exception);
+}
+
+AesGcmGarminTokenProtector garminTokenProtector;
+try
+{
+    if (garminKey.Length != 32)
+    {
+        throw new InvalidOperationException("Garmin:TokenEncryptionKey must decode to exactly 32 bytes.");
+    }
+
+    garminTokenProtector = new AesGcmGarminTokenProtector(garminKey);
+}
+finally
+{
+    CryptographicOperations.ZeroMemory(garminKey);
+}
+
+builder.Services.AddSingleton<IGarminTokenProtector>(_ => garminTokenProtector);
+builder.Services.AddSingleton<GarminOperationGate>();
 builder.Services.AddHttpClient<IGarminAdapterClient, GarminAdapterClient>(client =>
 {
     var baseUrl = builder.Configuration["GarminAdapter:BaseUrl"]

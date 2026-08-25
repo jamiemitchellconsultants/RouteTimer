@@ -1,11 +1,5 @@
 using System.Net;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
-using RouteTimer.Persistence;
 using RouteTimer.Domain.Jobs;
 using RouteTimer.Services.Activities;
 using RouteTimer.Services.Jobs;
@@ -20,7 +14,7 @@ public sealed class HealthEndpointTests
     [Fact]
     public async Task Live_health_is_anonymous_and_returns_healthy()
     {
-        await using var app = new WebApplicationFactory<Program>();
+        await using var app = new RouteTimerApiFactory();
         using var client = app.CreateClient();
 
         using var response = await client.GetAsync("/health/live");
@@ -32,7 +26,7 @@ public sealed class HealthEndpointTests
     [Fact]
     public async Task Ready_health_is_anonymous_when_the_database_is_available()
     {
-        await using var app = new ReadyHealthApplicationFactory();
+        await using var app = new RouteTimerApiFactory();
         using var client = app.CreateClient();
 
         using var response = await client.GetAsync("/health/ready");
@@ -43,7 +37,7 @@ public sealed class HealthEndpointTests
     [Fact]
     public void Application_services_resolve_the_complete_build_model_handler_graph()
     {
-        using var app = new WebApplicationFactory<Program>();
+        using var app = new RouteTimerApiFactory();
         using var scope = app.Services.CreateScope();
 
         Assert.IsType<TrainingGeometryEnricher>(scope.ServiceProvider.GetRequiredService<ITrainingGeometryEnricher>());
@@ -54,18 +48,5 @@ public sealed class HealthEndpointTests
             .Single(candidate => candidate.Handles == JobType.BuildModel);
 
         Assert.IsType<BuildModelJobHandler>(handler);
-    }
-
-    private sealed class ReadyHealthApplicationFactory : WebApplicationFactory<Program>
-    {
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
-        {
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<DbContextOptions<RouteTimerDbContext>>();
-                services.RemoveAll<IDbContextOptionsConfiguration<RouteTimerDbContext>>();
-                services.AddDbContext<RouteTimerDbContext>(options => options.UseInMemoryDatabase(Guid.NewGuid().ToString()));
-            });
-        }
     }
 }

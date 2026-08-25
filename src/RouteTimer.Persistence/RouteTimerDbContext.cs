@@ -17,6 +17,8 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
     public DbSet<RiderModelEntity> RiderModels => Set<RiderModelEntity>();
     public DbSet<PowerBandEntity> PowerBands => Set<PowerBandEntity>();
     public DbSet<RiderModelDescentLimitEntity> RiderModelDescentLimits => Set<RiderModelDescentLimitEntity>();
+    public DbSet<GarminConnectionEntity> GarminConnections => Set<GarminConnectionEntity>();
+    public DbSet<GarminActivityImportEntity> GarminActivityImports => Set<GarminActivityImportEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -97,6 +99,34 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
         upload.Property(entity => entity.Sha256).HasColumnType("bytea").HasMaxLength(32).IsRequired();
         upload.Property(entity => entity.CreatedAt).HasColumnType("timestamp with time zone");
         upload.HasIndex(entity => new { entity.Kind, entity.Sha256 }).IsUnique();
+
+        var garminConnection = modelBuilder.Entity<GarminConnectionEntity>();
+        garminConnection.ToTable(
+            "garmin_connections",
+            table => table.HasCheckConstraint("CK_garmin_connections_singleton", "\"Id\" = 1"));
+        garminConnection.HasKey(entity => entity.Id);
+        garminConnection.Property(entity => entity.Id).ValueGeneratedNever();
+        garminConnection.Property(entity => entity.State).HasMaxLength(32).IsRequired();
+        garminConnection.Property(entity => entity.GarminUserId).HasMaxLength(64);
+        garminConnection.Property(entity => entity.DisplayName).HasMaxLength(512);
+        garminConnection.Property(entity => entity.EncryptionVersion).IsRequired();
+        garminConnection.Property(entity => entity.Nonce).HasColumnType("bytea").IsRequired();
+        garminConnection.Property(entity => entity.Ciphertext).HasColumnType("bytea").IsRequired();
+        garminConnection.Property(entity => entity.Tag).HasColumnType("bytea").IsRequired();
+        garminConnection.Property(entity => entity.LastValidatedAt).HasColumnType("timestamp with time zone");
+        garminConnection.Property(entity => entity.UpdatedAt).HasColumnType("timestamp with time zone");
+
+        var garminActivityImport = modelBuilder.Entity<GarminActivityImportEntity>();
+        garminActivityImport.ToTable("garmin_activity_imports");
+        garminActivityImport.HasKey(entity => entity.GarminActivityId);
+        garminActivityImport.Property(entity => entity.GarminActivityId).HasMaxLength(64).IsRequired();
+        garminActivityImport.Property(entity => entity.UploadId).IsRequired();
+        garminActivityImport.Property(entity => entity.ActivityName).HasMaxLength(512).IsRequired();
+        garminActivityImport.Property(entity => entity.LinkedAt).HasColumnType("timestamp with time zone");
+        garminActivityImport.HasOne<StoredUploadEntity>()
+            .WithMany()
+            .HasForeignKey(entity => entity.UploadId)
+            .OnDelete(DeleteBehavior.Cascade);
 
         prediction.HasOne(entity => entity.Upload)
             .WithMany()

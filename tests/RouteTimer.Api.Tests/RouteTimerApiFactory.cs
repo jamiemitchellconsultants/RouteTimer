@@ -28,6 +28,9 @@ public sealed class RouteTimerApiFactory(bool authenticateAsRider = false, Actio
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        builder.UseSetting(
+            "Garmin:TokenEncryptionKey",
+            "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
         builder.ConfigureAppConfiguration((_, configuration) =>
             configuration.AddInMemoryCollection(new Dictionary<string, string?>
             {
