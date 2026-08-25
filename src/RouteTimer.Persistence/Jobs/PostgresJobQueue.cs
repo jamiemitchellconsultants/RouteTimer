@@ -136,13 +136,12 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
         return rows > 0;
     }
 
-    public async Task<bool> CompleteAsync(Guid jobId, string workerId, CancellationToken cancellationToken)
+    public async Task<bool> CompleteAsync(Guid jobId, string workerId, DateTimeOffset now, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
         cancellationToken.ThrowIfCancellationRequested();
 
         var running = JobState.Running.ToString();
-        var completedAt = DateTimeOffset.UtcNow;
         var rows = await context.Jobs
             .Where(entity => entity.Id == jobId && entity.State == running && entity.WorkerId == workerId)
             .ExecuteUpdateAsync(
@@ -150,15 +149,15 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
                     .SetProperty(entity => entity.State, JobState.Succeeded.ToString())
                     .SetProperty(entity => entity.ProgressPercent, 100)
                     .SetProperty(entity => entity.ProgressStage, "completed")
-                    .SetProperty(entity => entity.UpdatedAt, completedAt)
-                    .SetProperty(entity => entity.CompletedAt, completedAt)
+                    .SetProperty(entity => entity.UpdatedAt, now)
+                    .SetProperty(entity => entity.CompletedAt, now)
                     .SetProperty(entity => entity.WorkerId, (string?)null)
                     .SetProperty(entity => entity.LeaseExpiresAt, (DateTimeOffset?)null),
                 cancellationToken);
         return rows > 0;
     }
 
-    public async Task<bool> FailAsync(Guid jobId, string workerId, bool permanent, string? diagnosticCode, string? diagnosticMessage, CancellationToken cancellationToken)
+    public async Task<bool> FailAsync(Guid jobId, string workerId, bool permanent, string? diagnosticCode, string? diagnosticMessage, DateTimeOffset now, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
         cancellationToken.ThrowIfCancellationRequested();
@@ -182,10 +181,9 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
             return false;
         }
 
-        var updatedAt = DateTimeOffset.UtcNow;
         job.DiagnosticCode = diagnosticCode;
         job.DiagnosticMessage = diagnosticMessage;
-        job.UpdatedAt = updatedAt;
+        job.UpdatedAt = now;
 
         if (permanent || job.AttemptCount >= MaxAttempts)
         {
@@ -193,7 +191,7 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
             job.ProgressStage = "failed";
             job.WorkerId = null;
             job.LeaseExpiresAt = null;
-            job.CompletedAt = updatedAt;
+            job.CompletedAt = now;
 
             if (job.Type == JobType.PredictRoute.ToString())
             {
@@ -202,7 +200,7 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
                 {
                     prediction.State = PredictionState.Failed.ToString();
                     prediction.Warnings = [$"{diagnosticCode ?? "processing-error"}: {diagnosticMessage ?? "The prediction job failed."}"];
-                    prediction.CompletedAt = DateTimeOffset.UtcNow;
+                    prediction.CompletedAt = now;
                 }
             }
         }

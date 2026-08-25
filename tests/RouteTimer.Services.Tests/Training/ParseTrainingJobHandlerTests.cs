@@ -172,9 +172,9 @@ public sealed class ParseTrainingJobHandlerTests
 
         public Task<bool> RenewLeaseAsync(Guid jobId, string workerId, DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken) => throw new NotSupportedException();
 
-        public Task<bool> CompleteAsync(Guid jobId, string workerId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> CompleteAsync(Guid jobId, string workerId, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
 
-        public Task<bool> FailAsync(Guid jobId, string workerId, bool permanent, string? diagnosticCode, string? diagnosticMessage, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> FailAsync(Guid jobId, string workerId, bool permanent, string? diagnosticCode, string? diagnosticMessage, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private static AnalysisJob RunningJob(Guid uploadId)

@@ -300,13 +300,13 @@ public sealed class AnalysisWorkerTests
             }
         }
 
-        public Task<bool> CompleteAsync(Guid jobId, string workerId, CancellationToken cancellationToken)
+        public Task<bool> CompleteAsync(Guid jobId, string workerId, DateTimeOffset now, CancellationToken cancellationToken)
         {
             Completed.Add(jobId);
             return Task.FromResult(true);
         }
 
-        public Task<bool> FailAsync(Guid jobId, string workerId, bool permanent, string? diagnosticCode, string? diagnosticMessage, CancellationToken cancellationToken)
+        public Task<bool> FailAsync(Guid jobId, string workerId, bool permanent, string? diagnosticCode, string? diagnosticMessage, DateTimeOffset now, CancellationToken cancellationToken)
         {
             Failed.Add((jobId, permanent, diagnosticCode, diagnosticMessage));
             return Task.FromResult(true);

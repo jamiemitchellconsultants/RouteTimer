@@ -162,11 +162,14 @@ public sealed class PostgresJobQueueTests
         var id = await queue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None);
         await queue.ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), CancellationToken.None);
 
-        var result = await queue.CompleteAsync(id, "worker-a", CancellationToken.None);
+        var completedAt = now.AddMinutes(3);
+        var result = await queue.CompleteAsync(id, "worker-a", completedAt, CancellationToken.None);
 
         Assert.True(result);
         var reloaded = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == id);
         Assert.Equal(JobState.Succeeded.ToString(), reloaded.State);
+        Assert.Equal(completedAt, reloaded.UpdatedAt);
+        Assert.Equal(completedAt, reloaded.CompletedAt);
         Assert.Null(reloaded.WorkerId);
         Assert.Null(reloaded.LeaseExpiresAt);
     }
@@ -183,7 +186,7 @@ public sealed class PostgresJobQueueTests
         var id = await queue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None);
         await queue.ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), CancellationToken.None);
 
-        var result = await queue.CompleteAsync(id, "worker-b", CancellationToken.None);
+        var result = await queue.CompleteAsync(id, "worker-b", now, CancellationToken.None);
 
         Assert.False(result);
         var reloaded = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == id);
@@ -203,13 +206,16 @@ public sealed class PostgresJobQueueTests
         var id = await queue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None);
         await queue.ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), CancellationToken.None);
 
-        var result = await queue.FailAsync(id, "worker-a", permanent: true, diagnosticCode: "invalid_fit", diagnosticMessage: "The FIT file could not be decoded.", CancellationToken.None);
+        var failedAt = now.AddMinutes(3);
+        var result = await queue.FailAsync(id, "worker-a", permanent: true, diagnosticCode: "invalid_fit", diagnosticMessage: "The FIT file could not be decoded.", now: failedAt, cancellationToken: CancellationToken.None);
 
         Assert.True(result);
         var reloaded = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == id);
         Assert.Equal(JobState.Failed.ToString(), reloaded.State);
         Assert.Equal("invalid_fit", reloaded.DiagnosticCode);
         Assert.Equal("The FIT file could not be decoded.", reloaded.DiagnosticMessage);
+        Assert.Equal(failedAt, reloaded.UpdatedAt);
+        Assert.Equal(failedAt, reloaded.CompletedAt);
         Assert.Null(reloaded.WorkerId);
         Assert.Null(reloaded.LeaseExpiresAt);
     }
@@ -226,7 +232,7 @@ public sealed class PostgresJobQueueTests
         var id = await queue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None);
         await queue.ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), CancellationToken.None);
 
-        var result = await queue.FailAsync(id, "worker-b", permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Stale attempt.", CancellationToken.None);
+        var result = await queue.FailAsync(id, "worker-b", permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Stale attempt.", now: now, cancellationToken: CancellationToken.None);
 
         Assert.False(result);
         var reloaded = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == id);
@@ -247,7 +253,7 @@ public sealed class PostgresJobQueueTests
         var id = await queue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None);
         await queue.ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), CancellationToken.None);
 
-        var result = await queue.FailAsync(id, "worker-a", permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Transient failure.", CancellationToken.None);
+        var result = await queue.FailAsync(id, "worker-a", permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Transient failure.", now: now, cancellationToken: CancellationToken.None);
 
         Assert.True(result);
         var reloaded = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == id);
@@ -281,12 +287,12 @@ public sealed class PostgresJobQueueTests
             Assert.Equal(attempt, claimed!.AttemptCount);
             if (attempt < 3)
             {
-                var result = await queue.FailAsync(id, workerId, permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Transient failure.", CancellationToken.None);
+                var result = await queue.FailAsync(id, workerId, permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Transient failure.", now: now.AddMinutes(attempt), cancellationToken: CancellationToken.None);
                 Assert.True(result);
             }
         }
 
-        var finalResult = await queue.FailAsync(id, "worker-3", permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Out of attempts.", CancellationToken.None);
+        var finalResult = await queue.FailAsync(id, "worker-3", permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Out of attempts.", now: now.AddMinutes(3), cancellationToken: CancellationToken.None);
 
         Assert.True(finalResult);
         var reloaded = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == id);
@@ -308,13 +314,13 @@ public sealed class PostgresJobQueueTests
         for (var attempt = 1; attempt <= 2; attempt++)
         {
             Assert.NotNull(await queue.ClaimAsync($"worker-{attempt}", now.AddMinutes(attempt), TimeSpan.FromMinutes(2), CancellationToken.None));
-            Assert.True(await queue.FailAsync(submission.JobId, $"worker-{attempt}", permanent: false, "processing-error", "Transient failure.", CancellationToken.None));
+            Assert.True(await queue.FailAsync(submission.JobId, $"worker-{attempt}", permanent: false, "processing-error", "Transient failure.", now.AddMinutes(attempt), CancellationToken.None));
             var queued = await context.Predictions.AsNoTracking().SingleAsync(entity => entity.Id == submission.PredictionId);
             Assert.Equal(PredictionState.Queued.ToString(), queued.State);
         }
 
         Assert.NotNull(await queue.ClaimAsync("worker-3", now.AddMinutes(3), TimeSpan.FromMinutes(2), CancellationToken.None));
-        Assert.True(await queue.FailAsync(submission.JobId, "worker-3", permanent: false, "processing-error", "Terminal failure.", CancellationToken.None));
+        Assert.True(await queue.FailAsync(submission.JobId, "worker-3", permanent: false, "processing-error", "Terminal failure.", now.AddMinutes(3), CancellationToken.None));
 
         var job = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == submission.JobId);
         var prediction = await context.Predictions.AsNoTracking().SingleAsync(entity => entity.Id == submission.PredictionId);
@@ -352,8 +358,9 @@ public sealed class PostgresJobQueueTests
         await using (var failingContext = CreateContext(database))
         {
             var queue = new PostgresJobQueue(failingContext);
-            Assert.NotNull(await queue.ClaimAsync("worker-a", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(2), CancellationToken.None));
-            await Assert.ThrowsAsync<DbUpdateException>(() => queue.FailAsync(jobId, "worker-a", permanent: true, "invalid-route", "Permanent failure.", CancellationToken.None));
+            var now = new DateTimeOffset(2026, 8, 25, 12, 0, 0, TimeSpan.Zero);
+            Assert.NotNull(await queue.ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), CancellationToken.None));
+            await Assert.ThrowsAsync<DbUpdateException>(() => queue.FailAsync(jobId, "worker-a", permanent: true, "invalid-route", "Permanent failure.", now, CancellationToken.None));
         }
 
         await using var verify = CreateContext(database);
@@ -418,7 +425,7 @@ public sealed class PostgresJobQueueTests
 
         var firstId = await queue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None);
         await queue.ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), CancellationToken.None);
-        await queue.CompleteAsync(firstId, "worker-a", CancellationToken.None);
+        await queue.CompleteAsync(firstId, "worker-a", now, CancellationToken.None);
 
         var secondId = await queue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None);
 
@@ -442,7 +449,7 @@ public sealed class PostgresJobQueueTests
         // Transient (non-permanent) failure with attempts remaining returns the job to Queued rather
         // than Failed - the unique index still guards it, so a later caller must still coalesce onto
         // this same row instead of inserting a duplicate.
-        await queue.FailAsync(firstId, "worker-a", permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Transient failure.", CancellationToken.None);
+        await queue.FailAsync(firstId, "worker-a", permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Transient failure.", now: now, cancellationToken: CancellationToken.None);
 
         var secondId = await queue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None);
 
