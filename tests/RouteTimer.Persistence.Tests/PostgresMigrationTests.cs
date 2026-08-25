@@ -166,10 +166,16 @@ public sealed class PostgresMigrationTests
         }
 
         await using var insertContext = new RouteTimerDbContext(options);
-        await Assert.ThrowsAnyAsync<Exception>(() => insertContext.Database.ExecuteSqlInterpolatedAsync($"""
+        // Asserted on SqlState and constraint name rather than "some exception": a bare
+        // ThrowsAny stays green when the statement fails for an unrelated reason, such as the
+        // table being renamed out from under it.
+        var violation = await Assert.ThrowsAsync<Npgsql.PostgresException>(() => insertContext.Database.ExecuteSqlInterpolatedAsync($"""
             INSERT INTO local_credential ("Id", "PasswordHash", "CreatedAt", "UpdatedAt")
             VALUES (2, 'third-hash', NOW(), NOW());
             """));
+
+        Assert.Equal("23514", violation.SqlState);
+        Assert.Equal("CK_local_credential_singleton", violation.ConstraintName);
     }
 
     // Break caught: upgrading a pre-step-8 database loses model data, omits fallback cells, or leaves old samples without deterministic curvature.
