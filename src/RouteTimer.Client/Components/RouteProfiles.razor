@@ -41,6 +41,7 @@
     private IJSObjectReference? module;
     private string? initializedSignature;
     private DotNetObjectReference<RouteProfiles>? dotNetReference;
+    private int? sequenceSentToJs;
 
     [Parameter]
     public IReadOnlyList<PredictionSegmentResponse> Segments { get; set; } = [];
@@ -77,6 +78,7 @@
                 Segments,
                 dotNetReference);
             initializedSignature = signature;
+            sequenceSentToJs = null;
         }
 
         await SelectAsync(SelectedSequence);
@@ -87,11 +89,12 @@
 
     public async Task SelectAsync(int sequence)
     {
-        if (module is null)
+        if (module is null || sequenceSentToJs == sequence)
         {
             return;
         }
 
+        sequenceSentToJs = sequence;
         await module.InvokeVoidAsync("selectProfileSequence", componentId, sequence);
     }
 

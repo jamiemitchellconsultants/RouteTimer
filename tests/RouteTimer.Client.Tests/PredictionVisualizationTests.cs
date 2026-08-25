@@ -115,6 +115,28 @@ public sealed class PredictionVisualizationTests : BunitContext
     }
 
     [Fact]
+    public async Task PredictionVisualization_does_not_resend_an_unchanged_selection_to_the_map_or_profiles()
+    {
+        Services.AddSingleton<IConfiguration>(BuildConfiguration(includeTiles: true));
+        var module = SetupVisualizationModule();
+
+        var cut = Render<PredictionVisualization>(parameters => parameters.Add(component => component.Segments, Segments));
+        var map = cut.FindComponent<RouteMap>();
+        var profiles = cut.FindComponent<RouteProfiles>();
+
+        await map.Instance.OnSequenceSelected(2);
+        cut.WaitForAssertion(() => Assert.Equal(2, module.Invocations["selectProfileSequence"][^1].Arguments.Last()));
+
+        await profiles.Instance.OnSequenceSelected(1);
+        cut.WaitForAssertion(() => Assert.Equal(1, module.Invocations["selectMapSequence"][^1].Arguments.Last()));
+
+        // One initial highlight plus one call per distinct selection: renders that do not
+        // change the selection must not push the same sequence to JS again.
+        Assert.Equal([1, 2, 1], module.Invocations["selectMapSequence"].Select(invocation => invocation.Arguments.Last()));
+        Assert.Equal([1, 2, 1], module.Invocations["selectProfileSequence"].Select(invocation => invocation.Arguments.Last()));
+    }
+
+    [Fact]
     public async Task PredictionVisualization_disposes_map_profiles_and_dotnet_references()
     {
         Services.AddSingleton<IConfiguration>(BuildConfiguration(includeTiles: true));
