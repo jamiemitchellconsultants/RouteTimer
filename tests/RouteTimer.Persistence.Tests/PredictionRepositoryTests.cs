@@ -223,6 +223,57 @@ public sealed class PredictionRepositoryTests
         Assert.Empty(await verify.PredictionSegments.AsNoTracking().Where(entity => entity.PredictionId == predictionId).ToListAsync());
     }
 
+    // Break caught: concurrent deletion and publication both mutate the prediction, leaving a
+    // succeeded job with a deleted prediction or a partially persisted segment set.
+    [Fact]
+    public async Task Concurrent_delete_and_publish_leave_a_consistent_terminal_state()
+    {
+        await using var database = await StartDatabaseAsync();
+        Guid predictionId;
+        Guid jobId;
+        await using (var setup = CreateContext(database))
+        {
+            await setup.Database.MigrateAsync();
+            var model = await SaveModelAsync(setup);
+            var created = await new PredictionRepository(setup).CreateQueuedAsync(Creation(model), CancellationToken.None);
+            predictionId = created.PredictionId;
+            jobId = created.JobId;
+            Assert.NotNull(await new PostgresJobQueue(setup, TimeProvider.System)
+                .ClaimAsync("worker-a", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(2), CancellationToken.None));
+        }
+
+        var deletedTask = Task.Run(async () =>
+        {
+            await using var deleting = CreateContext(database);
+            return await new PredictionRepository(deleting).DeleteAsync(predictionId, DateTimeOffset.UtcNow, CancellationToken.None);
+        });
+        var publishedTask = Task.Run(async () =>
+        {
+            await using var publishing = CreateContext(database);
+            return await new PredictionRepository(publishing)
+                .TryPublishAsync(predictionId, jobId, "worker-a", Publication(), CancellationToken.None);
+        });
+
+        var (deleted, published) = (await deletedTask, await publishedTask);
+        Assert.True(deleted || published);
+
+        await using var verify = CreateContext(database);
+        var job = await verify.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == jobId);
+        var prediction = await verify.Predictions.AsNoTracking().SingleOrDefaultAsync(entity => entity.Id == predictionId);
+        var segments = await verify.PredictionSegments.AsNoTracking().Where(entity => entity.PredictionId == predictionId).ToListAsync();
+        if (prediction is null)
+        {
+            Assert.Equal(JobState.Cancelled.ToString(), job.State);
+            Assert.Empty(segments);
+        }
+        else
+        {
+            Assert.Equal(PredictionState.Succeeded.ToString(), prediction.State);
+            Assert.Equal(JobState.Running.ToString(), job.State);
+            Assert.True(published);
+        }
+    }
+
     // Break caught: deleting a missing prediction can still mutate unrelated retained uploads or prediction jobs.
     [Fact]
     public async Task Missing_delete_returns_false_without_mutation()
