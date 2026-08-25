@@ -23,6 +23,10 @@ public static class AuthModeResolver
     {
         ArgumentNullException.ThrowIfNull(configuration);
 
+        // Matched by name rather than parsed. Enum.TryParse would accept "0" and "1" -- which are
+        // defined values, so Enum.IsDefined does not catch them -- and it bitwise-ORs comma-separated
+        // lists on any enum, Flags or not. Either would silently pick a mode the operator did not ask
+        // for, which is the exact failure this setting exists to prevent.
         var configured = configuration[ConfigurationKey]?.Trim();
         if (string.Equals(configured, nameof(AuthMode.Local), StringComparison.OrdinalIgnoreCase))
         {

@@ -65,6 +65,7 @@
 - Modify: `src/RouteTimer.Api/Program.cs`
 - Modify: `tests/RouteTimer.Api.Tests/RouteTimerApiFactory.cs`
 - Modify: `tests/RouteTimer.Api.Tests/HealthEndpointTests.cs`
+- Modify: `src/RouteTimer.Api/appsettings.Development.json`
 
 This task will break every existing API test unless the factories are updated in the same commit. Do not split it.
 
@@ -98,6 +99,10 @@ public sealed class AuthModeTests
     [InlineData("   ")]
     [InlineData("None")]
     [InlineData("Anonymous")]
+    [InlineData("0")]
+    [InlineData("1")]
+    [InlineData("Local,Keycloak")]
+    [InlineData("Local, Keycloak")]
     public void Resolve_fails_fast_when_the_mode_is_missing_or_unrecognised(string? configured)
     {
         var configuration = Build(configured);
@@ -152,10 +157,19 @@ public static class AuthModeResolver
     {
         ArgumentNullException.ThrowIfNull(configuration);
 
-        var configured = configuration[ConfigurationKey];
-        if (Enum.TryParse<AuthMode>(configured, ignoreCase: true, out var mode) && Enum.IsDefined(mode))
+        // Matched by name rather than parsed. Enum.TryParse would accept "0" and "1" -- which are
+        // defined values, so Enum.IsDefined does not catch them -- and it bitwise-ORs comma-separated
+        // lists on any enum, Flags or not. Either would silently pick a mode the operator did not ask
+        // for, which is the exact failure this setting exists to prevent.
+        var configured = configuration[ConfigurationKey]?.Trim();
+        if (string.Equals(configured, nameof(AuthMode.Local), StringComparison.OrdinalIgnoreCase))
         {
-            return mode;
+            return AuthMode.Local;
+        }
+
+        if (string.Equals(configured, nameof(AuthMode.Keycloak), StringComparison.OrdinalIgnoreCase))
+        {
+            return AuthMode.Keycloak;
         }
 
         throw new InvalidOperationException(
@@ -171,7 +185,7 @@ public static class AuthModeResolver
 
 Run: `dotnet test tests/RouteTimer.Api.Tests/RouteTimer.Api.Tests.csproj -p:UseSharedCompilation=false --filter "FullyQualifiedName~AuthModeTests"`
 
-Expected: PASS, 9 tests.
+Expected: PASS, 13 tests.
 
 - [ ] **Step 5: Call the resolver from Program.cs**
 
@@ -311,18 +325,58 @@ Append to `tests/RouteTimer.Api.Tests/Auth/AuthModeTests.cs`, inside the class:
 
         Assert.Contains("Auth:Mode", exception.Message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task The_application_starts_in_local_mode()
+    {
+        await using var app = new RouteTimerApiFactory().WithAuthMode("Local");
+        using var client = app.CreateClient();
+
+        using var response = await client.GetAsync("/health/live");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
 ```
 
-- [ ] **Step 9: Run the full API suite**
+Add `using System.Net;` to the file. Local mode is the only behavioural branch this task
+introduces and the one Task 5 builds on, so it needs a test that the application at least boots.
+Do not assert anything about protected endpoints in local mode yet: with no scheme registered they
+return 500, and Task 5 changes that to 401.
+
+- [ ] **Step 9: Keep `dotnet run` working**
+
+Nothing else in the repository sets `Auth:Mode`, so from this commit a developer pressing F5 or
+running `dotnet run` hits the startup exception. Add the `Auth` section to
+`src/RouteTimer.Api/appsettings.Development.json`, keeping the existing `Logging` section:
+
+```json
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "Auth": {
+    "Mode": "Local"
+  }
+}
+```
+
+This file loads only when `ASPNETCORE_ENVIRONMENT=Development`, so no deployment inherits it and the
+fail-fast guarantee is untouched. `Local` is the right development default because it runs
+standalone without an external Keycloak once Task 5 lands.
+
+- [ ] **Step 10: Run the full API suite**
 
 Run: `dotnet test tests/RouteTimer.Api.Tests/RouteTimer.Api.Tests.csproj -p:UseSharedCompilation=false`
 
-Expected: PASS. 66 pre-existing tests plus 10 new ones, 0 failed. If any pre-existing test fails with a message naming `Auth:Mode`, a factory was missed in steps 6 and 7.
+Expected: PASS. 66 pre-existing tests plus 15 new ones, 81 total, 0 failed. If any pre-existing test fails with a message naming `Auth:Mode`, a factory was missed in steps 6 and 7.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
-git add src/RouteTimer.Api/Auth/AuthMode.cs src/RouteTimer.Api/Program.cs tests/RouteTimer.Api.Tests/Auth/AuthModeTests.cs tests/RouteTimer.Api.Tests/RouteTimerApiFactory.cs tests/RouteTimer.Api.Tests/HealthEndpointTests.cs
+git add src/RouteTimer.Api tests/RouteTimer.Api.Tests
 git commit -m "feat: require an explicit authentication mode"
 ```
 
