@@ -66,21 +66,25 @@ builder.Services.AddScoped<IJobHandler, ParseTrainingJobHandler>();
 builder.Services.AddScoped<IJobHandler, BuildModelJobHandler>();
 builder.Services.AddScoped<IJobHandler, PredictionJobHandler>();
 builder.Services.AddHostedService<AnalysisWorker>();
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
-    {
-        options.Authority = builder.Configuration["Keycloak:Authority"];
-        options.Audience = "routetimer-api";
-        options.RequireHttpsMetadata = true;
-        options.Events = new JwtBearerEvents
+var authMode = AuthModeResolver.Resolve(builder.Configuration);
+if (authMode == AuthMode.Keycloak)
+{
+    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        .AddJwtBearer(options =>
         {
-            OnTokenValidated = context =>
+            options.Authority = builder.Configuration["Keycloak:Authority"];
+            options.Audience = "routetimer-api";
+            options.RequireHttpsMetadata = true;
+            options.Events = new JwtBearerEvents
             {
-                KeycloakRealmRoleMapper.AddRealmRoles(context.Principal);
-                return Task.CompletedTask;
-            }
-        };
-    });
+                OnTokenValidated = context =>
+                {
+                    KeycloakRealmRoleMapper.AddRealmRoles(context.Principal);
+                    return Task.CompletedTask;
+                }
+            };
+        });
+}
 var riderPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
         .RequireAuthenticatedUser()
         .RequireRole("rider")

@@ -20,7 +20,7 @@ public sealed class HealthEndpointTests
     [Fact]
     public async Task Live_health_is_anonymous_and_returns_healthy()
     {
-        await using var app = new WebApplicationFactory<Program>();
+        await using var app = new KeycloakModeApplicationFactory();
         using var client = app.CreateClient();
 
         using var response = await client.GetAsync("/health/live");
@@ -43,7 +43,7 @@ public sealed class HealthEndpointTests
     [Fact]
     public void Application_services_resolve_the_complete_build_model_handler_graph()
     {
-        using var app = new WebApplicationFactory<Program>();
+        using var app = new KeycloakModeApplicationFactory();
         using var scope = app.Services.CreateScope();
 
         Assert.IsType<TrainingGeometryEnricher>(scope.ServiceProvider.GetRequiredService<ITrainingGeometryEnricher>());
@@ -56,10 +56,17 @@ public sealed class HealthEndpointTests
         Assert.IsType<BuildModelJobHandler>(handler);
     }
 
-    private sealed class ReadyHealthApplicationFactory : WebApplicationFactory<Program>
+    private class KeycloakModeApplicationFactory : WebApplicationFactory<Program>
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder) =>
+            builder.UseSetting(RouteTimer.Api.Auth.AuthModeResolver.ConfigurationKey, "Keycloak");
+    }
+
+    private sealed class ReadyHealthApplicationFactory : KeycloakModeApplicationFactory
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
+            base.ConfigureWebHost(builder);
             builder.ConfigureServices(services =>
             {
                 services.RemoveAll<DbContextOptions<RouteTimerDbContext>>();

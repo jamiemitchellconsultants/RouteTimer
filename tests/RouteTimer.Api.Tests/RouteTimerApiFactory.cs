@@ -14,19 +14,27 @@ using RouteTimer.Persistence;
 
 namespace RouteTimer.Api.Tests;
 
-public sealed class RouteTimerApiFactory(bool authenticateAsRider = false, Action<IServiceCollection>? configureServices = null)
+public sealed class RouteTimerApiFactory(
+    bool authenticateAsRider = false,
+    Action<IServiceCollection>? configureServices = null,
+    string authMode = "Keycloak")
     : WebApplicationFactory<Program>
 {
     private readonly string databaseName = Guid.NewGuid().ToString();
 
     public RouteTimerApiFactory WithRiderAuthentication(Action<IServiceCollection>? configure = null) =>
-        new(true, Combine(configureServices, configure));
+        new(true, Combine(configureServices, configure), authMode);
 
     public RouteTimerApiFactory WithServices(Action<IServiceCollection> configure) =>
-        new(authenticateAsRider, Combine(configureServices, configure));
+        new(authenticateAsRider, Combine(configureServices, configure), authMode);
+
+    public RouteTimerApiFactory WithAuthMode(string mode) =>
+        new(authenticateAsRider, configureServices, mode);
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        builder.UseSetting(RouteTimer.Api.Auth.AuthModeResolver.ConfigurationKey, authMode);
+
         builder.ConfigureTestServices(services =>
         {
             services.RemoveAll<DbContextOptions<RouteTimerDbContext>>();
