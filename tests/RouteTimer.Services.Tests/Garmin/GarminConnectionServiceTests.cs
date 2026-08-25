@@ -234,6 +234,97 @@ public sealed class GarminConnectionServiceTests
         Assert.Equal(0, repository.SaveCalls);
     }
 
+    // Break caught: cancellation after successful credential authentication could prevent saving the connected session.
+    [Fact]
+    public async Task Login_success_persists_with_a_non_cancellable_token_after_request_cancellation()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var adapter = new FakeAdapterClient
+        {
+            LoginResult = new GarminAdapterLogin("connected", null, "token-json", "42", "Jamie"),
+            BeforeLoginOutcome = cancellation.Cancel
+        };
+        var repository = new FakeConnectionRepository { RejectCancelledPersistenceTokens = true };
+        using var protector = Protector();
+        var service = Service(adapter, repository, protector);
+
+        var result = await service.LoginAsync("rider@example.com", "secret", cancellation.Token);
+
+        Assert.Equal("connected", result.State);
+        Assert.Equal(CancellationToken.None, repository.LastSaveCancellationToken);
+        Assert.Equal("connected", repository.Current!.State);
+    }
+
+    // Break caught: cancellation after successful MFA authentication could prevent saving the connected session.
+    [Fact]
+    public async Task Mfa_success_persists_with_a_non_cancellable_token_after_request_cancellation()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var adapter = new FakeAdapterClient
+        {
+            MfaResult = new GarminAdapterLogin("connected", null, "token-json", "42", "Jamie"),
+            BeforeMfaOutcome = cancellation.Cancel
+        };
+        var repository = new FakeConnectionRepository { RejectCancelledPersistenceTokens = true };
+        using var protector = Protector();
+        var service = Service(adapter, repository, protector);
+
+        var result = await service.CompleteMfaAsync("challenge-1", "123456", cancellation.Token);
+
+        Assert.Equal("connected", result.State);
+        Assert.Equal(CancellationToken.None, repository.LastSaveCancellationToken);
+        Assert.Equal("connected", repository.Current!.State);
+    }
+
+    // Break caught: cancellation after successful validation could discard a rotated Garmin token bundle.
+    [Fact]
+    public async Task Validation_success_persists_rotation_with_a_non_cancellable_token_after_request_cancellation()
+    {
+        using var cancellation = new CancellationTokenSource();
+        using var protector = Protector();
+        var adapter = new FakeAdapterClient
+        {
+            ValidateResult = new GarminAdapterSession("rotated-token", "42", "Jamie"),
+            BeforeValidateOutcome = cancellation.Cancel
+        };
+        var repository = new FakeConnectionRepository
+        {
+            Current = Connection("connected", protector.Protect("saved-token")),
+            RejectCancelledPersistenceTokens = true
+        };
+        var service = Service(adapter, repository, protector);
+
+        var result = await service.ValidateAsync(cancellation.Token);
+
+        Assert.Equal("connected", result.State);
+        Assert.Equal(CancellationToken.None, repository.LastSaveCancellationToken);
+        Assert.Equal("rotated-token", protector.Unprotect(repository.Current!.Token));
+    }
+
+    // Break caught: cancellation accompanying deterministic auth failure could leave stale state as connected.
+    [Fact]
+    public async Task Authentication_failure_marks_reconnect_with_a_non_cancellable_token_after_request_cancellation()
+    {
+        using var cancellation = new CancellationTokenSource();
+        using var protector = Protector();
+        var adapter = new FakeAdapterClient
+        {
+            ValidateException = new GarminAdapterException(GarminAdapterError.Authentication, "private"),
+            BeforeValidateOutcome = cancellation.Cancel
+        };
+        var repository = new FakeConnectionRepository
+        {
+            Current = Connection("connected", protector.Protect("saved-token")),
+            RejectCancelledPersistenceTokens = true
+        };
+        var service = Service(adapter, repository, protector);
+
+        await Assert.ThrowsAsync<GarminReconnectRequiredException>(() => service.ValidateAsync(cancellation.Token));
+
+        Assert.Equal(CancellationToken.None, repository.LastSaveCancellationToken);
+        Assert.Equal("reconnect-required", repository.Current!.State);
+    }
+
     [Fact]
     public async Task Authentication_operations_are_serialized_through_the_shared_gate()
     {
@@ -340,6 +431,59 @@ public sealed class GarminConnectionServiceTests
         Assert.Null(repository.Current);
     }
 
+    // Break caught: an already-cancelled HTTP request could cancel gate acquisition before mandatory deletion ran.
+    [Fact]
+    public async Task Disconnect_with_an_already_cancelled_request_still_attempts_clear_and_deletes()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var adapter = new FakeAdapterClient { HonorClearCancellation = true };
+        var repository = new FakeConnectionRepository { Current = Connection("connected") };
+        using var protector = Protector();
+        var service = Service(adapter, repository, protector);
+
+        await service.DisconnectAsync(cancellation.Token);
+
+        Assert.Equal(1, adapter.ClearCalls);
+        Assert.True(adapter.LastClearCancellationToken.IsCancellationRequested);
+        Assert.Equal(1, repository.DeleteCalls);
+        Assert.Null(repository.Current);
+    }
+
+    // Break caught: cancellation while disconnect waited behind another Garmin operation could skip deletion entirely.
+    [Fact]
+    public async Task Disconnect_cancelled_while_waiting_for_the_gate_eventually_attempts_clear_and_deletes()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var disconnectCancellation = new CancellationTokenSource();
+        using var protector = Protector();
+        var adapter = new FakeAdapterClient
+        {
+            ValidateResult = new GarminAdapterSession("rotated-token", "42", "Jamie"),
+            ValidateEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            ReleaseValidate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            HonorClearCancellation = true
+        };
+        var repository = new FakeConnectionRepository { Current = Connection("connected", protector.Protect("saved-token")) };
+        var service = Service(adapter, repository, protector);
+        var validate = service.ValidateAsync(timeout.Token);
+        await adapter.ValidateEntered.Task.WaitAsync(timeout.Token);
+
+        var disconnect = service.DisconnectAsync(disconnectCancellation.Token);
+        disconnectCancellation.Cancel();
+        await Task.Yield();
+        Assert.Equal(0, repository.DeleteCalls);
+
+        adapter.ReleaseValidate.SetResult();
+        await validate;
+        await disconnect;
+
+        Assert.Equal(1, adapter.ClearCalls);
+        Assert.True(adapter.LastClearCancellationToken.IsCancellationRequested);
+        Assert.Equal(1, repository.DeleteCalls);
+        Assert.Null(repository.Current);
+    }
+
     private static GarminConnectionService Service(
         IGarminAdapterClient adapter,
         IGarminConnectionRepository repository,
@@ -380,14 +524,22 @@ public sealed class GarminConnectionServiceTests
     private sealed class FakeConnectionRepository : IGarminConnectionRepository
     {
         public GarminConnectionRecord? Current { get; set; }
+        public bool RejectCancelledPersistenceTokens { get; set; }
         public int SaveCalls { get; private set; }
         public int DeleteCalls { get; private set; }
+        public CancellationToken LastSaveCancellationToken { get; private set; }
 
         public Task<GarminConnectionRecord?> GetAsync(CancellationToken cancellationToken) => Task.FromResult(Current);
 
         public Task SaveAsync(GarminConnectionRecord connection, CancellationToken cancellationToken)
         {
             SaveCalls++;
+            LastSaveCancellationToken = cancellationToken;
+            if (RejectCancelledPersistenceTokens && cancellationToken.IsCancellationRequested)
+            {
+                return Task.FromCanceled(cancellationToken);
+            }
+
             Current = connection;
             return Task.CompletedTask;
         }
@@ -407,6 +559,10 @@ public sealed class GarminConnectionServiceTests
         public GarminAdapterSession ValidateResult { get; set; } = new("token-json", "42", "Jamie");
         public GarminAdapterException? ValidateException { get; set; }
         public Exception? ClearException { get; set; }
+        public Action? BeforeLoginOutcome { get; set; }
+        public Action? BeforeMfaOutcome { get; set; }
+        public Action? BeforeValidateOutcome { get; set; }
+        public bool HonorClearCancellation { get; set; }
         public TaskCompletionSource? LoginEntered { get; set; }
         public TaskCompletionSource? ReleaseLogin { get; set; }
         public TaskCompletionSource? MfaEntered { get; set; }
@@ -418,6 +574,7 @@ public sealed class GarminConnectionServiceTests
         public int ValidateCalls { get; private set; }
         public int ClearCalls { get; private set; }
         public string? LastValidatedToken { get; private set; }
+        public CancellationToken LastClearCancellationToken { get; private set; }
 
         public async Task<GarminAdapterLogin> LoginAsync(string email, string password, CancellationToken cancellationToken)
         {
@@ -428,6 +585,7 @@ public sealed class GarminConnectionServiceTests
                 await ReleaseLogin.Task.WaitAsync(cancellationToken);
             }
 
+            BeforeLoginOutcome?.Invoke();
             return LoginResult;
         }
 
@@ -435,6 +593,7 @@ public sealed class GarminConnectionServiceTests
         {
             MfaCalls++;
             MfaEntered?.SetResult();
+            BeforeMfaOutcome?.Invoke();
             return Task.FromResult(MfaResult);
         }
 
@@ -448,6 +607,7 @@ public sealed class GarminConnectionServiceTests
                 await ReleaseValidate.Task.WaitAsync(cancellationToken);
             }
 
+            BeforeValidateOutcome?.Invoke();
             if (ValidateException is not null)
             {
                 throw ValidateException;
@@ -468,7 +628,13 @@ public sealed class GarminConnectionServiceTests
         public Task ClearChallengesAsync(CancellationToken cancellationToken)
         {
             ClearCalls++;
+            LastClearCancellationToken = cancellationToken;
             ClearEntered?.SetResult();
+            if (HonorClearCancellation && cancellationToken.IsCancellationRequested)
+            {
+                return Task.FromCanceled(cancellationToken);
+            }
+
             return ClearException is null ? Task.CompletedTask : Task.FromException(ClearException);
         }
     }

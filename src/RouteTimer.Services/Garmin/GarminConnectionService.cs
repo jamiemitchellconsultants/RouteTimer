@@ -38,7 +38,7 @@ public sealed class GarminConnectionService(
                 return new GarminConnectionResult("mfa-required", null, null, login.ChallengeId);
             }
 
-            return await SaveConnectedAsync(login, token);
+            return await SaveConnectedAsync(login);
         }, cancellationToken);
     }
 
@@ -60,7 +60,7 @@ public sealed class GarminConnectionService(
         return gate.RunAsync(async token =>
         {
             var login = await adapter.CompleteMfaAsync(challengeId, code, token);
-            return await SaveConnectedAsync(login, token);
+            return await SaveConnectedAsync(login);
         }, cancellationToken);
     }
 
@@ -93,7 +93,7 @@ public sealed class GarminConnectionService(
             {
                 await repository.SaveAsync(
                     connection with { State = "reconnect-required", UpdatedAt = timeProvider.GetUtcNow() },
-                    token);
+                    CancellationToken.None);
                 throw new GarminReconnectRequiredException();
             }
 
@@ -110,31 +110,32 @@ public sealed class GarminConnectionService(
                 protector.Protect(session.TokenJson),
                 now,
                 now);
-            await repository.SaveAsync(refreshed, token);
+            await repository.SaveAsync(refreshed, CancellationToken.None);
             return ToResult(refreshed);
         }, cancellationToken);
 
     public async Task DisconnectAsync(CancellationToken cancellationToken)
     {
-        _ = await gate.RunAsync(async token =>
+        _ = await gate.RunAsync(async _ =>
         {
             try
             {
-                await adapter.ClearChallengesAsync(token);
+                await adapter.ClearChallengesAsync(cancellationToken);
             }
             catch (Exception)
             {
                 // Challenge invalidation is best-effort; deleting the saved connection is mandatory.
             }
+            finally
+            {
+                await repository.DeleteAsync(CancellationToken.None);
+            }
 
-            await repository.DeleteAsync(CancellationToken.None);
             return true;
-        }, cancellationToken);
+        }, CancellationToken.None);
     }
 
-    private async Task<GarminConnectionResult> SaveConnectedAsync(
-        GarminAdapterLogin login,
-        CancellationToken cancellationToken)
+    private async Task<GarminConnectionResult> SaveConnectedAsync(GarminAdapterLogin login)
     {
         if (login.State != "connected" || string.IsNullOrWhiteSpace(login.TokenJson))
         {
@@ -149,7 +150,7 @@ public sealed class GarminConnectionService(
             protector.Protect(login.TokenJson),
             now,
             now);
-        await repository.SaveAsync(connection, cancellationToken);
+        await repository.SaveAsync(connection, CancellationToken.None);
         return ToResult(connection);
     }
 
