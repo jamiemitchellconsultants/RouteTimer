@@ -71,10 +71,23 @@ builder.Services.AddHostedService<AnalysisWorker>();
 var authMode = AuthModeResolver.Resolve(builder.Configuration);
 if (authMode == AuthMode.Keycloak)
 {
+    // Without an authority the bearer handler builds no configuration manager, so the deployment
+    // starts, reports healthy, and then silently rejects every token. Refuse to start instead,
+    // for the same reason Auth:Mode itself has no default.
+    var authority = builder.Configuration["Keycloak:Authority"];
+    if (string.IsNullOrWhiteSpace(authority))
+    {
+        throw new InvalidOperationException(
+            "Keycloak:Authority must be set when Auth:Mode is 'Keycloak'. It is the realm's issuer " +
+            "URL, for example https://auth.example.com/realms/routetimer, and both token validation " +
+            "and the client's sign-in redirect depend on it. Without it the application would accept " +
+            "no request at all.");
+    }
+
     builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         .AddJwtBearer(options =>
         {
-            options.Authority = builder.Configuration["Keycloak:Authority"];
+            options.Authority = authority;
             options.Audience = "routetimer-api";
             options.RequireHttpsMetadata = true;
             options.Events = new JwtBearerEvents

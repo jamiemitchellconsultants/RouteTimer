@@ -7,11 +7,17 @@ public static class AuthEndpoints
 {
     public static IEndpointRouteBuilder MapAuthEndpoints(this IEndpointRouteBuilder routes, AuthMode mode)
     {
-        routes.MapGet("/api/auth/config", (IConfiguration configuration, LocalCredentialService credentials, CancellationToken cancellationToken) =>
-            GetConfigAsync(mode, configuration, credentials, cancellationToken)).AllowAnonymous();
+        routes.MapGet("/api/auth/config", (HttpContext context, IConfiguration configuration, LocalCredentialService credentials, CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            return GetConfigAsync(mode, configuration, credentials, cancellationToken);
+        }).AllowAnonymous();
 
         routes.MapGet("/api/auth/session", (HttpContext context) =>
-            TypedResults.Ok(new AuthSessionResponse(context.User.Identity?.IsAuthenticated == true))).AllowAnonymous();
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            return TypedResults.Ok(new AuthSessionResponse(context.User.Identity?.IsAuthenticated == true));
+        }).AllowAnonymous();
 
         return routes;
     }
@@ -26,7 +32,7 @@ public static class AuthEndpoints
         {
             var setupRequired = await credentials.IsSetupRequiredAsync(cancellationToken);
             return TypedResults.Ok(new AuthConfigResponse(
-                nameof(AuthMode.Local),
+                AuthConfigResponse.LocalMode,
                 setupRequired,
                 Authority: null,
                 ClientId: null,
@@ -35,11 +41,11 @@ public static class AuthEndpoints
         }
 
         return TypedResults.Ok(new AuthConfigResponse(
-            nameof(AuthMode.Keycloak),
+            AuthConfigResponse.KeycloakMode,
             SetupRequired: false,
             Authority: configuration["Keycloak:Authority"],
             ClientId: "routetimer-web",
             RedirectUri: "authentication/login-callback",
-            PostLogoutRedirectUri: "/"));
+            PostLogoutRedirectUri: "authentication/logout-callback"));
     }
 }

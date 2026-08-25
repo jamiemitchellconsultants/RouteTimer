@@ -58,8 +58,12 @@ public sealed class HealthEndpointTests
 
     private class KeycloakModeApplicationFactory : WebApplicationFactory<Program>
     {
-        protected override void ConfigureWebHost(IWebHostBuilder builder) =>
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
             builder.UseSetting(RouteTimer.Api.Auth.AuthModeResolver.ConfigurationKey, "Keycloak");
+            // Keycloak mode refuses to start without an authority.
+            builder.UseSetting("Keycloak:Authority", "https://keycloak.test.invalid/realms/routetimer");
+        }
     }
 
     private sealed class ReadyHealthApplicationFactory : KeycloakModeApplicationFactory

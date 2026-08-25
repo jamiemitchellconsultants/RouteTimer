@@ -50,6 +50,18 @@ public sealed class AuthModeTests
     }
 
     [Fact]
+    public void Keycloak_mode_refuses_to_start_without_an_authority()
+    {
+        using var app = new RouteTimerApiFactory()
+            .WithAuthMode("Keycloak")
+            .WithSetting("Keycloak:Authority", null);
+
+        var exception = Assert.ThrowsAny<InvalidOperationException>(() => app.CreateClient());
+
+        Assert.Contains("Keycloak:Authority", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task The_application_starts_in_local_mode()
     {
         await using var app = new RouteTimerApiFactory().WithAuthMode("Local");

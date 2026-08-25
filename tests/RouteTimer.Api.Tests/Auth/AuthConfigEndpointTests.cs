@@ -9,6 +9,8 @@ namespace RouteTimer.Api.Tests.Auth;
 
 public sealed class AuthConfigEndpointTests
 {
+    private const string KeycloakAuthority = "https://keycloak.test.invalid/realms/routetimer";
+
     [Fact]
     public async Task Config_is_anonymous_and_reports_keycloak_settings_in_keycloak_mode()
     {
@@ -24,7 +26,8 @@ public sealed class AuthConfigEndpointTests
         Assert.False(config.SetupRequired);
         Assert.Equal("routetimer-web", config.ClientId);
         Assert.Equal("authentication/login-callback", config.RedirectUri);
-        Assert.Equal("/", config.PostLogoutRedirectUri);
+        Assert.Equal("authentication/logout-callback", config.PostLogoutRedirectUri);
+        Assert.Equal(KeycloakAuthority, config.Authority);
     }
 
     [Fact]
@@ -47,6 +50,9 @@ public sealed class AuthConfigEndpointTests
         Assert.Equal("Local", config.Mode);
         Assert.True(config.SetupRequired);
         Assert.Null(config.Authority);
+        Assert.Null(config.ClientId);
+        Assert.Null(config.RedirectUri);
+        Assert.Null(config.PostLogoutRedirectUri);
     }
 
     [Fact]
@@ -77,6 +83,45 @@ public sealed class AuthConfigEndpointTests
 
         Assert.NotNull(session);
         Assert.False(session.Authenticated);
+    }
+
+    [Fact]
+    public async Task Session_reports_anonymous_in_local_mode_where_no_scheme_is_registered()
+    {
+        await using var app = new RouteTimerApiFactory().WithAuthMode("Local");
+        using var client = app.CreateClient();
+
+        using var response = await client.GetAsync("/api/auth/session", CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var session = await response.Content.ReadFromJsonAsync<AuthSessionResponse>(CancellationToken.None);
+        Assert.NotNull(session);
+        Assert.False(session.Authenticated);
+    }
+
+    [Fact]
+    public async Task Session_reports_an_authenticated_caller()
+    {
+        await using var app = new RouteTimerApiFactory().WithRiderAuthentication();
+        using var client = app.CreateClient();
+
+        var session = await client.GetFromJsonAsync<AuthSessionResponse>("/api/auth/session", CancellationToken.None);
+
+        Assert.NotNull(session);
+        Assert.True(session.Authenticated);
+    }
+
+    [Fact]
+    public async Task Config_and_session_are_not_cacheable()
+    {
+        await using var app = new RouteTimerApiFactory();
+        using var client = app.CreateClient();
+
+        using var config = await client.GetAsync("/api/auth/config", CancellationToken.None);
+        using var session = await client.GetAsync("/api/auth/session", CancellationToken.None);
+
+        Assert.Equal("no-store", Assert.Single(config.Headers.CacheControl!.ToString().Split(", ")));
+        Assert.Equal("no-store", Assert.Single(session.Headers.CacheControl!.ToString().Split(", ")));
     }
 
     internal sealed class FakeLocalCredentialRepository(string? initialHash) : ILocalCredentialRepository

@@ -16,7 +16,14 @@ public sealed record AuthConfigResponse(
     string? Authority,
     string? ClientId,
     string? RedirectUri,
-    string? PostLogoutRedirectUri);
+    string? PostLogoutRedirectUri)
+{
+    /// <summary>The <see cref="Mode"/> value for a local, passphrase-authenticated deployment.</summary>
+    public const string LocalMode = "Local";
+
+    /// <summary>The <see cref="Mode"/> value for a deployment authenticated against Keycloak.</summary>
+    public const string KeycloakMode = "Keycloak";
+}
 
 /// <param name="Authenticated">Whether the caller currently holds a valid session.</param>
 public sealed record AuthSessionResponse(bool Authenticated);
