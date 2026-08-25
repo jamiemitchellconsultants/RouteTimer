@@ -755,7 +755,9 @@ public enum LocalCredentialSetupResult
 /// which is available from the ASP.NET Core shared framework and carries its own versioned format,
 /// so no hashing scheme is written here.
 /// </summary>
-public sealed class LocalCredentialService(ILocalCredentialRepository credentials)
+public sealed class LocalCredentialService(
+    ILocalCredentialRepository credentials,
+    ILogger<LocalCredentialService> logger)
 {
     /// <summary>
     /// Long enough to resist casual guessing, short enough that a rider will actually use a
@@ -788,16 +790,44 @@ public sealed class LocalCredentialService(ILocalCredentialRepository credential
 
     public async Task<bool> VerifyAsync(string passphrase, CancellationToken cancellationToken)
     {
+        // Returns early without hashing when no credential exists. This leaks first-run state by
+        // timing, which is not a secret: /api/auth/config publishes setupRequired to anonymous
+        // callers by design. The comparison that must be constant-time -- correct versus incorrect
+        // passphrase -- is, inside the framework's verifier.
         var storedHash = await credentials.GetAsync(cancellationToken);
         if (storedHash is null || string.IsNullOrEmpty(passphrase))
         {
             return false;
         }
 
-        var outcome = Hasher.VerifyHashedPassword(HashSubject, storedHash, passphrase);
+        PasswordVerificationResult outcome;
+        try
+        {
+            outcome = Hasher.VerifyHashedPassword(HashSubject, storedHash, passphrase);
+        }
+        catch (FormatException)
+        {
+            // The stored value is not a hash this hasher wrote -- most likely a hand-edited row.
+            // Credential recovery is documented as raw SQL against this table, so a fumbled edit
+            // must fail closed rather than 500 on every future sign-in.
+            return false;
+        }
+
         if (outcome == PasswordVerificationResult.SuccessRehashNeeded)
         {
-            await credentials.SetAsync(Hasher.HashPassword(HashSubject, passphrase), cancellationToken);
+            try
+            {
+                await credentials.SetAsync(Hasher.HashPassword(HashSubject, passphrase), cancellationToken);
+            }
+            catch (Exception exception)
+            {
+                // The passphrase is already verified above, so this block cannot grant a login it
+                // should not. Failing to upgrade the stored hash must not deny a correct passphrase:
+                // this branch fires on the first sign-in after a framework iteration-count bump,
+                // when a rider can least tell an upgrade fault from a typo.
+                logger.LogWarning(exception, "Could not upgrade the stored passphrase hash; the existing hash remains valid.");
+            }
+
             return true;
         }
 
@@ -806,18 +836,46 @@ public sealed class LocalCredentialService(ILocalCredentialRepository credential
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Cover the failure paths**
 
-Run: `dotnet test tests/RouteTimer.Api.Tests/RouteTimer.Api.Tests.csproj -p:UseSharedCompilation=false --filter "FullyQualifiedName~LocalCredentialServiceTests"`
+The six tests above leave the only database write on the sign-in path untested. Add these to
+`LocalCredentialServiceTests`, passing `NullLogger<LocalCredentialService>.Instance` as the second
+constructor argument everywhere:
 
-Expected: PASS, 8 tests.
+- `Verify_upgrades_a_hash_written_with_weaker_settings` — seed the fake with a hash from
+  `new PasswordHasher<object>(Options.Create(new PasswordHasherOptions { IterationCount = 1000 }))`,
+  then assert `VerifyAsync` returns true, that the stored value **changed**, and that it verifies
+  again. Asserting the change is what makes this test meaningful; asserting only the return value
+  passes even if the upgrade never happens.
+- `Verify_succeeds_even_when_the_rehash_write_fails` — a second fake whose `SetAsync` throws.
+- `Verify_fails_closed_when_the_stored_hash_is_not_valid_base64`.
+- `Verify_fails_for_a_null_passphrase` — the `IsNullOrEmpty` guard is load-bearing for `null`
+  specifically, because `VerifyHashedPassword` throws on a null password while `""` returns `Failed`.
+- `Each_setup_stores_a_distinct_salted_hash` — two services over separate fakes, same passphrase,
+  different stored values. The `DoesNotContain` assertion alone passes for any transformation at
+  all, including reversible ones.
 
-- [ ] **Step 5: Commit**
+Requires `using Microsoft.AspNetCore.Identity;`, `using Microsoft.Extensions.Options;` and
+`using Microsoft.Extensions.Logging.Abstractions;`.
+
+- [ ] **Step 5: Run tests to verify they pass**
+
+Run: `dotnet test tests/RouteTimer.Api.Tests/RouteTimer.Api.Tests.csproj -p:UseSharedCompilation=false`
+
+Expected: PASS, 94 total.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/RouteTimer.Api/Auth/LocalCredentialService.cs tests/RouteTimer.Api.Tests/Auth/LocalCredentialServiceTests.cs
 git commit -m "feat: hash and verify the local mode passphrase"
 ```
+
+**Carried into Task 5:** a passphrase of one character followed by eleven spaces currently passes
+the length rule. Rejecting it needs a distinct result value and its own user-facing message, so it
+belongs with the endpoint copy. Also note the concurrent-setup race surfaces as `DbUpdateException`
+from the primary-key violation, which `/api/auth/setup` must map to the same response as
+`AlreadyConfigured` rather than letting it become a 500.
 
 ---
 
