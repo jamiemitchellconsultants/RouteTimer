@@ -1495,6 +1495,63 @@ git commit -m "feat: add local mode setup, login and logout"
 
 ---
 
+### Task 5 amendments after review
+
+The code blocks above are superseded where they conflict with this section. Review found five
+defects, four of which originated in the plan.
+
+**The bootstrap write must be insert-only.** `LocalCredentialRepository.SetAsync` is an upsert: it
+re-reads and takes an UPDATE branch when a row exists. So in the concurrent-setup race the loser
+does not collide — it reads after the winner commits, updates, returns `Configured`, and silently
+replaces the winner's passphrase. Add `ILocalCredentialRepository.TryAddAsync`, which `Add`s without
+the re-read and returns false on `DbUpdateException`, and have `SetupAsync` treat its result as
+authoritative. Keep the early `GetAsync` as a fast path only. `VerifyAsync`'s rehash keeps using the
+upsert `SetAsync` — that path must overwrite.
+
+Prove this against **real PostgreSQL**, not EF InMemory: InMemory throws a bare `ArgumentException`
+on a duplicate-key insert rather than `DbUpdateException`, so it cannot exercise the production path
+at all. This is the second place in this plan where InMemory silently failed to verify what a test
+claimed.
+
+**The setup switch must fail closed.** Make the success branch an explicit
+`case LocalCredentialSetupResult.Configured:` and have `default` throw. With success as `default`, a
+new enum value added without a matching case issues a valid 30-day rider session while storing no
+credential — and this task adds two such values.
+
+**`SameSite=Strict` does not close CSRF here.** `SameSite` is site-scoped and ports are not part of a
+site, so any page on `http://localhost:<other port>` is same-site and its POSTs carry the cookie.
+That is a poor fit for an app whose only network control is a loopback bind. Add
+`src/RouteTimer.Api/Security/SameOriginEnforcement.cs`: reject any non-GET, non-HEAD, non-OPTIONS
+request whose `Sec-Fetch-Site` header is present and not `same-origin`. Exempt OPTIONS explicitly —
+CORS preflights carry the header, so blocking them would make any future CORS configuration fail
+silently. An absent header passes, so non-browser tooling still works. `Sec-Fetch-Site` is a
+forbidden header name, so page script cannot forge it.
+
+**A session must be revocable.** The cookie is a self-contained ticket with a 30-day sliding expiry
+and no `SessionStore`, so deleting the credential row — the recovery path the 409 message itself
+recommends — locks the rider out while leaving any existing session valid. Add `OnValidatePrincipal`
+rejecting the principal when no credential exists, behind a 30-second TTL cache: without the cache it
+costs a database read on every cookie-bearing request, including the 100+ static files of a
+WebAssembly boot.
+
+**Cap the request body.** `MaxRequestBodySize` is set globally to about 501 MB for training uploads,
+so these anonymous JSON endpoints would otherwise accept a 501 MB body and materialise a gigabyte of
+UTF-16 before validation. Add `RequestSizeLimitAttribute(4096)` to all three, plus a
+`MaximumPassphraseLength` of 256. Note the length check runs after deserialization, so only the
+request-size limit prevents the allocation. `TestServer` silently ignores
+`IHttpMaxRequestBodySizeFeature`, so a genuine 413 cannot be asserted in-process — assert the
+metadata is attached instead, and re-run a standalone Kestrel probe after any .NET major upgrade.
+
+**Also:** reject a passphrase with leading or trailing whitespace rather than trimming it, with its
+own result value and message — `"a"` plus eleven spaces otherwise satisfies the twelve-character
+minimum. And `routes.MapPost("/api/auth/logout", LogoutAsync)` trips analyzer ASP0016 under
+`TreatWarningsAsErrors`, because a single-`HttpContext` delegate returning `Task<IResult>` is
+ambiguous with `RequestDelegate`; cast it to `(Delegate)` as the analyzer itself recommends.
+
+Expected after this task: 134 API tests, 149 persistence.
+
+---
+
 ## Task 6: Login rate limiting
 
 **Files:**
