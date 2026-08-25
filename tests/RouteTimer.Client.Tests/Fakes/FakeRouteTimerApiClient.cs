@@ -9,19 +9,72 @@ namespace RouteTimer.Client.Tests.Fakes;
 
 public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
 {
+    public Func<CancellationToken, Task<ProfileResponse?>>? OnGetProfileAsync { get; set; }
+    public Func<UpdateProfileRequest, CancellationToken, Task<ProfileResponse>>? OnUpdateProfileAsync { get; set; }
+    public Func<CancellationToken, Task<IReadOnlyList<TrainingActivitySummaryResponse>>>? OnGetTrainingActivitiesAsync { get; set; }
+    public Func<CancellationToken, Task<TrainingUploadBatchResponse>>? OnUploadTrainingActivitiesAsync { get; set; }
+    public Func<CancellationToken, Task<ModelStatusResponse>>? OnGetModelStatusAsync { get; set; }
+    public Func<CancellationToken, Task<IReadOnlyList<PredictionSummaryResponse>>>? OnGetPredictionsAsync { get; set; }
+
     public Queue<JobResponse?> Jobs { get; } = new();
 
     public List<(Guid JobId, CancellationToken CancellationToken)> RequestedJobs { get; } = [];
+    public List<CancellationToken> RequestedProfiles { get; } = [];
+    public List<(UpdateProfileRequest Request, CancellationToken CancellationToken)> UpdatedProfiles { get; } = [];
+    public List<CancellationToken> RequestedTrainingActivities { get; } = [];
+    public List<CancellationToken> RequestedModelStatuses { get; } = [];
+    public List<CancellationToken> RequestedPredictions { get; } = [];
 
-    public Task<ProfileResponse?> GetProfileAsync(CancellationToken ct) => throw new NotSupportedException();
-    public Task<ProfileResponse> UpdateProfileAsync(UpdateProfileRequest request, CancellationToken ct) => throw new NotSupportedException();
-    public Task<IReadOnlyList<TrainingActivitySummaryResponse>> GetTrainingActivitiesAsync(CancellationToken ct) => throw new NotSupportedException();
+    public Task<ProfileResponse?> GetProfileAsync(CancellationToken ct)
+    {
+        RequestedProfiles.Add(ct);
+        return OnGetProfileAsync is not null
+            ? OnGetProfileAsync(ct)
+            : throw new NotSupportedException();
+    }
+
+    public Task<ProfileResponse> UpdateProfileAsync(UpdateProfileRequest request, CancellationToken ct)
+    {
+        UpdatedProfiles.Add((request, ct));
+        return OnUpdateProfileAsync is not null
+            ? OnUpdateProfileAsync(request, ct)
+            : throw new NotSupportedException();
+    }
+
+    public Task<IReadOnlyList<TrainingActivitySummaryResponse>> GetTrainingActivitiesAsync(CancellationToken ct)
+    {
+        RequestedTrainingActivities.Add(ct);
+        return OnGetTrainingActivitiesAsync is not null
+            ? OnGetTrainingActivitiesAsync(ct)
+            : throw new NotSupportedException();
+    }
+
     public Task<TrainingActivityDetailResponse?> GetTrainingActivityAsync(Guid id, CancellationToken ct) => throw new NotSupportedException();
-    public Task<TrainingUploadBatchResponse> UploadTrainingActivitiesAsync(IReadOnlyList<ClientFileUpload> files, CancellationToken ct) => throw new NotSupportedException();
+    public Task<TrainingUploadBatchResponse> UploadTrainingActivitiesAsync(IReadOnlyList<ClientFileUpload> files, CancellationToken ct) =>
+        OnUploadTrainingActivitiesAsync is not null
+            ? OnUploadTrainingActivitiesAsync(ct)
+            : throw new NotSupportedException();
+
     public Task<bool> DeleteTrainingActivityAsync(Guid id, CancellationToken ct) => throw new NotSupportedException();
-    public Task<ModelStatusResponse> GetModelStatusAsync(CancellationToken ct) => throw new NotSupportedException();
+
+    public Task<ModelStatusResponse> GetModelStatusAsync(CancellationToken ct)
+    {
+        RequestedModelStatuses.Add(ct);
+        return OnGetModelStatusAsync is not null
+            ? OnGetModelStatusAsync(ct)
+            : throw new NotSupportedException();
+    }
+
     public Task<ModelRebuildResponse> RebuildModelAsync(CancellationToken ct) => throw new NotSupportedException();
-    public Task<IReadOnlyList<PredictionSummaryResponse>> GetPredictionsAsync(CancellationToken ct) => throw new NotSupportedException();
+
+    public Task<IReadOnlyList<PredictionSummaryResponse>> GetPredictionsAsync(CancellationToken ct)
+    {
+        RequestedPredictions.Add(ct);
+        return OnGetPredictionsAsync is not null
+            ? OnGetPredictionsAsync(ct)
+            : throw new NotSupportedException();
+    }
+
     public Task<PredictionSubmissionResponse> SubmitPredictionAsync(ClientFileUpload file, CancellationToken ct) => throw new NotSupportedException();
     public Task<PredictionDetailResponse?> GetPredictionAsync(Guid id, CancellationToken ct) => throw new NotSupportedException();
     public Task<bool> DeletePredictionAsync(Guid id, CancellationToken ct) => throw new NotSupportedException();

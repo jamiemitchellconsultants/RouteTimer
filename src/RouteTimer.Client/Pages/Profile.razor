@@ -1,60 +1,213 @@
 @page "/profile"
-@inject HttpClient Http
+@implements IDisposable
+@using System.ComponentModel.DataAnnotations
+@using RouteTimer.Client.Api
+@using RouteTimer.Client.Components
 @using RouteTimer.Contracts.Profile
+@inject IRouteTimerApiClient Api
 
 <PageTitle>Profile | RouteTimer</PageTitle>
 
 <h1>Rider profile</h1>
 <p>Your rider and bike/equipment masses are required for realistic speed predictions.</p>
 
-<form @onsubmit="SaveAsync" @onsubmit:preventDefault>
-    <div>
-        <label for="rider-weight">Rider weight (kg)</label>
-        <input id="rider-weight" type="number" min="30" max="250" step="0.1" required @bind="riderWeightKg" />
-    </div>
-    <div>
-        <label for="bike-weight">Bike and equipment weight (kg)</label>
-        <input id="bike-weight" type="number" min="3" max="60" step="0.1" required @bind="bikeWeightKg" />
-    </div>
-    <button type="submit">Save profile</button>
-</form>
-@if (status is not null)
+@if (isLoading)
 {
-    <p role="status">@status</p>
+    <p data-testid="profile-loading">Loading your current profile...</p>
+}
+else
+{
+    <EditForm EditContext="@editContext" OnValidSubmit="@SaveAsync" novalidate>
+        <DataAnnotationsValidator />
+
+        <div class="profile-form">
+            <div class="profile-field">
+                <label for="rider-weight">Rider weight (kg)</label>
+                <InputNumber id="rider-weight" class="profile-input" @bind-Value="model.RiderWeightKg" step="0.1" />
+                <ValidationMessage For="@(() => model.RiderWeightKg)" />
+            </div>
+
+            <div class="profile-field">
+                <label for="bike-weight">Bike and equipment weight (kg)</label>
+                <InputNumber id="bike-weight" class="profile-input" @bind-Value="model.BikeAndEquipmentWeightKg" step="0.1" />
+                <ValidationMessage For="@(() => model.BikeAndEquipmentWeightKg)" />
+            </div>
+        </div>
+
+        <button data-testid="profile-save" class="profile-save" type="submit" disabled="@(!CanSave)">
+            @(isSaving ? "Saving..." : "Save profile")
+        </button>
+    </EditForm>
+}
+
+@if (showProblem)
+{
+    <div data-testid="profile-problem" class="profile-problem">
+        <ProblemMessage Problem="@saveProblem" FallbackMessage="@problemFallbackMessage" />
+    </div>
+}
+
+@if (!string.IsNullOrWhiteSpace(statusMessage))
+{
+    <p data-testid="profile-status" role="status">@statusMessage</p>
 }
 
 @code {
-    private double riderWeightKg = 75;
-    private double bikeWeightKg = 10;
-    private string? status;
+    private readonly CancellationTokenSource pageCancellation = new();
+    private ProfileFormModel model = new();
+    private EditContext editContext = default!;
+    private bool isLoading = true;
+    private bool isSaving;
+    private bool isFormValid = true;
+    private CancellationTokenSource? activeSaveCancellation;
+    private UpdateProfileRequest? lastSavedRequest;
+    private ApiProblemException? saveProblem;
+    private bool showFallbackProblem;
+    private string? statusMessage;
+
+    private bool showProblem => saveProblem is not null || showFallbackProblem;
+    private string problemFallbackMessage => "We could not save your profile.";
+    private bool CanSave => !isLoading
+        && !isSaving
+        && isFormValid
+        && CurrentRequest() != lastSavedRequest;
 
     protected override async Task OnInitializedAsync()
     {
+        ConfigureEditContext();
+
         try
         {
-            var profile = await Http.GetFromJsonAsync<ProfileResponse>("api/profile");
+            var profile = await Api.GetProfileAsync(pageCancellation.Token);
             if (profile is not null)
             {
-                riderWeightKg = profile.RiderWeightKg;
-                bikeWeightKg = profile.BikeAndEquipmentWeightKg;
+                model = new ProfileFormModel
+                {
+                    RiderWeightKg = profile.RiderWeightKg,
+                    BikeAndEquipmentWeightKg = profile.BikeAndEquipmentWeightKg
+                };
+                lastSavedRequest = new UpdateProfileRequest(profile.RiderWeightKg, profile.BikeAndEquipmentWeightKg);
+                ConfigureEditContext();
             }
+        }
+        catch (ApiProblemException problem)
+        {
+            saveProblem = problem;
         }
         catch (HttpRequestException)
         {
-            // A new rider has no persisted profile yet.
+            showFallbackProblem = true;
         }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (!pageCancellation.IsCancellationRequested)
+            {
+                isLoading = false;
+                UpdateFormValidity();
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        UnsubscribeEditContext();
+        activeSaveCancellation?.Cancel();
+        activeSaveCancellation?.Dispose();
+        pageCancellation.Cancel();
+        pageCancellation.Dispose();
     }
 
     private async Task SaveAsync()
     {
+        if (!CanSave)
+        {
+            return;
+        }
+
+        var request = CurrentRequest();
+        isSaving = true;
+        saveProblem = null;
+        showFallbackProblem = false;
+        statusMessage = null;
+
         try
         {
-            using var response = await Http.PutAsJsonAsync("api/profile", new UpdateProfileRequest(riderWeightKg, bikeWeightKg));
-            status = response.IsSuccessStatusCode ? "Profile saved." : "Profile could not be saved.";
+            activeSaveCancellation?.Dispose();
+            activeSaveCancellation = CancellationTokenSource.CreateLinkedTokenSource(pageCancellation.Token);
+
+            var savedProfile = await Api.UpdateProfileAsync(request, activeSaveCancellation.Token);
+            model = new ProfileFormModel
+            {
+                RiderWeightKg = savedProfile.RiderWeightKg,
+                BikeAndEquipmentWeightKg = savedProfile.BikeAndEquipmentWeightKg
+            };
+            lastSavedRequest = new UpdateProfileRequest(savedProfile.RiderWeightKg, savedProfile.BikeAndEquipmentWeightKg);
+            ConfigureEditContext();
+            statusMessage = "Profile saved.";
+        }
+        catch (ApiProblemException problem)
+        {
+            saveProblem = problem;
         }
         catch (HttpRequestException)
         {
-            status = "Profile could not be saved.";
+            showFallbackProblem = true;
         }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (!pageCancellation.IsCancellationRequested)
+            {
+                isSaving = false;
+                UpdateFormValidity();
+            }
+
+            activeSaveCancellation?.Dispose();
+            activeSaveCancellation = null;
+        }
+    }
+
+    private UpdateProfileRequest CurrentRequest() => new(model.RiderWeightKg, model.BikeAndEquipmentWeightKg);
+
+    private void ConfigureEditContext()
+    {
+        UnsubscribeEditContext();
+        editContext = new EditContext(model);
+        editContext.OnFieldChanged += HandleFieldChanged;
+    }
+
+    private void UnsubscribeEditContext()
+    {
+        if (editContext is not null)
+        {
+            editContext.OnFieldChanged -= HandleFieldChanged;
+        }
+    }
+
+    private void HandleFieldChanged(object? sender, FieldChangedEventArgs args)
+    {
+        saveProblem = null;
+        showFallbackProblem = false;
+        statusMessage = null;
+        UpdateFormValidity();
+        StateHasChanged();
+    }
+
+    private void UpdateFormValidity() => isFormValid = editContext.Validate();
+
+    private sealed class ProfileFormModel
+    {
+        [Range(30d, 250d, ErrorMessage = "Rider weight must be between 30 and 250 kg.")]
+        public double RiderWeightKg { get; set; } = 75;
+
+        [Range(3d, 60d, ErrorMessage = "Bike and equipment weight must be between 3 and 60 kg.")]
+        public double BikeAndEquipmentWeightKg { get; set; } = 10;
     }
 }

@@ -1,16 +1,35 @@
 ﻿@inherits LayoutComponentBase
+
 <div class="page">
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+
     <div class="sidebar">
         <NavMenu />
     </div>
 
-    <main>
-        <div class="top-row px-4">
-            <a href="https://learn.microsoft.com/aspnet/core/" target="_blank">About</a>
-        </div>
+    <div class="page-shell">
+        <header class="top-row">
+            <p class="top-row__title">RouteTimer</p>
 
-        <article class="content px-4">
-            @Body
-        </article>
-    </main>
+            <AuthorizeView>
+                <Authorized>
+                    <nav class="account-links" aria-label="Account">
+                        <a href="authentication/profile">Account</a>
+                        <a href="authentication/logout">Log out</a>
+                    </nav>
+                </Authorized>
+                <NotAuthorized>
+                    <nav class="account-links" aria-label="Authentication">
+                        <a href="authentication/login">Log in</a>
+                    </nav>
+                </NotAuthorized>
+            </AuthorizeView>
+        </header>
+
+        <main id="main-content" tabindex="-1">
+            <article class="content">
+                @Body
+            </article>
+        </main>
+    </div>
 </div>
