@@ -1,0 +1,58 @@
+@using System.Globalization
+@using RouteTimer.Client.Formatting
+@using RouteTimer.Contracts.Jobs
+
+@if (Job is not null)
+{
+    <section aria-label="Job progress">
+        <progress max="100" value="@ProgressValue"></progress>
+        <p>@StageLabel</p>
+        <p>@Job.State</p>
+        <p>Attempt @Job.AttemptCount</p>
+        <p>@RouteTimerFormat.Percentage(Job.ProgressPercent / 100d)</p>
+        @if (!string.IsNullOrWhiteSpace(Job.DiagnosticCode))
+        {
+            <p>@Job.DiagnosticCode</p>
+        }
+        @if (!string.IsNullOrWhiteSpace(Job.DiagnosticMessage))
+        {
+            <p>@Job.DiagnosticMessage</p>
+        }
+    </section>
+}
+
+@code {
+    [Parameter]
+    public JobResponse? Job { get; set; }
+
+    private int ProgressValue => Job is null
+        ? 0
+        : Math.Clamp(Job.ProgressPercent, 0, 100);
+
+    private string StageLabel => Job is null
+        ? string.Empty
+        : Job.ProgressStage switch
+        {
+            "queued" => "Queued",
+            "running" => "Running",
+            "completed" => "Completed",
+            "failed" => "Failed",
+            "cancelled" => "Cancelled",
+            "reading-upload" => "Reading upload",
+            "decoding-fit" => "Decoding FIT",
+            "cleaning-activity" => "Cleaning activity",
+            "saving-activity" => "Saving activity",
+            "queueing-model-rebuild" => "Queueing model rebuild",
+            "loading-evidence" => "Loading evidence",
+            "building-power-model" => "Building power model",
+            "calibrating-physics" => "Calibrating physics",
+            "building-descent-limits" => "Building descent limits",
+            "validating-model" => "Validating model",
+            "saving-model" => "Saving model",
+            "loading-prediction" => "Loading prediction",
+            "processing-route" => "Processing route",
+            "simulating-route" => "Simulating route",
+            "saving-result" => "Saving result",
+            _ => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(Job.ProgressStage.Replace('-', ' '))
+        };
+}

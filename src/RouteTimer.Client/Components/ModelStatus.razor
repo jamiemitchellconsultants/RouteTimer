@@ -1,0 +1,47 @@
+@using RouteTimer.Client.Formatting
+@using RouteTimer.Contracts.Models
+
+@if (Status is not null)
+{
+    <section aria-label="Model status">
+        <p>@(Status.IsReady ? "Ready" : "Not ready")</p>
+
+        @if (!string.IsNullOrWhiteSpace(Status.ValidationStatus))
+        {
+            <p>@Status.ValidationStatus</p>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(Status.BlockingReason))
+        {
+            <p>@Status.BlockingReason</p>
+        }
+
+        <p>Median validation error: @RouteTimerFormat.Percentage(Status.ValidationMedianAbsolutePercentageError)</p>
+        <p>P90 validation error: @RouteTimerFormat.Percentage(Status.ValidationP90AbsolutePercentageError)</p>
+        <p>Model version: @(Status.AlgorithmVersion ?? "—")</p>
+        <p>Created: @RouteTimerFormat.Timestamp(Status.CreatedAt)</p>
+
+        @if (Status.PowerBands.Count > 0)
+        {
+            <ul>
+                @foreach (var band in Status.PowerBands)
+                {
+                    <li>
+                        @band.GradeKey / @band.DurationKey / @RouteTimerFormat.Power(band.TypicalWatts)
+                        <ConfidenceBadge Confidence="@band.Confidence" />
+                    </li>
+                }
+            </ul>
+        }
+
+        @if (Status.RebuildJob is not null)
+        {
+            <JobProgress Job="@Status.RebuildJob" />
+        }
+    </section>
+}
+
+@code {
+    [Parameter]
+    public ModelStatusResponse? Status { get; set; }
+}

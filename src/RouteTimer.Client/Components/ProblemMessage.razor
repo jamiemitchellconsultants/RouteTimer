@@ -1,0 +1,38 @@
+@using RouteTimer.Client.Api
+
+@if (Problem is null)
+{
+    <div role="alert">@FallbackMessage</div>
+}
+else
+{
+    <div role="alert">
+        <p>@Problem.Title</p>
+        <p>@Problem.Code</p>
+        @if (!string.IsNullOrWhiteSpace(Problem.Detail))
+        {
+            <p>@Problem.Detail</p>
+        }
+
+        @if (Problem.Errors.Count > 0)
+        {
+            <ul>
+                @foreach (var entry in Problem.Errors)
+                {
+                    @foreach (var message in entry.Value)
+                    {
+                        <li>@message</li>
+                    }
+                }
+            </ul>
+        }
+    </div>
+}
+
+@code {
+    [Parameter]
+    public ApiProblemException? Problem { get; set; }
+
+    [Parameter]
+    public string FallbackMessage { get; set; } = "Something went wrong.";
+}

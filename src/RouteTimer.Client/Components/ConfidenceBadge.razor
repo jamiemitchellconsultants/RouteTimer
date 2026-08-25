@@ -1,0 +1,21 @@
+@if (!string.IsNullOrWhiteSpace(Confidence))
+{
+    <span class="@CssClass">@($"{Confidence} confidence")</span>
+}
+else
+{
+    <span class="confidence-unknown">Unknown confidence</span>
+}
+
+@code {
+    [Parameter]
+    public string? Confidence { get; set; }
+
+    private string CssClass => Confidence?.Trim().ToLowerInvariant() switch
+    {
+        "high" => "confidence-high",
+        "medium" => "confidence-medium",
+        "low" => "confidence-low",
+        _ => "confidence-unknown"
+    };
+}
