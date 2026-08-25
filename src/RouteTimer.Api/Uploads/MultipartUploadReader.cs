@@ -28,7 +28,7 @@ public static class MultipartUploadReader
         {
             files = (await request.ReadFormAsync(cancellationToken)).Files;
         }
-        catch (BadHttpRequestException exception) when (LooksLikeFormParseFailure(exception))
+        catch (BadHttpRequestException exception)
         {
             throw MultipartUploadException.Malformed(exception);
         }
@@ -36,15 +36,15 @@ public static class MultipartUploadReader
         {
             throw MultipartUploadException.Malformed(exception);
         }
-        catch (IOException exception)
+        catch (InvalidOperationException exception) when (LooksLikeMultipartParseFailure(exception))
         {
             throw MultipartUploadException.Malformed(exception);
         }
-        catch (InvalidOperationException exception) when (LooksLikeFormParseFailure(exception))
+        catch (ArgumentException exception) when (LooksLikeMultipartParseFailure(exception))
         {
             throw MultipartUploadException.Malformed(exception);
         }
-        catch (ArgumentException exception) when (LooksLikeFormParseFailure(exception))
+        catch (Exception exception) when (LooksLikeMultipartParseFailure(exception))
         {
             throw MultipartUploadException.Malformed(exception);
         }
@@ -61,10 +61,15 @@ public static class MultipartUploadReader
         !string.IsNullOrWhiteSpace(contentType) &&
         contentType.Contains("boundary=", StringComparison.OrdinalIgnoreCase);
 
-    private static bool LooksLikeFormParseFailure(Exception exception) =>
+    private static bool LooksLikeMultipartParseFailure(Exception exception) =>
+        exception.GetType().Name.Contains("BadHttpRequest", StringComparison.OrdinalIgnoreCase) ||
+        exception.GetType().Name.Contains("Multipart", StringComparison.OrdinalIgnoreCase) ||
         exception.Message.Contains("multipart", StringComparison.OrdinalIgnoreCase) ||
         exception.Message.Contains("boundary", StringComparison.OrdinalIgnoreCase) ||
-        exception.Message.Contains("form", StringComparison.OrdinalIgnoreCase);
+        exception.Message.Contains("unexpected end", StringComparison.OrdinalIgnoreCase) ||
+        exception.Message.Contains("request content", StringComparison.OrdinalIgnoreCase) ||
+        exception.Message.Contains("end of stream", StringComparison.OrdinalIgnoreCase);
+
 }
 
 public sealed class MultipartUploadException(string code, string message, Exception? innerException = null)
