@@ -1,9 +1,10 @@
 using RouteTimer.Domain.Activities;
 using RouteTimer.Domain.Jobs;
 using RouteTimer.Domain.Models;
-using RouteTimer.Domain.Physics;
+using RouteTimer.Services.Activities;
 using RouteTimer.Services.Jobs;
 using RouteTimer.Services.Persistence;
+using RouteTimer.Services.Physics;
 using RouteTimer.Services.Validation;
 
 namespace RouteTimer.Services.Models;
@@ -20,12 +21,15 @@ namespace RouteTimer.Services.Models;
 public sealed class BuildModelJobHandler(
     IProfileRepository profiles,
     ITrainingActivityRepository activities,
+    ITrainingGeometryEnricher geometryEnricher,
     IPowerModelBuilder builder,
+    IPhysicsCalibrator calibrator,
+    IDescentLimitBuilder descentBuilder,
     IModelValidator validator,
     IRiderModelRepository models) : IJobHandler
 {
     /// <summary>Bump whenever the model-building algorithm or its configuration changes materially.</summary>
-    public const string AlgorithmVersion = "power-model-v1";
+    public const string AlgorithmVersion = RiderModelAggregateValidator.CurrentAlgorithmVersion;
 
     public JobType Handles => JobType.BuildModel;
 
@@ -46,6 +50,8 @@ public sealed class BuildModelJobHandler(
             throw new ModelBuildException("no-eligible-activities", "No eligible training activities are available to build a model.");
         }
 
+        var enrichedActivities = allActivities.Select(geometryEnricher.Enrich).ToArray();
+
         // eligibleCount > 0 does not, by itself, guarantee the builder finds power evidence: today
         // TrainingCleaner's eligibility thresholds happen to make the two equivalent, but that's an
         // implicit cross-module invariant nothing enforces here. Translate the builder's generic
@@ -55,20 +61,23 @@ public sealed class BuildModelJobHandler(
         PowerModel powerModel;
         try
         {
-            powerModel = builder.Build(profile, allActivities);
+            powerModel = builder.Build(profile, enrichedActivities);
         }
         catch (InvalidOperationException)
         {
             throw new ModelBuildException("no-power-evidence", "No eligible training activities have power data available.");
         }
 
-        var model = new RiderModel(powerModel, PhysicalCoefficients.Default, AlgorithmVersion);
+        var calibration = calibrator.Calibrate(profile, enrichedActivities);
+        var descentLimits = descentBuilder.Build(enrichedActivities);
+        var model = new RiderModel(
+            powerModel,
+            calibration.Coefficients,
+            descentLimits,
+            calibration.WasCalibrated,
+            AlgorithmVersion);
+        var validation = validator.Validate(profile, enrichedActivities);
 
-        var validation = validator.Validate(profile, allActivities);
-
-        // Calibration (fitting the physical coefficients to observed data) isn't implemented yet, so
-        // this handler always saves the default coefficients uncalibrated - that's expected to change
-        // once calibration is built.
-        await models.SaveAsync(model, profile, wasCalibrated: false, validation, cancellationToken);
+        await models.SaveAsync(model, profile, validation, cancellationToken);
     }
 }

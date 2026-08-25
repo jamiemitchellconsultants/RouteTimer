@@ -11,4 +11,5 @@ public sealed record CleanRideSample(
     byte? HeartRate,
     byte? Cadence,
     bool CrossesDiscontinuity,
-    double Gradient = 0);
+    double Gradient = 0,
+    double CurvaturePerMetre = 0);

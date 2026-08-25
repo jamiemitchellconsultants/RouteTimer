@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using RouteTimer.Domain.Models;
 using RouteTimer.Services.Persistence;
 
 namespace RouteTimer.Services.Predictions;
@@ -21,8 +22,20 @@ public sealed class PredictionSubmissionService(
 
         var profile = await profiles.GetAsync(cancellationToken)
             ?? throw new PredictionSubmissionException("profile-required", "A rider profile is required before predicting a route.");
-        var model = await models.GetCurrentAsync(cancellationToken)
-            ?? throw new PredictionSubmissionException("model-not-ready", "A rider model is required before predicting a route.");
+        RiderModelSnapshot? model;
+        try
+        {
+            model = await models.GetCurrentAsync(cancellationToken);
+        }
+        catch (InvalidPersistedRiderModelException)
+        {
+            throw new PredictionSubmissionException("invalid-rider-model", "The current rider model is invalid and must be rebuilt.");
+        }
+
+        if (model is null)
+        {
+            throw new PredictionSubmissionException("model-not-ready", "A rider model is required before predicting a route.");
+        }
         var content = await ReadBoundedAsync(upload.Content, cancellationToken);
         if (content.Length == 0)
         {

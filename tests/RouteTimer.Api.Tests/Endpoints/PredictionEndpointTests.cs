@@ -271,7 +271,7 @@ public sealed class PredictionEndpointTests
         var profiles = new ProfileRepository(context);
         await profiles.SaveAsync(new RiderProfile(75, 10), CancellationToken.None);
         var models = new RiderModelRepository(context);
-        await models.SaveAsync(new RiderModel(new PowerModel([], 210), PhysicalCoefficients.Default, "v1"), new RiderProfile(75, 10), false,
+        await models.SaveAsync(new RiderModel(new PowerModel([], 210), PhysicalCoefficients.Default, DescentLimitModel.Conservative, false, "v1"), new RiderProfile(75, 10),
             new ModelValidationSummary(ModelValidationStatus.InsufficientData, null, null), CancellationToken.None);
     }
 

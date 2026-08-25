@@ -12,10 +12,12 @@ public sealed class RiderModelEntity
     public double Crr { get; set; }
     public double CdA { get; set; }
     public bool WasCalibrated { get; set; }
+    public bool DescentWasLearned { get; set; }
     public double GlobalTypicalWatts { get; set; }
     public required string ValidationStatus { get; set; }
     public double? ValidationMedianApe { get; set; }
     public double? ValidationP90Ape { get; set; }
 
     public List<PowerBandEntity> Bands { get; set; } = [];
+    public List<RiderModelDescentLimitEntity> DescentLimits { get; set; } = [];
 }

@@ -4,8 +4,12 @@ using RouteTimer.Domain.Models;
 using RouteTimer.Domain.Physics;
 using RouteTimer.Domain.Profile;
 using RouteTimer.Domain.Routes;
+using RouteTimer.Services.Activities;
 using RouteTimer.Services.Models;
 using RouteTimer.Services.Persistence;
+using RouteTimer.Services.Physics;
+using RouteTimer.Services.Routes;
+using RouteTimer.Services.Tests.Activities;
 using RouteTimer.Services.Validation;
 
 namespace RouteTimer.Services.Tests.Models;
@@ -16,38 +20,141 @@ public sealed class BuildModelJobHandlerTests
     private static readonly PowerModel SampleModel = ModelFixtures.SimpleModel();
 
     [Fact]
-    public async Task Handle_builds_and_saves_a_model_from_the_profile_and_eligible_activities()
+    public async Task Handle_enriches_every_loaded_row_and_saves_the_complete_calibrated_model()
+    {
+        var profiles = new FakeProfileRepository { Profile = SampleProfile };
+        var activities = new FakeTrainingActivityRepository { Activities = [EligibleActivity("eligible"), IneligibleActivity()] };
+        var geometry = new FakeTrainingGeometryEnricher();
+        var builder = new FakePowerModelBuilder { Result = SampleModel };
+        var calibration = new PhysicalCalibrationResult(new PhysicalCoefficients(.96, 1.20, .006, .28), true, "physics-calibrated");
+        var calibrator = new FakePhysicsCalibrator { Result = calibration };
+        var descentModel = LearnedDescentModel();
+        var descents = new FakeDescentLimitBuilder { Result = descentModel };
+        var validation = new ModelValidationSummary(ModelValidationStatus.Passed, .05, .09);
+        var validator = new FakeModelValidator { Result = validation };
+        var models = new FakeRiderModelRepository();
+        var handler = new BuildModelJobHandler(profiles, activities, geometry, builder, calibrator, descents, validator, models);
+
+        await handler.HandleAsync(MakeJob(), CancellationToken.None);
+
+        Assert.Equal(activities.Activities, geometry.Inputs);
+        Assert.Equal(2, geometry.Outputs.Count);
+        Assert.Equal(geometry.Outputs, builder.ReceivedActivities);
+        Assert.Same(builder.ReceivedActivities, calibrator.ReceivedActivities);
+        Assert.Same(builder.ReceivedActivities, descents.ReceivedActivities);
+        Assert.Same(builder.ReceivedActivities, validator.ReceivedActivities);
+        Assert.Equal(0, activities.SaveCount);
+        Assert.Equal(
+            new RiderModel(SampleModel, calibration.Coefficients, descentModel, true, "route-model-v2"),
+            models.Saved!.Value.Model);
+        Assert.Equal(SampleProfile, models.Saved.Value.ProfileSnapshot);
+        Assert.Equal(validation, models.Saved.Value.Validation);
+    }
+
+    [Fact]
+    public async Task Handle_recomputes_legacy_geometry_in_memory_without_persisting_it()
+    {
+        var profiles = new FakeProfileRepository { Profile = SampleProfile };
+        var eligible = LegacyGeometryActivity("eligible", ActivityEligibility.Eligible);
+        var ineligible = LegacyGeometryActivity("ineligible", ActivityEligibility.Ineligible);
+        var activities = new FakeTrainingActivityRepository { Activities = [eligible, ineligible] };
+        var builder = new FakePowerModelBuilder { Result = SampleModel };
+        var calibrator = new FakePhysicsCalibrator();
+        var descents = new FakeDescentLimitBuilder();
+        var validator = new FakeModelValidator();
+        var models = new FakeRiderModelRepository();
+        var handler = new BuildModelJobHandler(
+            profiles,
+            activities,
+            new TrainingGeometryEnricher(RouteProcessingOptions.Default),
+            builder,
+            calibrator,
+            descents,
+            validator,
+            models);
+
+        await handler.HandleAsync(MakeJob(), CancellationToken.None);
+
+        var enriched = Assert.IsAssignableFrom<IReadOnlyList<CleanedActivity>>(builder.ReceivedActivities);
+        Assert.Equal(["eligible", "ineligible"], enriched.Select(activity => activity.Name));
+        Assert.All(enriched.SelectMany(activity => activity.Samples), sample =>
+        {
+            Assert.NotEqual(123, sample.Gradient);
+            Assert.NotEqual(456, sample.CurvaturePerMetre);
+        });
+        Assert.Same(enriched, calibrator.ReceivedActivities);
+        Assert.Same(enriched, descents.ReceivedActivities);
+        Assert.Same(enriched, validator.ReceivedActivities);
+        Assert.All(activities.Activities.SelectMany(activity => activity.Samples), sample =>
+        {
+            Assert.Equal(123, sample.Gradient);
+            Assert.Equal(456, sample.CurvaturePerMetre);
+        });
+        Assert.Equal(0, activities.SaveCount);
+    }
+
+    // Break caught: freshly persisted rows are fit once more than migrated zero-geometry rows before model evidence is built.
+    [Fact]
+    public async Task Handle_builds_equal_geometry_evidence_from_fresh_and_migrated_zero_rows()
+    {
+        var enricher = new TrainingGeometryEnricher(RouteProcessingOptions.Default);
+        var raw = ActivityFixtures.CleanedFrom(ActivityFixtures.NonlinearElevationPoints());
+        var fresh = enricher.Enrich(raw) with { Name = "fresh" };
+        var migrated = raw with
+        {
+            Name = "migrated",
+            Samples = raw.Samples.Select(sample => sample with { Gradient = 0, CurvaturePerMetre = 0 }).ToArray()
+        };
+        var activities = new FakeTrainingActivityRepository { Activities = [fresh, migrated] };
+        var builder = new FakePowerModelBuilder { Result = SampleModel };
+        var handler = new BuildModelJobHandler(
+            new FakeProfileRepository { Profile = SampleProfile },
+            activities,
+            enricher,
+            builder,
+            new FakePhysicsCalibrator(),
+            new FakeDescentLimitBuilder(),
+            new FakeModelValidator(),
+            new FakeRiderModelRepository());
+
+        await handler.HandleAsync(MakeJob(), CancellationToken.None);
+
+        var evidence = Assert.IsAssignableFrom<IReadOnlyList<CleanedActivity>>(builder.ReceivedActivities);
+        Assert.Equal(
+            evidence[0].Samples.Select(sample => (sample.Position.ElevationMetres, sample.Gradient, sample.CurvaturePerMetre)),
+            evidence[1].Samples.Select(sample => (sample.Position.ElevationMetres, sample.Gradient, sample.CurvaturePerMetre)));
+    }
+
+    [Fact]
+    public async Task Handle_saves_fallback_calibration_and_descent_results_as_a_valid_model()
     {
         var profiles = new FakeProfileRepository { Profile = SampleProfile };
         var activities = new FakeTrainingActivityRepository { Activities = ThreeEligibleActivities() };
-        var builder = new FakePowerModelBuilder { Result = SampleModel };
-        var validator = new FakeModelValidator();
+        var calibration = new PhysicalCalibrationResult(PhysicalCoefficients.Default, false, "insufficient-physics-evidence");
         var models = new FakeRiderModelRepository();
-        var handler = new BuildModelJobHandler(profiles, activities, builder, validator, models);
-        var job = MakeJob();
+        var handler = new BuildModelJobHandler(
+            profiles,
+            activities,
+            new FakeTrainingGeometryEnricher(),
+            new FakePowerModelBuilder { Result = SampleModel },
+            new FakePhysicsCalibrator { Result = calibration },
+            new FakeDescentLimitBuilder { Result = DescentLimitModel.Conservative },
+            new FakeModelValidator(),
+            models);
 
-        await handler.HandleAsync(job, CancellationToken.None);
+        await handler.HandleAsync(MakeJob(), CancellationToken.None);
 
-        Assert.NotNull(models.Saved);
-        Assert.Same(SampleModel, models.Saved!.Value.Model.PowerModel);
-        Assert.Equal(PhysicalCoefficients.Default, models.Saved.Value.Model.Coefficients);
-        Assert.Equal(BuildModelJobHandler.AlgorithmVersion, models.Saved.Value.Model.AlgorithmVersion);
-        Assert.Equal(SampleProfile, models.Saved.Value.ProfileSnapshot);
-        Assert.False(models.Saved.Value.WasCalibrated);
-        Assert.Same(SampleProfile, builder.ReceivedProfile);
-        Assert.Same(activities.Activities, builder.ReceivedActivities);
-        Assert.Same(SampleProfile, validator.ReceivedProfile);
-        Assert.Same(activities.Activities, validator.ReceivedActivities);
+        Assert.Equal(
+            new RiderModel(SampleModel, PhysicalCoefficients.Default, DescentLimitModel.Conservative, false, "route-model-v2"),
+            models.Saved!.Value.Model);
     }
 
     [Fact]
     public async Task Handle_throws_permanent_exception_when_profile_is_missing()
     {
-        var profiles = new FakeProfileRepository { Profile = null };
-        var handler = new BuildModelJobHandler(profiles, new FakeTrainingActivityRepository(), new FakePowerModelBuilder(), new FakeModelValidator(), new FakeRiderModelRepository());
-        var job = MakeJob();
+        var handler = CreateHandler(profiles: new FakeProfileRepository { Profile = null });
 
-        var exception = await Assert.ThrowsAsync<ModelBuildException>(() => handler.HandleAsync(job, CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<ModelBuildException>(() => handler.HandleAsync(MakeJob(), CancellationToken.None));
 
         Assert.Equal("profile-missing", exception.Code);
     }
@@ -55,12 +162,10 @@ public sealed class BuildModelJobHandlerTests
     [Fact]
     public async Task Handle_throws_permanent_exception_when_no_activities_are_eligible()
     {
-        var profiles = new FakeProfileRepository { Profile = SampleProfile };
         var activities = new FakeTrainingActivityRepository { Activities = [IneligibleActivity()] };
-        var handler = new BuildModelJobHandler(profiles, activities, new FakePowerModelBuilder(), new FakeModelValidator(), new FakeRiderModelRepository());
-        var job = MakeJob();
+        var handler = CreateHandler(activities: activities);
 
-        var exception = await Assert.ThrowsAsync<ModelBuildException>(() => handler.HandleAsync(job, CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<ModelBuildException>(() => handler.HandleAsync(MakeJob(), CancellationToken.None));
 
         Assert.Equal("no-eligible-activities", exception.Code);
     }
@@ -68,75 +173,83 @@ public sealed class BuildModelJobHandlerTests
     [Fact]
     public async Task Handle_throws_permanent_exception_when_the_builder_finds_no_power_evidence()
     {
-        // eligibleCount > 0 passes (there's an eligible activity), but the builder itself still finds
-        // no power evidence to work with - the scenario the handler's own eligibility pre-check can't
-        // catch, since today it's only reachable via a fake builder (TrainingCleaner's real thresholds
-        // make this combination impossible in practice, which is exactly why the handler must not rely
-        // on that implicit, unenforced cross-module invariant).
-        var profiles = new FakeProfileRepository { Profile = SampleProfile };
-        var activities = new FakeTrainingActivityRepository { Activities = [EligibleActivity(), EligibleActivity(), EligibleActivity()] };
         var builder = new FakePowerModelBuilder { ThrownException = new InvalidOperationException("No eligible power evidence is available.") };
-        var handler = new BuildModelJobHandler(profiles, activities, builder, new FakeModelValidator(), new FakeRiderModelRepository());
-        var job = MakeJob();
+        var handler = CreateHandler(builder: builder);
 
-        var exception = await Assert.ThrowsAsync<ModelBuildException>(() => handler.HandleAsync(job, CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<ModelBuildException>(() => handler.HandleAsync(MakeJob(), CancellationToken.None));
 
         Assert.Equal("no-power-evidence", exception.Code);
     }
 
-    [Fact]
-    public async Task Handle_saves_whatever_insufficient_data_result_the_validator_reports()
+    [Theory]
+    [InlineData(ModelValidationStatus.InsufficientData, null, null)]
+    [InlineData(ModelValidationStatus.Passed, .05, .09)]
+    public async Task Handle_saves_the_validator_summary_unchanged(
+        ModelValidationStatus status,
+        double? median,
+        double? p90)
     {
-        // The eligible-count threshold used to live in this handler; it now lives in IModelValidator
-        // (see ModelValidatorTests). This handler's job is just to pass the validator's verdict through
-        // unchanged to persistence.
-        var profiles = new FakeProfileRepository { Profile = SampleProfile };
-        var activities = new FakeTrainingActivityRepository { Activities = [EligibleActivity(), EligibleActivity(), IneligibleActivity()] };
-        var builder = new FakePowerModelBuilder { Result = SampleModel };
-        var validator = new FakeModelValidator { Result = new ModelValidationSummary(ModelValidationStatus.InsufficientData, null, null) };
+        var validation = new ModelValidationSummary(status, median, p90);
+        var validator = new FakeModelValidator { Result = validation };
         var models = new FakeRiderModelRepository();
-        var handler = new BuildModelJobHandler(profiles, activities, builder, validator, models);
-        var job = MakeJob();
+        var handler = CreateHandler(validator: validator, models: models);
 
-        await handler.HandleAsync(job, CancellationToken.None);
+        await handler.HandleAsync(MakeJob(), CancellationToken.None);
 
-        Assert.Equal(validator.Result, models.Saved!.Value.Validation);
+        Assert.Equal(validation, models.Saved!.Value.Validation);
     }
 
-    [Fact]
-    public async Task Handle_saves_whatever_passed_result_with_scores_the_validator_reports()
-    {
-        var profiles = new FakeProfileRepository { Profile = SampleProfile };
-        var activities = new FakeTrainingActivityRepository { Activities = ThreeEligibleActivities() };
-        var builder = new FakePowerModelBuilder { Result = SampleModel };
-        var validator = new FakeModelValidator { Result = new ModelValidationSummary(ModelValidationStatus.Passed, .05, .09) };
-        var models = new FakeRiderModelRepository();
-        var handler = new BuildModelJobHandler(profiles, activities, builder, validator, models);
-        var job = MakeJob();
-
-        await handler.HandleAsync(job, CancellationToken.None);
-
-        Assert.Equal(validator.Result, models.Saved!.Value.Validation);
-    }
+    private static BuildModelJobHandler CreateHandler(
+        FakeProfileRepository? profiles = null,
+        FakeTrainingActivityRepository? activities = null,
+        FakePowerModelBuilder? builder = null,
+        FakeModelValidator? validator = null,
+        FakeRiderModelRepository? models = null) =>
+        new(
+            profiles ?? new FakeProfileRepository { Profile = SampleProfile },
+            activities ?? new FakeTrainingActivityRepository { Activities = ThreeEligibleActivities() },
+            new FakeTrainingGeometryEnricher(),
+            builder ?? new FakePowerModelBuilder { Result = SampleModel },
+            new FakePhysicsCalibrator(),
+            new FakeDescentLimitBuilder(),
+            validator ?? new FakeModelValidator(),
+            models ?? new FakeRiderModelRepository());
 
     private static AnalysisJob MakeJob() =>
         new(Guid.NewGuid(), JobType.BuildModel, ModelSubject.Id, JobState.Running, 1, "worker-1", DateTimeOffset.UtcNow.AddMinutes(5), DateTimeOffset.UtcNow);
 
-    private static IReadOnlyList<CleanedActivity> ThreeEligibleActivities() => [EligibleActivity(), EligibleActivity(), EligibleActivity()];
+    private static IReadOnlyList<CleanedActivity> ThreeEligibleActivities() =>
+        [EligibleActivity("one"), EligibleActivity("two"), EligibleActivity("three")];
 
-    private static CleanedActivity EligibleActivity()
+    private static CleanedActivity EligibleActivity(string name)
     {
         var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
         var samples = new[] { new CleanRideSample(start, TimeSpan.Zero, new GeoPoint(51, -2, 100), 7, 200, null, null, false, 0) };
-        return new CleanedActivity("Ride", samples, TimeSpan.FromMinutes(20), new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []));
+        return new CleanedActivity(name, samples, TimeSpan.FromMinutes(20), new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []));
     }
 
-    private static CleanedActivity IneligibleActivity()
+    private static CleanedActivity IneligibleActivity() =>
+        LegacyGeometryActivity("ineligible", ActivityEligibility.Ineligible);
+
+    private static CleanedActivity LegacyGeometryActivity(string name, ActivityEligibility eligibility)
     {
         var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
-        var samples = new[] { new CleanRideSample(start, TimeSpan.Zero, new GeoPoint(51, -2, 100), 7, null, null, null, false, 0) };
-        return new CleanedActivity("Short Ride", samples, TimeSpan.FromMinutes(1), new ActivityQuality(ActivityEligibility.Ineligible, 0.1, 0.1, 0.1, 0, new Dictionary<string, int> { ["gap"] = 1 }, ["too-short"]));
+        var samples = new[]
+        {
+            new CleanRideSample(start, TimeSpan.Zero, new GeoPoint(51, -2, 100), 7, eligibility == ActivityEligibility.Eligible ? (ushort)200 : null, null, null, false, 123, 456),
+            new CleanRideSample(start.AddMinutes(20), TimeSpan.FromMinutes(20), new GeoPoint(51.01, -2, 120), 7, eligibility == ActivityEligibility.Eligible ? (ushort)200 : null, null, null, false, 123, 456),
+        };
+        var quality = eligibility == ActivityEligibility.Eligible
+            ? new ActivityQuality(eligibility, 1, 1, 1, 1, new Dictionary<string, int>(), [])
+            : new ActivityQuality(eligibility, .1, .1, .1, 0, new Dictionary<string, int> { ["gap"] = 1 }, ["too-short"]);
+        return new CleanedActivity(name, samples, TimeSpan.FromMinutes(20), quality);
     }
+
+    private static DescentLimitModel LearnedDescentModel() => new(
+        DescentLimitModel.Conservative.Cells.Select((cell, index) =>
+            index == 0
+                ? cell with { Evidence = TimeSpan.FromMinutes(20), ActivityCount = 3, Confidence = ConfidenceLevel.High, IsFallback = false }
+                : cell).ToArray());
 
     private sealed class FakeProfileRepository : IProfileRepository
     {
@@ -150,43 +263,78 @@ public sealed class BuildModelJobHandlerTests
     private sealed class FakeTrainingActivityRepository : ITrainingActivityRepository
     {
         public IReadOnlyList<CleanedActivity> Activities { get; init; } = [];
+        public int SaveCount { get; private set; }
 
-        public Task<Guid> SaveAsync(Guid uploadId, CleanedActivity activity, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<Guid> SaveAsync(Guid uploadId, CleanedActivity activity, CancellationToken cancellationToken)
+        {
+            SaveCount++;
+            return Task.FromResult(Guid.NewGuid());
+        }
 
         public Task<CleanedActivity?> GetAsync(Guid activityId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<IReadOnlyList<CleanedActivity>> GetAllAsync(CancellationToken cancellationToken) => Task.FromResult(Activities);
     }
 
+    private sealed class FakeTrainingGeometryEnricher : ITrainingGeometryEnricher
+    {
+        public List<CleanedActivity> Inputs { get; } = [];
+        public IReadOnlyList<CleanedActivity> Outputs { get; private set; } = [];
+
+        public CleanedActivity Enrich(CleanedActivity activity)
+        {
+            Inputs.Add(activity);
+            var output = activity with { Name = $"enriched-{activity.Name}" };
+            Outputs = [.. Outputs, output];
+            return output;
+        }
+    }
+
     private sealed class FakePowerModelBuilder : IPowerModelBuilder
     {
         public PowerModel? Result { get; init; }
         public InvalidOperationException? ThrownException { get; init; }
-        public RiderProfile? ReceivedProfile { get; private set; }
         public IReadOnlyList<CleanedActivity>? ReceivedActivities { get; private set; }
 
         public PowerModel Build(RiderProfile profile, IReadOnlyList<CleanedActivity> activities)
         {
-            ReceivedProfile = profile;
             ReceivedActivities = activities;
-            if (ThrownException is not null)
-            {
-                throw ThrownException;
-            }
-
+            if (ThrownException is not null) throw ThrownException;
             return Result!;
+        }
+    }
+
+    private sealed class FakePhysicsCalibrator : IPhysicsCalibrator
+    {
+        public PhysicalCalibrationResult Result { get; init; } = new(PhysicalCoefficients.Default, false, "insufficient-physics-evidence");
+        public IReadOnlyList<CleanedActivity>? ReceivedActivities { get; private set; }
+
+        public PhysicalCalibrationResult Calibrate(RiderProfile profile, IReadOnlyList<CleanedActivity> activities)
+        {
+            ReceivedActivities = activities;
+            return Result;
+        }
+    }
+
+    private sealed class FakeDescentLimitBuilder : IDescentLimitBuilder
+    {
+        public DescentLimitModel Result { get; init; } = DescentLimitModel.Conservative;
+        public IReadOnlyList<CleanedActivity>? ReceivedActivities { get; private set; }
+
+        public DescentLimitModel Build(IReadOnlyList<CleanedActivity> activities)
+        {
+            ReceivedActivities = activities;
+            return Result;
         }
     }
 
     private sealed class FakeModelValidator : IModelValidator
     {
         public ModelValidationSummary Result { get; init; } = new(ModelValidationStatus.NotValidated, null, null);
-        public RiderProfile? ReceivedProfile { get; private set; }
         public IReadOnlyList<CleanedActivity>? ReceivedActivities { get; private set; }
 
         public ModelValidationSummary Validate(RiderProfile profile, IReadOnlyList<CleanedActivity> activities)
         {
-            ReceivedProfile = profile;
             ReceivedActivities = activities;
             return Result;
         }
@@ -194,11 +342,11 @@ public sealed class BuildModelJobHandlerTests
 
     private sealed class FakeRiderModelRepository : IRiderModelRepository
     {
-        public (RiderModel Model, RiderProfile ProfileSnapshot, bool WasCalibrated, ModelValidationSummary Validation)? Saved { get; private set; }
+        public (RiderModel Model, RiderProfile ProfileSnapshot, ModelValidationSummary Validation)? Saved { get; private set; }
 
-        public Task<Guid> SaveAsync(RiderModel model, RiderProfile profileSnapshot, bool wasCalibrated, ModelValidationSummary validation, CancellationToken cancellationToken)
+        public Task<Guid> SaveAsync(RiderModel model, RiderProfile profileSnapshot, ModelValidationSummary validation, CancellationToken cancellationToken)
         {
-            Saved = (model, profileSnapshot, wasCalibrated, validation);
+            Saved = (model, profileSnapshot, validation);
             return Task.FromResult(Guid.NewGuid());
         }
 

@@ -36,6 +36,11 @@ namespace RouteTimer.Persistence.Migrations
                     b.Property<bool>("CrossesDiscontinuity")
                         .HasColumnType("boolean");
 
+                    b.Property<double>("CurvaturePerMetre")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("double precision")
+                        .HasDefaultValue(0.0);
+
                     b.Property<double>("ElevationMetres")
                         .HasColumnType("double precision");
 
@@ -306,6 +311,41 @@ namespace RouteTimer.Persistence.Migrations
                     b.ToTable("prediction_segments", (string)null);
                 });
 
+            modelBuilder.Entity("RouteTimer.Persistence.Entities.RiderModelDescentLimitEntity", b =>
+                {
+                    b.Property<Guid>("ModelId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("GradeKey")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("CurvatureKey")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<int>("ActivityCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Confidence")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<double>("EvidenceSeconds")
+                        .HasColumnType("double precision");
+
+                    b.Property<bool>("IsFallback")
+                        .HasColumnType("boolean");
+
+                    b.Property<double>("SpeedCapMetresPerSecond")
+                        .HasColumnType("double precision");
+
+                    b.HasKey("ModelId", "GradeKey", "CurvatureKey");
+
+                    b.ToTable("rider_model_descent_limits", (string)null);
+                });
+
             modelBuilder.Entity("RouteTimer.Persistence.Entities.RiderModelEntity", b =>
                 {
                     b.Property<Guid>("Id")
@@ -328,6 +368,11 @@ namespace RouteTimer.Persistence.Migrations
 
                     b.Property<double>("Crr")
                         .HasColumnType("double precision");
+
+                    b.Property<bool>("DescentWasLearned")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
 
                     b.Property<double>("DrivetrainEfficiency")
                         .HasColumnType("double precision");
@@ -518,6 +563,17 @@ namespace RouteTimer.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("RouteTimer.Persistence.Entities.RiderModelDescentLimitEntity", b =>
+                {
+                    b.HasOne("RouteTimer.Persistence.Entities.RiderModelEntity", "Model")
+                        .WithMany("DescentLimits")
+                        .HasForeignKey("ModelId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Model");
+                });
+
             modelBuilder.Entity("RouteTimer.Persistence.Entities.PredictionEntity", b =>
                 {
                     b.Navigation("Segments");
@@ -526,6 +582,8 @@ namespace RouteTimer.Persistence.Migrations
             modelBuilder.Entity("RouteTimer.Persistence.Entities.RiderModelEntity", b =>
                 {
                     b.Navigation("Bands");
+
+                    b.Navigation("DescentLimits");
                 });
 
             modelBuilder.Entity("RouteTimer.Persistence.Entities.TrainingActivityEntity", b =>

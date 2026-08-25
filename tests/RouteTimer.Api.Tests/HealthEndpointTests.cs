@@ -6,6 +6,12 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using RouteTimer.Persistence;
+using RouteTimer.Domain.Jobs;
+using RouteTimer.Services.Activities;
+using RouteTimer.Services.Jobs;
+using RouteTimer.Services.Models;
+using RouteTimer.Services.Physics;
+using RouteTimer.Services.Predictions;
 
 namespace RouteTimer.Api.Tests;
 
@@ -32,6 +38,22 @@ public sealed class HealthEndpointTests
         using var response = await client.GetAsync("/health/ready");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public void Application_services_resolve_the_complete_build_model_handler_graph()
+    {
+        using var app = new WebApplicationFactory<Program>();
+        using var scope = app.Services.CreateScope();
+
+        Assert.IsType<TrainingGeometryEnricher>(scope.ServiceProvider.GetRequiredService<ITrainingGeometryEnricher>());
+        Assert.IsType<PhysicsCalibrator>(scope.ServiceProvider.GetRequiredService<IPhysicsCalibrator>());
+        Assert.IsType<DescentLimitBuilder>(scope.ServiceProvider.GetRequiredService<IDescentLimitBuilder>());
+        Assert.IsType<DescentSpeedLimiter>(scope.ServiceProvider.GetRequiredService<IDescentSpeedLimiter>());
+        var handler = scope.ServiceProvider.GetServices<IJobHandler>()
+            .Single(candidate => candidate.Handles == JobType.BuildModel);
+
+        Assert.IsType<BuildModelJobHandler>(handler);
     }
 
     private sealed class ReadyHealthApplicationFactory : WebApplicationFactory<Program>

@@ -15,4 +15,5 @@ public sealed class ActivitySampleEntity
     public byte? Cadence { get; set; }
     public bool CrossesDiscontinuity { get; set; }
     public double Gradient { get; set; }
+    public double CurvaturePerMetre { get; set; }
 }

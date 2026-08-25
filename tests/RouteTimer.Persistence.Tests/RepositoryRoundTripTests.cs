@@ -8,6 +8,8 @@ using RouteTimer.Domain.Models;
 using RouteTimer.Domain.Physics;
 using RouteTimer.Domain.Profile;
 using RouteTimer.Domain.Routes;
+using RouteTimer.Services.Activities;
+using RouteTimer.Services.Routes;
 
 namespace RouteTimer.Persistence.Tests;
 
@@ -154,6 +156,65 @@ public sealed class RepositoryRoundTripTests
         Assert.Equal(uploadId, storedActivity.UploadId);
     }
 
+    // Break caught: persistence drops enriched training curvature, so later descent learning sees every sample as straight.
+    [Fact]
+    public async Task Save_training_activity_round_trips_curvature()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new TrainingActivityRepository(context);
+        var start = new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero);
+        var sample = new CleanRideSample(
+            start,
+            TimeSpan.Zero,
+            new GeoPoint(51.1, -2.1, 100),
+            12,
+            180,
+            140,
+            85,
+            false,
+            -.08,
+            .0125);
+        var activity = new CleanedActivity(
+            "Curving Descent",
+            [sample],
+            TimeSpan.FromSeconds(1),
+            new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []));
+
+        var id = await repository.SaveAsync(Guid.NewGuid(), activity, CancellationToken.None);
+        var loaded = await repository.GetAsync(id, CancellationToken.None);
+
+        Assert.NotNull(loaded);
+        Assert.Equal(.0125, Assert.Single(loaded.Samples).CurvaturePerMetre, 10);
+    }
+
+    // Break caught: cleaning persists robust-fit elevations instead of the decoder elevations needed for later idempotent enrichment.
+    [Fact]
+    public async Task Save_training_activity_round_trips_raw_decoder_elevation_after_cleaning()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new TrainingActivityRepository(context);
+        var start = new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero);
+        var elevations = new[] { 100d, 112, 91, 130, 96, 118, 105 };
+        var raw = elevations.Select((elevation, index) => new RawRideSample(
+            start.AddSeconds(index * 5),
+            new GeoPoint(0, index * .00022483, elevation),
+            7,
+            200,
+            140,
+            85,
+            true)).ToArray();
+        var parsed = new ParsedFitActivity("Raw elevations", ActivitySport.Cycling, start, raw, TimeSpan.FromSeconds(30), 150);
+        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed);
+
+        var id = await repository.SaveAsync(Guid.NewGuid(), cleaned, CancellationToken.None);
+        var loaded = await repository.GetAsync(id, CancellationToken.None);
+
+        Assert.NotNull(loaded);
+        Assert.Equal(elevations, loaded.Samples.Select(sample => sample.Position.ElevationMetres));
+    }
+
     [Fact]
     public async Task GetAll_returns_every_saved_training_activity_regardless_of_eligibility()
     {
@@ -195,8 +256,9 @@ public sealed class RepositoryRoundTripTests
         Assert.Equal(comparer.GetHashCode(inOneOrder), comparer.GetHashCode(inAnotherOrder));
     }
 
+    // Break caught: rider-model persistence stores only power/coefficient data and loses immutable descent cells or calibration provenance.
     [Fact]
-    public async Task Save_rider_model_round_trips_bands_coefficients_and_validation_summary()
+    public async Task Save_rider_model_round_trips_calibration_and_all_descent_cells()
     {
         var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         await using var context = new RouteTimerDbContext(options);
@@ -209,16 +271,27 @@ public sealed class RepositoryRoundTripTests
             new PowerBand("descent", "short", 90, TimeSpan.FromMinutes(5), 1, 0.2, ConfidenceLevel.Low)
         };
         var powerModel = new PowerModel(bands, 220);
-        var riderModel = new RiderModel(powerModel, PhysicalCoefficients.Default, "v1");
+        var descentLimits = new DescentLimitModel(DescentLimitModel.Conservative.Cells
+            .Select((cell, index) => cell with
+            {
+                SpeedCapMetresPerSecond = index == 8 ? .75 : 10 + index,
+                Evidence = index == 0 ? TimeSpan.FromSeconds(60) : TimeSpan.FromMinutes(index == 8 ? 20 : 5 + index),
+                ActivityCount = index == 0 ? 1 : index == 8 ? 3 : 2,
+                Confidence = index == 0 ? ConfidenceLevel.Low : index == 8 ? ConfidenceLevel.High : ConfidenceLevel.Medium,
+                IsFallback = index == 0
+            })
+            .ToArray());
+        var riderModel = new RiderModel(powerModel, PhysicalCoefficients.Default, descentLimits, true, "v1");
         var validation = new ModelValidationSummary(ModelValidationStatus.NotValidated, null, null);
 
-        var modelId = await repository.SaveAsync(riderModel, profile, wasCalibrated: false, validation, CancellationToken.None);
+        var modelId = await repository.SaveAsync(riderModel, profile, validation, CancellationToken.None);
         var loaded = await repository.GetAsync(modelId, CancellationToken.None);
 
         Assert.NotNull(loaded);
         Assert.Equal(modelId, loaded.Id);
         Assert.Equal(profile, loaded.ProfileSnapshot);
-        Assert.False(loaded.WasCalibrated);
+        Assert.True(loaded.WasCalibrated);
+        Assert.True(loaded.DescentWasLearned);
         Assert.Equal(validation, loaded.Validation);
         Assert.Equal("v1", loaded.Model.AlgorithmVersion);
         Assert.Equal(PhysicalCoefficients.Default, loaded.Model.Coefficients);
@@ -229,6 +302,129 @@ public sealed class RepositoryRoundTripTests
             var loadedBand = Assert.Single(loaded.Model.PowerModel.Bands, b => b.GradeKey == band.GradeKey && b.DurationKey == band.DurationKey);
             Assert.Equal(band, loadedBand);
         }
+        Assert.Equal(9, loaded.Model.DescentLimits.Cells.Count);
+        Assert.Equal(descentLimits.Cells, loaded.Model.DescentLimits.Cells);
+        Assert.Equal(.75, loaded.Model.DescentLimits.Cells[^1].SpeedCapMetresPerSecond);
+    }
+
+    // Break caught: malformed normalized cells are allowed to leak parser/domain exceptions or construct an invalid aggregate.
+    [Theory]
+    [InlineData("EvidenceSeconds", "-1")]
+    [InlineData("SpeedCapMetresPerSecond", "NaN")]
+    public async Task Get_rider_model_rejects_malformed_persisted_descent_cells(string propertyName, string value)
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new RiderModelRepository(context);
+        var model = new RiderModel(new PowerModel([], 200), PhysicalCoefficients.Default, DescentLimitModel.Conservative, false, "v1");
+        var id = await repository.SaveAsync(model, new RiderProfile(75, 10), new ModelValidationSummary(ModelValidationStatus.NotValidated, null, null), CancellationToken.None);
+        var cell = await context.RiderModelDescentLimits.FirstAsync();
+        switch (propertyName)
+        {
+            case "Confidence": cell.Confidence = value; break;
+            case "EvidenceSeconds": cell.EvidenceSeconds = double.Parse(value); break;
+            case "SpeedCapMetresPerSecond": cell.SpeedCapMetresPerSecond = double.NaN; break;
+        }
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+
+        await Assert.ThrowsAsync<InvalidPersistedRiderModelException>(() => repository.GetAsync(id, CancellationToken.None));
+    }
+
+    // Break caught: Enum.TryParse accepts numeric or whitespace-normalized confidence text that was never canonically persisted.
+    [Theory]
+    [InlineData("1")]
+    [InlineData("0")]
+    [InlineData("+1")]
+    [InlineData("low")]
+    [InlineData("LOW")]
+    [InlineData("Low ")]
+    [InlineData(" Low")]
+    [InlineData("Unknown")]
+    [InlineData("Medium, High")]
+    public async Task Get_rider_model_rejects_noncanonical_persisted_descent_confidence(string confidence)
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new RiderModelRepository(context);
+        var model = new RiderModel(new PowerModel([], 200), PhysicalCoefficients.Default, DescentLimitModel.Conservative, false, "v1");
+        var id = await repository.SaveAsync(model, new RiderProfile(75, 10), new ModelValidationSummary(ModelValidationStatus.NotValidated, null, null), CancellationToken.None);
+        var cell = await context.RiderModelDescentLimits.FirstAsync();
+        cell.Confidence = confidence;
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+
+        await Assert.ThrowsAsync<InvalidPersistedRiderModelException>(() => repository.GetAsync(id, CancellationToken.None));
+    }
+
+    // Break caught: stored provenance disagrees with immutable cells and callers receive contradictory snapshot metadata.
+    [Fact]
+    public async Task Get_rider_model_rejects_descent_learned_flag_that_disagrees_with_cells()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new RiderModelRepository(context);
+        var model = new RiderModel(new PowerModel([], 200), PhysicalCoefficients.Default, DescentLimitModel.Conservative, false, "v1");
+        var id = await repository.SaveAsync(model, new RiderProfile(75, 10), new ModelValidationSummary(ModelValidationStatus.NotValidated, null, null), CancellationToken.None);
+        var entity = await context.RiderModels.SingleAsync();
+        entity.DescentWasLearned = true;
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+
+        await Assert.ThrowsAsync<InvalidPersistedRiderModelException>(() => repository.GetAsync(id, CancellationToken.None));
+    }
+
+    // Break caught: persisted descent provenance/evidence contradictions reconstruct as trusted domain state.
+    [Theory]
+    [InlineData("fallback-confidence")]
+    [InlineData("fallback-covered")]
+    [InlineData("fallback-cap")]
+    [InlineData("learned-evidence")]
+    [InlineData("learned-activities")]
+    [InlineData("learned-low")]
+    [InlineData("learned-high-too-early")]
+    [InlineData("learned-medium-at-full")]
+    public async Task Get_rider_model_rejects_cross_field_descent_contradictions(string kind)
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new RiderModelRepository(context);
+        var model = new RiderModel(new PowerModel([], 200), PhysicalCoefficients.Default, DescentLimitModel.Conservative, false, "v1");
+        var id = await repository.SaveAsync(model, new RiderProfile(75, 10), new ModelValidationSummary(ModelValidationStatus.NotValidated, null, null), CancellationToken.None);
+        var entity = await context.RiderModels.Include(value => value.DescentLimits).SingleAsync();
+        var cell = entity.DescentLimits.Single(value => value.GradeKey == "mild" && value.CurvatureKey == "straight");
+        switch (kind)
+        {
+            case "fallback-confidence":
+                cell.Confidence = "High";
+                break;
+            case "fallback-covered":
+                cell.EvidenceSeconds = 300;
+                cell.ActivityCount = 2;
+                break;
+            case "fallback-cap":
+                cell.SpeedCapMetresPerSecond = 13.01;
+                break;
+            case "learned-evidence":
+                SetLearned(entity, cell, 299, 2, "Medium");
+                break;
+            case "learned-activities":
+                SetLearned(entity, cell, 300, 1, "Medium");
+                break;
+            case "learned-low":
+                SetLearned(entity, cell, 300, 2, "Low");
+                break;
+            case "learned-high-too-early":
+                SetLearned(entity, cell, 300, 2, "High");
+                break;
+            case "learned-medium-at-full":
+                SetLearned(entity, cell, 1200, 3, "Medium");
+                break;
+        }
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+
+        await Assert.ThrowsAsync<InvalidPersistedRiderModelException>(() => repository.GetAsync(id, CancellationToken.None));
     }
 
     [Fact]
@@ -240,11 +436,11 @@ public sealed class RepositoryRoundTripTests
         var profile = new RiderProfile(75, 10);
         var validation = new ModelValidationSummary(ModelValidationStatus.InsufficientData, null, null);
 
-        var firstModel = new RiderModel(new PowerModel([], 100), PhysicalCoefficients.Default, "v1");
-        var firstId = await repository.SaveAsync(firstModel, profile, wasCalibrated: false, validation, CancellationToken.None);
+        var firstModel = new RiderModel(new PowerModel([], 100), PhysicalCoefficients.Default, DescentLimitModel.Conservative, false, "v1");
+        var firstId = await repository.SaveAsync(firstModel, profile, validation, CancellationToken.None);
 
-        var secondModel = new RiderModel(new PowerModel([], 150), PhysicalCoefficients.Default, "v2");
-        var secondId = await repository.SaveAsync(secondModel, profile, wasCalibrated: false, validation, CancellationToken.None);
+        var secondModel = new RiderModel(new PowerModel([], 150), PhysicalCoefficients.Default, DescentLimitModel.Conservative, false, "v2");
+        var secondId = await repository.SaveAsync(secondModel, profile, validation, CancellationToken.None);
 
         var current = await repository.GetCurrentAsync(CancellationToken.None);
 
@@ -267,5 +463,14 @@ public sealed class RepositoryRoundTripTests
 
         Assert.Null(current);
         Assert.Null(missing);
+    }
+
+    private static void SetLearned(RiderModelEntity entity, RiderModelDescentLimitEntity cell, double evidenceSeconds, int activityCount, string confidence)
+    {
+        entity.DescentWasLearned = true;
+        cell.IsFallback = false;
+        cell.EvidenceSeconds = evidenceSeconds;
+        cell.ActivityCount = activityCount;
+        cell.Confidence = confidence;
     }
 }

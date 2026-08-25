@@ -92,13 +92,13 @@ public sealed class PredictionRepositoryTests
         var profiles = new ProfileRepository(context);
         await profiles.SaveAsync(new RiderProfile(75, 10), CancellationToken.None);
         var models = new RiderModelRepository(context);
-        var originalModelId = await models.SaveAsync(new RiderModel(new PowerModel([], 210), PhysicalCoefficients.Default, "v1"), new RiderProfile(75, 10), false,
+        var originalModelId = await models.SaveAsync(new RiderModel(new PowerModel([], 210), PhysicalCoefficients.Default, DescentLimitModel.Conservative, false, "v1"), new RiderProfile(75, 10),
             new ModelValidationSummary(ModelValidationStatus.InsufficientData, null, null), CancellationToken.None);
         var submissions = new PredictionSubmissionService(profiles, models, new PredictionRepository(context), TimeProvider.System);
 
         var created = await submissions.SubmitAsync(new PredictionUpload("route.gpx", new MemoryStream([1, 2, 3])), CancellationToken.None);
         await profiles.SaveAsync(new RiderProfile(80, 11), CancellationToken.None);
-        await models.SaveAsync(new RiderModel(new PowerModel([], 260), PhysicalCoefficients.Default, "v2"), new RiderProfile(80, 11), true,
+        await models.SaveAsync(new RiderModel(new PowerModel([], 260), PhysicalCoefficients.Default, DescentLimitModel.Conservative, true, "v2"), new RiderProfile(80, 11),
             new ModelValidationSummary(ModelValidationStatus.Passed, .05, .08), CancellationToken.None);
 
         var detail = await new PredictionRepository(context).GetAsync(created.PredictionId, CancellationToken.None);
@@ -155,7 +155,7 @@ public sealed class PredictionRepositoryTests
         var models = new RiderModelRepository(context);
         var profile = new RiderProfile(75, 10);
         var validation = new ModelValidationSummary(ModelValidationStatus.Passed, .05, .08);
-        var id = await models.SaveAsync(new RiderModel(new PowerModel([], 200), PhysicalCoefficients.Default, "v1"), profile, false, validation, CancellationToken.None);
+        var id = await models.SaveAsync(new RiderModel(new PowerModel([], 200), PhysicalCoefficients.Default, DescentLimitModel.Conservative, false, "v1"), profile, validation, CancellationToken.None);
         return (await models.GetAsync(id, CancellationToken.None))!;
     }
 }

@@ -7,13 +7,38 @@ namespace RouteTimer.Services.Tests.Activities;
 public sealed class TrainingCleanerTests
 {
     [Fact]
-    public void Clean_excludes_pauses_and_gaps_but_keeps_recorded_zero_power()
+    public void Clean_marks_first_retained_sample_after_gap_without_dropping_it()
+    {
+        var parsed = ActivityFixtures.EligibleRideWithGap(TimeSpan.FromSeconds(11));
+
+        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed);
+
+        var boundary = Assert.Single(cleaned.Samples, sample => sample.CrossesDiscontinuity);
+        Assert.Equal(parsed.Samples[2].Timestamp, boundary.Timestamp);
+        Assert.Equal(TimeSpan.FromSeconds(10), cleaned.MovingDuration);
+    }
+
+    [Fact]
+    public void Clean_marks_next_retained_sample_when_first_post_gap_candidate_is_filtered()
+    {
+        var parsed = ActivityFixtures.RideWithFilteredGapBoundary();
+
+        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed);
+
+        var boundary = Assert.Single(cleaned.Samples, sample => sample.CrossesDiscontinuity);
+        Assert.Equal(parsed.Samples[3].Timestamp, boundary.Timestamp);
+        Assert.Equal(TimeSpan.FromSeconds(5), boundary.MovingElapsed);
+        Assert.Equal(TimeSpan.FromSeconds(5), cleaned.MovingDuration);
+    }
+
+    [Fact]
+    public void Clean_retains_recorded_zero_power_when_marking_a_gap()
     {
         var parsed = ActivityFixtures.WithPauseGapAndCoasting();
 
         var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed);
 
-        Assert.DoesNotContain(cleaned.Samples, sample => sample.CrossesDiscontinuity);
+        Assert.Single(cleaned.Samples, sample => sample.CrossesDiscontinuity);
         Assert.Contains(cleaned.Samples, sample => sample.PowerWatts == 0);
         Assert.Equal(ActivityEligibility.Eligible, cleaned.Quality.Eligibility);
     }
@@ -27,5 +52,18 @@ public sealed class TrainingCleanerTests
 
         Assert.Equal(ActivityEligibility.Ineligible, cleaned.Quality.Eligibility);
         Assert.Contains("insufficient-power-coverage", cleaned.Quality.ReasonCodes);
+    }
+
+    // Break caught: geometry enrichment replaces decoder elevations with fitted elevations before persistence.
+    [Fact]
+    public void Clean_preserves_raw_decoder_elevation_for_nonlinear_profiles()
+    {
+        var parsed = ActivityFixtures.NonlinearElevationRide();
+
+        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed);
+
+        Assert.Equal(
+            parsed.Samples.Select(sample => sample.Position!.Value.ElevationMetres),
+            cleaned.Samples.Select(sample => sample.Position.ElevationMetres));
     }
 }
