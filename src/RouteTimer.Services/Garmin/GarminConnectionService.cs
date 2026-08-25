@@ -120,7 +120,7 @@ public sealed class GarminConnectionService(
         {
             try
             {
-                await adapter.ClearChallengesAsync(cancellationToken);
+                await adapter.ClearChallengesAsync(CancellationToken.None);
             }
             catch (Exception)
             {

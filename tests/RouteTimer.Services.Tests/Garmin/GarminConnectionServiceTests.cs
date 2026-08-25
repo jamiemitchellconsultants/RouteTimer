@@ -444,8 +444,8 @@ public sealed class GarminConnectionServiceTests
 
         await service.DisconnectAsync(cancellation.Token);
 
-        Assert.Equal(1, adapter.ClearCalls);
-        Assert.True(adapter.LastClearCancellationToken.IsCancellationRequested);
+        Assert.Equal(1, adapter.ClearOperations);
+        Assert.False(adapter.LastClearCancellationToken.IsCancellationRequested);
         Assert.Equal(1, repository.DeleteCalls);
         Assert.Null(repository.Current);
     }
@@ -478,8 +478,8 @@ public sealed class GarminConnectionServiceTests
         await validate;
         await disconnect;
 
-        Assert.Equal(1, adapter.ClearCalls);
-        Assert.True(adapter.LastClearCancellationToken.IsCancellationRequested);
+        Assert.Equal(1, adapter.ClearOperations);
+        Assert.False(adapter.LastClearCancellationToken.IsCancellationRequested);
         Assert.Equal(1, repository.DeleteCalls);
         Assert.Null(repository.Current);
     }
@@ -573,6 +573,7 @@ public sealed class GarminConnectionServiceTests
         public int MfaCalls { get; private set; }
         public int ValidateCalls { get; private set; }
         public int ClearCalls { get; private set; }
+        public int ClearOperations { get; private set; }
         public string? LastValidatedToken { get; private set; }
         public CancellationToken LastClearCancellationToken { get; private set; }
 
@@ -635,6 +636,7 @@ public sealed class GarminConnectionServiceTests
                 return Task.FromCanceled(cancellationToken);
             }
 
+            ClearOperations++;
             return ClearException is null ? Task.CompletedTask : Task.FromException(ClearException);
         }
     }
