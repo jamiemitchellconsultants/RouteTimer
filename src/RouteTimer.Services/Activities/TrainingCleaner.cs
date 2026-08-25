@@ -8,9 +8,10 @@ public sealed class TrainingCleaner(RouteProcessingOptions routeOptions) : ITrai
 {
     private static readonly string[] ExclusionKeys = ["paused", "gap", "missing-position", "missing-elevation", "missing-speed", "missing-power", "implausible"];
 
-    public CleanedActivity Clean(ParsedFitActivity activity)
+    public CleanedActivity Clean(ParsedFitActivity activity, string sourceFileName)
     {
         ArgumentNullException.ThrowIfNull(activity);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceFileName);
         _ = routeOptions;
 
         var exclusions = ExclusionKeys.ToDictionary(key => key, _ => 0, StringComparer.Ordinal);
@@ -103,15 +104,30 @@ public sealed class TrainingCleaner(RouteProcessingOptions routeOptions) : ITrai
         if (speedCoverage < .95) reasons.Add("insufficient-speed-coverage");
         if (powerCoverage < .80) reasons.Add("insufficient-power-coverage");
 
+        var metadata = new TrainingActivityMetadata(
+            Path.GetFileName(sourceFileName),
+            activity.StartedAt,
+            activity.EndedAt,
+            NormalizeText(activity.DeviceManufacturer),
+            NormalizeText(activity.DeviceProduct),
+            NonNegativeFinite(activity.DeviceDistanceMetres),
+            NonNegativeFinite(activity.DeviceAscentMetres));
         var cleaned = new CleanedActivity(
             activity.Name,
             samples,
             elapsed,
-            new ActivityQuality(reasons.Count == 0 ? ActivityEligibility.Eligible : ActivityEligibility.Ineligible, positionCoverage, elevationCoverage, speedCoverage, powerCoverage, exclusions, reasons));
+            new ActivityQuality(reasons.Count == 0 ? ActivityEligibility.Eligible : ActivityEligibility.Ineligible, positionCoverage, elevationCoverage, speedCoverage, powerCoverage, exclusions, reasons),
+            metadata);
         return new TrainingGeometryEnricher(routeOptions).Enrich(cleaned);
     }
 
     private static bool HasValidPosition(GeoPoint? position) => position.HasValue && double.IsFinite(position.Value.Latitude) && double.IsFinite(position.Value.Longitude);
 
     private static bool IsValidSpeed(double? speed) => speed is not null && double.IsFinite(speed.Value) && speed.Value >= 0;
+
+    private static string? NormalizeText(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static double? NonNegativeFinite(double? value) =>
+        value is { } number && double.IsFinite(number) && number >= 0 ? number : null;
 }

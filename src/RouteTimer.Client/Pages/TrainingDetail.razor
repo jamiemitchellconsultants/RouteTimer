@@ -1,0 +1,194 @@
+@page "/training/{Id:guid}"
+@implements IDisposable
+@using RouteTimer.Client.Api
+@using RouteTimer.Client.Components
+@using RouteTimer.Client.Formatting
+@using RouteTimer.Contracts.Training
+@inject IRouteTimerApiClient Api
+
+<PageTitle>Training detail | RouteTimer</PageTitle>
+
+<h1>Training activity detail</h1>
+<p>Inspect the stored metadata and quality exclusions for a single uploaded ride.</p>
+
+@if (isLoading)
+{
+    <p data-testid="training-detail-loading">Loading training activity...</p>
+}
+else if (problem is not null || fallbackProblem)
+{
+    <div data-testid="training-detail-error">
+        <ProblemMessage Problem="@problem" FallbackMessage="We could not load the training activity detail." />
+    </div>
+}
+else if (activity is null)
+{
+    <div data-testid="training-detail-not-found" class="training-detail-panel">
+        <p>This training activity was not found.</p>
+        <a href="/training">Back to training</a>
+    </div>
+}
+else
+{
+    <section class="training-detail-panel">
+        <dl data-testid="training-detail-summary" class="training-detail-grid">
+            <div>
+                <dt>Activity ID</dt>
+                <dd>@activity.Summary.Id</dd>
+            </div>
+            <div>
+                <dt>Upload ID</dt>
+                <dd>@activity.Summary.UploadId</dd>
+            </div>
+            <div>
+                <dt>Source file</dt>
+                <dd>@activity.Summary.SourceFileName</dd>
+            </div>
+            <div>
+                <dt>Started</dt>
+                <dd>@DisplayTimestamp(activity.Summary.StartedAt)</dd>
+            </div>
+            <div>
+                <dt>Ended</dt>
+                <dd>@DisplayTimestamp(activity.Summary.EndedAt)</dd>
+            </div>
+            <div>
+                <dt>Manufacturer</dt>
+                <dd>@DisplayText(activity.Summary.DeviceManufacturer)</dd>
+            </div>
+            <div>
+                <dt>Device</dt>
+                <dd>@DisplayText(activity.Summary.DeviceProduct)</dd>
+            </div>
+            <div>
+                <dt>Distance</dt>
+                <dd>@DisplayMetric(RouteTimerFormat.Distance(activity.Summary.DistanceMetres))</dd>
+            </div>
+            <div>
+                <dt>Ascent</dt>
+                <dd>@DisplayMetric(RouteTimerFormat.Ascent(activity.Summary.AscentMetres))</dd>
+            </div>
+            <div>
+                <dt>Moving time</dt>
+                <dd>@RouteTimerFormat.Duration(activity.Summary.MovingSeconds)</dd>
+            </div>
+            <div>
+                <dt>Eligibility</dt>
+                <dd>@RouteTimerText.Sentence(activity.Summary.Eligibility)</dd>
+            </div>
+            <div>
+                <dt>Position coverage</dt>
+                <dd>@RouteTimerFormat.Percentage(activity.Summary.PositionCoverage)</dd>
+            </div>
+            <div>
+                <dt>Elevation coverage</dt>
+                <dd>@RouteTimerFormat.Percentage(activity.Summary.ElevationCoverage)</dd>
+            </div>
+            <div>
+                <dt>Speed coverage</dt>
+                <dd>@RouteTimerFormat.Percentage(activity.Summary.SpeedCoverage)</dd>
+            </div>
+            <div>
+                <dt>Power coverage</dt>
+                <dd>@RouteTimerFormat.Percentage(activity.Summary.PowerCoverage)</dd>
+            </div>
+            <div>
+                <dt>Created</dt>
+                <dd>@RouteTimerFormat.Timestamp(activity.Summary.CreatedAt)</dd>
+            </div>
+        </dl>
+    </section>
+
+    <section class="training-detail-panel">
+        <h2>Reason codes</h2>
+        @if (activity.Summary.ReasonCodes.Count == 0)
+        {
+            <p>None</p>
+        }
+        else
+        {
+            <ul class="training-detail-list">
+                @foreach (var reason in activity.Summary.ReasonCodes.OrderBy(reason => reason, StringComparer.Ordinal))
+                {
+                    <li data-testid="training-detail-reason">@RouteTimerText.Sentence(reason)</li>
+                }
+            </ul>
+        }
+    </section>
+
+    <section class="training-detail-panel">
+        <h2>Exclusion counts</h2>
+        @if (activity.ExclusionCounts.Count == 0)
+        {
+            <p>None</p>
+        }
+        else
+        {
+            <ul class="training-detail-list">
+                @foreach (var exclusion in activity.ExclusionCounts.OrderBy(entry => entry.Key, StringComparer.Ordinal))
+                {
+                    <li data-testid="training-detail-exclusion">@RouteTimerText.Sentence(exclusion.Key) @exclusion.Value</li>
+                }
+            </ul>
+        }
+    </section>
+}
+
+@code {
+    private readonly CancellationTokenSource pageCancellation = new();
+    private TrainingActivityDetailResponse? activity;
+    private ApiProblemException? problem;
+    private bool fallbackProblem;
+    private bool isLoading = true;
+
+    [Parameter]
+    public Guid Id { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        isLoading = true;
+        problem = null;
+        fallbackProblem = false;
+
+        try
+        {
+            activity = await Api.GetTrainingActivityAsync(Id, pageCancellation.Token);
+        }
+        catch (ApiProblemException apiProblem)
+        {
+            problem = apiProblem;
+            activity = null;
+        }
+        catch (HttpRequestException)
+        {
+            fallbackProblem = true;
+            activity = null;
+        }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (!pageCancellation.IsCancellationRequested)
+            {
+                isLoading = false;
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        pageCancellation.Cancel();
+        pageCancellation.Dispose();
+    }
+
+    private static string DisplayText(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "Unavailable" : value;
+
+    private static string DisplayTimestamp(DateTimeOffset? value) =>
+        value is null ? "Unavailable" : RouteTimerFormat.Timestamp(value);
+
+    private static string DisplayMetric(string value) =>
+        value == "—" ? "Unavailable" : value;
+}

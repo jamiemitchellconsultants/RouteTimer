@@ -53,10 +53,14 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
             .OnDelete(DeleteBehavior.Cascade);
 
         var job = modelBuilder.Entity<AnalysisJobEntity>();
-        job.ToTable("analysis_jobs");
+        job.ToTable("analysis_jobs", table => table.HasCheckConstraint("CK_analysis_jobs_progress", "\"ProgressPercent\" BETWEEN 0 AND 100"));
         job.HasKey(entity => entity.Id);
         job.Property(entity => entity.Type).HasMaxLength(64).IsRequired();
         job.Property(entity => entity.State).HasMaxLength(32).IsRequired();
+        job.Property(entity => entity.ProgressStage).HasMaxLength(64).IsRequired();
+        job.Property(entity => entity.StartedAt).HasColumnType("timestamp with time zone");
+        job.Property(entity => entity.UpdatedAt).HasColumnType("timestamp with time zone");
+        job.Property(entity => entity.CompletedAt).HasColumnType("timestamp with time zone");
         job.Property(entity => entity.WorkerId).HasMaxLength(128);
         job.Property(entity => entity.LeaseExpiresAt).HasColumnType("timestamp with time zone");
         job.Property(entity => entity.CreatedAt).HasColumnType("timestamp with time zone");
@@ -64,12 +68,20 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
         job.Property(entity => entity.DiagnosticMessage).HasMaxLength(1024);
         job.HasIndex(entity => new { entity.State, entity.LeaseExpiresAt, entity.CreatedAt });
 
-        // Backs EnqueueIfNotPendingAsync's coalescing: at most one Queued/Running job may exist for a
-        // given (Type, SubjectId) pair, and the database enforces this even under concurrent inserts.
-        job.HasIndex(entity => new { entity.Type, entity.SubjectId })
+        // Backs EnqueueIfNotPendingAsync's queued-job coalescing and ClaimAsync's single-running-job
+        // lease ownership: the database separately enforces at most one Queued row and at most one
+        // Running row for a given (Type, SubjectId) pair, which allows a follow-up queued job to exist
+        // behind an in-flight running job without letting either state duplicate itself.
+        job.HasIndex(
+                [nameof(AnalysisJobEntity.Type), nameof(AnalysisJobEntity.SubjectId)],
+                "IX_analysis_jobs_queued_type_subject")
             .IsUnique()
-            .HasFilter("\"State\" IN ('Queued', 'Running')")
-            .HasDatabaseName("IX_analysis_jobs_active_type_subject");
+            .HasFilter("\"State\" = 'Queued'");
+        job.HasIndex(
+                [nameof(AnalysisJobEntity.Type), nameof(AnalysisJobEntity.SubjectId)],
+                "IX_analysis_jobs_running_type_subject")
+            .IsUnique()
+            .HasFilter("\"State\" = 'Running'");
 
         var profile = modelBuilder.Entity<RiderProfileEntity>();
         profile.ToTable("rider_profile");
@@ -96,6 +108,11 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
         activity.HasKey(entity => entity.Id);
         activity.Property(entity => entity.UploadId).IsRequired();
         activity.Property(entity => entity.Name).HasMaxLength(512).IsRequired();
+        activity.Property(entity => entity.SourceFileName).HasMaxLength(512).IsRequired();
+        activity.Property(entity => entity.StartedAt).HasColumnType("timestamp with time zone");
+        activity.Property(entity => entity.EndedAt).HasColumnType("timestamp with time zone");
+        activity.Property(entity => entity.DeviceManufacturer).HasMaxLength(128);
+        activity.Property(entity => entity.DeviceProduct).HasMaxLength(128);
         activity.Property(entity => entity.Eligibility).HasMaxLength(32).IsRequired();
         activity.Property(entity => entity.CreatedAt).HasColumnType("timestamp with time zone");
         activity.Property(entity => entity.ExclusionCounts)

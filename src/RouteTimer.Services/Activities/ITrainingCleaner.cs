@@ -4,5 +4,5 @@ namespace RouteTimer.Services.Activities;
 
 public interface ITrainingCleaner
 {
-    CleanedActivity Clean(ParsedFitActivity activity);
+    CleanedActivity Clean(ParsedFitActivity activity, string sourceFileName);
 }

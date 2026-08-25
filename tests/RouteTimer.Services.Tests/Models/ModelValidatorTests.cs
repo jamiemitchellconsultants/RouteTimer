@@ -372,14 +372,14 @@ public sealed class ModelValidatorTests
             new CleanRideSample(start, TimeSpan.Zero, new GeoPoint(51, -2, 100), 7, 200, null, null, false, 0),
             new CleanRideSample(start.AddSeconds(movingSeconds), TimeSpan.FromSeconds(movingSeconds), new GeoPoint(51.01, -2, 100), 7, 200, null, null, false, 0),
         };
-        return new CleanedActivity("Ride", samples, TimeSpan.FromSeconds(movingSeconds), new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []));
+        return new CleanedActivity("Ride", samples, TimeSpan.FromSeconds(movingSeconds), new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []), ActivityFixtures.Metadata("ride.fit", start, start.AddSeconds(movingSeconds), null, null, null, null));
     }
 
     private static CleanedActivity IneligibleActivity()
     {
         var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
         var samples = new[] { new CleanRideSample(start, TimeSpan.Zero, new GeoPoint(51, -2, 100), 7, null, null, null, false, 0) };
-        return new CleanedActivity("Short Ride", samples, TimeSpan.FromMinutes(1), new ActivityQuality(ActivityEligibility.Ineligible, 0.1, 0.1, 0.1, 0, new Dictionary<string, int> { ["gap"] = 1 }, ["too-short"]));
+        return new CleanedActivity("Short Ride", samples, TimeSpan.FromMinutes(1), new ActivityQuality(ActivityEligibility.Ineligible, 0.1, 0.1, 0.1, 0, new Dictionary<string, int> { ["gap"] = 1 }, ["too-short"]), ActivityFixtures.Metadata("short-ride.fit", start, start, null, null, null, null));
     }
 
     private static ProcessedRoute EmptyRoute() => new([], 0, 0);

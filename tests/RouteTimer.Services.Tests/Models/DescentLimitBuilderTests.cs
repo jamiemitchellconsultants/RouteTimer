@@ -2,6 +2,7 @@ using RouteTimer.Domain.Activities;
 using RouteTimer.Domain.Models;
 using RouteTimer.Domain.Routes;
 using RouteTimer.Services.Models;
+using RouteTimer.Services.Tests.Activities;
 
 namespace RouteTimer.Services.Tests.Models;
 
@@ -294,7 +295,7 @@ public sealed class DescentLimitBuilderTests
         }
 
         var quality = new ActivityQuality(eligibility, 1, 1, 1, 1, new Dictionary<string, int>(), []);
-        return new CleanedActivity(name, samples, TimeSpan.FromSeconds(elapsed), quality);
+        return new CleanedActivity(name, samples, TimeSpan.FromSeconds(elapsed), quality, ActivityFixtures.Metadata($"{name}.fit", start, start.AddSeconds(elapsed), null, null, null, null));
     }
 
     private static CleanRideSample Sample(

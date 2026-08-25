@@ -1,10 +1,12 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Time.Testing;
 using RouteTimer.Domain.Jobs;
 using RouteTimer.Domain.Models;
 using RouteTimer.Domain.Physics;
 using RouteTimer.Domain.Profile;
 using RouteTimer.Persistence;
+using RouteTimer.Persistence.Entities;
 using RouteTimer.Persistence.Jobs;
 using RouteTimer.Persistence.Repositories;
 using RouteTimer.Services.Persistence;
@@ -14,6 +16,11 @@ namespace RouteTimer.Persistence.Tests.Jobs;
 
 public sealed class PostgresJobQueueTests
 {
+    private static readonly DateTimeOffset QueueNow = new(2026, 8, 25, 12, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset QueueNowPlusOne = QueueNow.AddMinutes(1);
+    private static readonly DateTimeOffset QueueNowPlusTwo = QueueNow.AddMinutes(2);
+    private static readonly DateTimeOffset QueueNowPlusThree = QueueNow.AddMinutes(3);
+
     private static async Task<PostgreSqlContainer> StartDatabaseAsync()
     {
         var database = new PostgreSqlBuilder("postgres:16-alpine").Build();
@@ -42,7 +49,7 @@ public sealed class PostgresJobQueueTests
         var jobIds = new List<Guid>();
         await using (var seedContext = CreateContext(database))
         {
-            var seedQueue = new PostgresJobQueue(seedContext);
+            var seedQueue = new PostgresJobQueue(seedContext, TimeProvider.System);
             for (var i = 0; i < 5; i++)
             {
                 jobIds.Add(await seedQueue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None));
@@ -58,7 +65,7 @@ public sealed class PostgresJobQueueTests
                 var workerContext = CreateContext(database);
                 contexts.Add(workerContext);
                 var workerId = $"worker-{i}";
-                var queue = new PostgresJobQueue(workerContext);
+                var queue = new PostgresJobQueue(workerContext, TimeProvider.System);
                 claimTasks.Add(queue.ClaimAsync(workerId, now, TimeSpan.FromMinutes(5), CancellationToken.None));
             }
 
@@ -84,7 +91,7 @@ public sealed class PostgresJobQueueTests
         await using var database = await StartDatabaseAsync();
         await using var context = CreateContext(database);
         await context.Database.MigrateAsync();
-        var queue = new PostgresJobQueue(context);
+        var queue = new PostgresJobQueue(context, TimeProvider.System);
         var now = DateTimeOffset.UtcNow;
 
         var id = await queue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None);
@@ -103,7 +110,7 @@ public sealed class PostgresJobQueueTests
         await using var database = await StartDatabaseAsync();
         await using var context = CreateContext(database);
         await context.Database.MigrateAsync();
-        var queue = new PostgresJobQueue(context);
+        var queue = new PostgresJobQueue(context, TimeProvider.System);
         var now = DateTimeOffset.UtcNow;
 
         var id = await queue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None);
@@ -123,7 +130,7 @@ public sealed class PostgresJobQueueTests
         await using var database = await StartDatabaseAsync();
         await using var context = CreateContext(database);
         await context.Database.MigrateAsync();
-        var queue = new PostgresJobQueue(context);
+        var queue = new PostgresJobQueue(context, TimeProvider.System);
         var now = DateTimeOffset.UtcNow;
 
         var id = await queue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None);
@@ -140,7 +147,7 @@ public sealed class PostgresJobQueueTests
         await using var database = await StartDatabaseAsync();
         await using var context = CreateContext(database);
         await context.Database.MigrateAsync();
-        var queue = new PostgresJobQueue(context);
+        var queue = new PostgresJobQueue(context, TimeProvider.System);
         var now = DateTimeOffset.UtcNow;
 
         var id = await queue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None);
@@ -151,22 +158,47 @@ public sealed class PostgresJobQueueTests
     }
 
     [Fact]
+    public async Task ReportProgressAsync_is_monotonic_and_owner_guarded()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using var context = CreateContext(database);
+        await context.Database.MigrateAsync();
+        var queue = new PostgresJobQueue(context, TimeProvider.System);
+
+        var id = await queue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None);
+        await queue.ClaimAsync("worker-a", QueueNow, TimeSpan.FromMinutes(2), CancellationToken.None);
+
+        Assert.True(await queue.ReportProgressAsync(id, "worker-a", 25, "running", QueueNowPlusOne, CancellationToken.None));
+        Assert.False(await queue.ReportProgressAsync(id, "worker-a", 24, "running", QueueNowPlusTwo, CancellationToken.None));
+        Assert.False(await queue.ReportProgressAsync(id, "worker-b", 30, "running", QueueNowPlusThree, CancellationToken.None));
+
+        var reloaded = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == id);
+        Assert.Equal(JobState.Running.ToString(), reloaded.State);
+        Assert.Equal(25, reloaded.ProgressPercent);
+        Assert.Equal("running", reloaded.ProgressStage);
+        Assert.Equal(QueueNowPlusOne, reloaded.UpdatedAt);
+    }
+
+    [Fact]
     public async Task CompleteAsync_transitions_a_running_job_to_succeeded()
     {
         await using var database = await StartDatabaseAsync();
         await using var context = CreateContext(database);
         await context.Database.MigrateAsync();
-        var queue = new PostgresJobQueue(context);
+        var queue = new PostgresJobQueue(context, TimeProvider.System);
         var now = DateTimeOffset.UtcNow;
 
         var id = await queue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None);
         await queue.ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), CancellationToken.None);
 
-        var result = await queue.CompleteAsync(id, "worker-a", CancellationToken.None);
+        var completedAt = now.AddMinutes(3);
+        var result = await queue.CompleteAsync(id, "worker-a", completedAt, CancellationToken.None);
 
         Assert.True(result);
         var reloaded = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == id);
         Assert.Equal(JobState.Succeeded.ToString(), reloaded.State);
+        Assert.Equal(completedAt, reloaded.UpdatedAt);
+        Assert.Equal(completedAt, reloaded.CompletedAt);
         Assert.Null(reloaded.WorkerId);
         Assert.Null(reloaded.LeaseExpiresAt);
     }
@@ -177,13 +209,13 @@ public sealed class PostgresJobQueueTests
         await using var database = await StartDatabaseAsync();
         await using var context = CreateContext(database);
         await context.Database.MigrateAsync();
-        var queue = new PostgresJobQueue(context);
+        var queue = new PostgresJobQueue(context, TimeProvider.System);
         var now = DateTimeOffset.UtcNow;
 
         var id = await queue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None);
         await queue.ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), CancellationToken.None);
 
-        var result = await queue.CompleteAsync(id, "worker-b", CancellationToken.None);
+        var result = await queue.CompleteAsync(id, "worker-b", now, CancellationToken.None);
 
         Assert.False(result);
         var reloaded = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == id);
@@ -192,26 +224,86 @@ public sealed class PostgresJobQueueTests
     }
 
     [Fact]
+    public async Task CompleteAsync_sets_100_completed_and_all_terminal_timestamps()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using var context = CreateContext(database);
+        await context.Database.MigrateAsync();
+        var queue = new PostgresJobQueue(context, TimeProvider.System);
+
+        var id = await queue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None);
+        await queue.ClaimAsync("worker-a", QueueNow, TimeSpan.FromMinutes(2), CancellationToken.None);
+        Assert.True(await queue.FailAsync(id, "worker-a", permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Retry me.", now: QueueNowPlusOne, cancellationToken: CancellationToken.None));
+        await queue.ClaimAsync("worker-b", QueueNowPlusTwo, TimeSpan.FromMinutes(2), CancellationToken.None);
+
+        var result = await queue.CompleteAsync(id, "worker-b", QueueNowPlusThree, CancellationToken.None);
+
+        Assert.True(result);
+        var reloaded = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == id);
+        Assert.Equal(JobState.Succeeded.ToString(), reloaded.State);
+        Assert.Equal(100, reloaded.ProgressPercent);
+        Assert.Equal("completed", reloaded.ProgressStage);
+        Assert.Equal(QueueNow, reloaded.StartedAt);
+        Assert.Equal(QueueNowPlusThree, reloaded.UpdatedAt);
+        Assert.Equal(QueueNowPlusThree, reloaded.CompletedAt);
+        Assert.Null(reloaded.WorkerId);
+        Assert.Null(reloaded.LeaseExpiresAt);
+        Assert.Null(reloaded.DiagnosticCode);
+        Assert.Null(reloaded.DiagnosticMessage);
+    }
+
+    [Fact]
     public async Task FailAsync_permanent_transitions_to_failed_and_persists_diagnostic()
     {
         await using var database = await StartDatabaseAsync();
         await using var context = CreateContext(database);
         await context.Database.MigrateAsync();
-        var queue = new PostgresJobQueue(context);
+        var queue = new PostgresJobQueue(context, TimeProvider.System);
         var now = DateTimeOffset.UtcNow;
 
         var id = await queue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None);
         await queue.ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), CancellationToken.None);
 
-        var result = await queue.FailAsync(id, "worker-a", permanent: true, diagnosticCode: "invalid_fit", diagnosticMessage: "The FIT file could not be decoded.", CancellationToken.None);
+        var failedAt = now.AddMinutes(3);
+        var result = await queue.FailAsync(id, "worker-a", permanent: true, diagnosticCode: "invalid_fit", diagnosticMessage: "The FIT file could not be decoded.", now: failedAt, cancellationToken: CancellationToken.None);
 
         Assert.True(result);
         var reloaded = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == id);
         Assert.Equal(JobState.Failed.ToString(), reloaded.State);
         Assert.Equal("invalid_fit", reloaded.DiagnosticCode);
         Assert.Equal("The FIT file could not be decoded.", reloaded.DiagnosticMessage);
+        Assert.Equal(failedAt, reloaded.UpdatedAt);
+        Assert.Equal(failedAt, reloaded.CompletedAt);
         Assert.Null(reloaded.WorkerId);
         Assert.Null(reloaded.LeaseExpiresAt);
+    }
+
+    [Fact]
+    public async Task FailAsync_preserves_progress_and_sets_safe_terminal_state()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using var context = CreateContext(database);
+        await context.Database.MigrateAsync();
+        var queue = new PostgresJobQueue(context, TimeProvider.System);
+
+        var id = await queue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None);
+        await queue.ClaimAsync("worker-a", QueueNow, TimeSpan.FromMinutes(2), CancellationToken.None);
+        Assert.True(await queue.ReportProgressAsync(id, "worker-a", 55, "running", QueueNowPlusOne, CancellationToken.None));
+
+        var result = await queue.FailAsync(id, "worker-a", permanent: true, diagnosticCode: "invalid-fit", diagnosticMessage: "The FIT file could not be decoded.", now: QueueNowPlusTwo, cancellationToken: CancellationToken.None);
+
+        Assert.True(result);
+        var reloaded = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == id);
+        Assert.Equal(JobState.Failed.ToString(), reloaded.State);
+        Assert.Equal(55, reloaded.ProgressPercent);
+        Assert.Equal("failed", reloaded.ProgressStage);
+        Assert.Equal(QueueNow, reloaded.StartedAt);
+        Assert.Equal(QueueNowPlusTwo, reloaded.UpdatedAt);
+        Assert.Equal(QueueNowPlusTwo, reloaded.CompletedAt);
+        Assert.Null(reloaded.WorkerId);
+        Assert.Null(reloaded.LeaseExpiresAt);
+        Assert.Equal("invalid-fit", reloaded.DiagnosticCode);
+        Assert.Equal("The FIT file could not be decoded.", reloaded.DiagnosticMessage);
     }
 
     [Fact]
@@ -220,13 +312,13 @@ public sealed class PostgresJobQueueTests
         await using var database = await StartDatabaseAsync();
         await using var context = CreateContext(database);
         await context.Database.MigrateAsync();
-        var queue = new PostgresJobQueue(context);
+        var queue = new PostgresJobQueue(context, TimeProvider.System);
         var now = DateTimeOffset.UtcNow;
 
         var id = await queue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None);
         await queue.ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), CancellationToken.None);
 
-        var result = await queue.FailAsync(id, "worker-b", permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Stale attempt.", CancellationToken.None);
+        var result = await queue.FailAsync(id, "worker-b", permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Stale attempt.", now: now, cancellationToken: CancellationToken.None);
 
         Assert.False(result);
         var reloaded = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == id);
@@ -241,13 +333,13 @@ public sealed class PostgresJobQueueTests
         await using var database = await StartDatabaseAsync();
         await using var context = CreateContext(database);
         await context.Database.MigrateAsync();
-        var queue = new PostgresJobQueue(context);
+        var queue = new PostgresJobQueue(context, TimeProvider.System);
         var now = DateTimeOffset.UtcNow;
 
         var id = await queue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None);
         await queue.ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), CancellationToken.None);
 
-        var result = await queue.FailAsync(id, "worker-a", permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Transient failure.", CancellationToken.None);
+        var result = await queue.FailAsync(id, "worker-a", permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Transient failure.", now: now, cancellationToken: CancellationToken.None);
 
         Assert.True(result);
         var reloaded = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == id);
@@ -268,7 +360,7 @@ public sealed class PostgresJobQueueTests
         await using var database = await StartDatabaseAsync();
         await using var context = CreateContext(database);
         await context.Database.MigrateAsync();
-        var queue = new PostgresJobQueue(context);
+        var queue = new PostgresJobQueue(context, TimeProvider.System);
         var now = DateTimeOffset.UtcNow;
 
         var id = await queue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None);
@@ -281,12 +373,12 @@ public sealed class PostgresJobQueueTests
             Assert.Equal(attempt, claimed!.AttemptCount);
             if (attempt < 3)
             {
-                var result = await queue.FailAsync(id, workerId, permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Transient failure.", CancellationToken.None);
+                var result = await queue.FailAsync(id, workerId, permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Transient failure.", now: now.AddMinutes(attempt), cancellationToken: CancellationToken.None);
                 Assert.True(result);
             }
         }
 
-        var finalResult = await queue.FailAsync(id, "worker-3", permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Out of attempts.", CancellationToken.None);
+        var finalResult = await queue.FailAsync(id, "worker-3", permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Out of attempts.", now: now.AddMinutes(3), cancellationToken: CancellationToken.None);
 
         Assert.True(finalResult);
         var reloaded = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == id);
@@ -302,19 +394,19 @@ public sealed class PostgresJobQueueTests
         await context.Database.MigrateAsync();
         var model = await SaveModelAsync(context);
         var submission = await new PredictionRepository(context).CreateQueuedAsync(Creation(model), CancellationToken.None);
-        var queue = new PostgresJobQueue(context);
+        var queue = new PostgresJobQueue(context, TimeProvider.System);
         var now = DateTimeOffset.UtcNow;
 
         for (var attempt = 1; attempt <= 2; attempt++)
         {
             Assert.NotNull(await queue.ClaimAsync($"worker-{attempt}", now.AddMinutes(attempt), TimeSpan.FromMinutes(2), CancellationToken.None));
-            Assert.True(await queue.FailAsync(submission.JobId, $"worker-{attempt}", permanent: false, "processing-error", "Transient failure.", CancellationToken.None));
+            Assert.True(await queue.FailAsync(submission.JobId, $"worker-{attempt}", permanent: false, "processing-error", "Transient failure.", now.AddMinutes(attempt), CancellationToken.None));
             var queued = await context.Predictions.AsNoTracking().SingleAsync(entity => entity.Id == submission.PredictionId);
             Assert.Equal(PredictionState.Queued.ToString(), queued.State);
         }
 
         Assert.NotNull(await queue.ClaimAsync("worker-3", now.AddMinutes(3), TimeSpan.FromMinutes(2), CancellationToken.None));
-        Assert.True(await queue.FailAsync(submission.JobId, "worker-3", permanent: false, "processing-error", "Terminal failure.", CancellationToken.None));
+        Assert.True(await queue.FailAsync(submission.JobId, "worker-3", permanent: false, "processing-error", "Terminal failure.", now.AddMinutes(3), CancellationToken.None));
 
         var job = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == submission.JobId);
         var prediction = await context.Predictions.AsNoTracking().SingleAsync(entity => entity.Id == submission.PredictionId);
@@ -351,9 +443,10 @@ public sealed class PostgresJobQueueTests
 
         await using (var failingContext = CreateContext(database))
         {
-            var queue = new PostgresJobQueue(failingContext);
-            Assert.NotNull(await queue.ClaimAsync("worker-a", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(2), CancellationToken.None));
-            await Assert.ThrowsAsync<DbUpdateException>(() => queue.FailAsync(jobId, "worker-a", permanent: true, "invalid-route", "Permanent failure.", CancellationToken.None));
+            var queue = new PostgresJobQueue(failingContext, TimeProvider.System);
+            var now = new DateTimeOffset(2026, 8, 25, 12, 0, 0, TimeSpan.Zero);
+            Assert.NotNull(await queue.ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), CancellationToken.None));
+            await Assert.ThrowsAsync<DbUpdateException>(() => queue.FailAsync(jobId, "worker-a", permanent: true, "invalid-route", "Permanent failure.", now, CancellationToken.None));
         }
 
         await using var verify = CreateContext(database);
@@ -362,6 +455,271 @@ public sealed class PostgresJobQueueTests
         Assert.Equal(JobState.Running.ToString(), job.State);
         Assert.Equal("worker-a", job.WorkerId);
         Assert.Equal(PredictionState.Queued.ToString(), prediction.State);
+    }
+
+    [Fact]
+    public async Task CancelAsync_clears_ownership_and_makes_terminal_row_immutable()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using var context = CreateContext(database);
+        await context.Database.MigrateAsync();
+        var model = await SaveModelAsync(context);
+        var submission = await new PredictionRepository(context).CreateQueuedAsync(Creation(model), CancellationToken.None);
+        var queue = new PostgresJobQueue(context, TimeProvider.System);
+
+        await queue.ClaimAsync("worker-a", QueueNow, TimeSpan.FromMinutes(2), CancellationToken.None);
+        Assert.True(await queue.ReportProgressAsync(submission.JobId, "worker-a", 45, "running", QueueNowPlusOne, CancellationToken.None));
+
+        var cancelled = await queue.CancelAsync(submission.JobId, QueueNowPlusTwo, CancellationToken.None);
+
+        Assert.True(cancelled);
+        var job = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == submission.JobId);
+        var prediction = await context.Predictions.AsNoTracking().SingleAsync(entity => entity.Id == submission.PredictionId);
+        Assert.Equal(JobState.Cancelled.ToString(), job.State);
+        Assert.Equal(45, job.ProgressPercent);
+        Assert.Equal("cancelled", job.ProgressStage);
+        Assert.Equal(QueueNow, job.StartedAt);
+        Assert.Equal(QueueNowPlusTwo, job.UpdatedAt);
+        Assert.Equal(QueueNowPlusTwo, job.CompletedAt);
+        Assert.Null(job.WorkerId);
+        Assert.Null(job.LeaseExpiresAt);
+        Assert.Equal(PredictionState.Cancelled.ToString(), prediction.State);
+        Assert.Equal(new[] { "prediction-cancelled" }, prediction.Warnings);
+        Assert.Equal(QueueNowPlusTwo, prediction.CompletedAt);
+
+        Assert.False(await queue.ReportProgressAsync(submission.JobId, "worker-a", 60, "running", QueueNowPlusThree, CancellationToken.None));
+        Assert.False(await queue.CompleteAsync(submission.JobId, "worker-a", QueueNowPlusThree, CancellationToken.None));
+        Assert.False(await queue.FailAsync(submission.JobId, "worker-a", permanent: true, diagnosticCode: "ignored", diagnosticMessage: "ignored", now: QueueNowPlusThree, cancellationToken: CancellationToken.None));
+        Assert.False(await queue.CancelAsync(submission.JobId, QueueNowPlusThree, CancellationToken.None));
+
+        var immutable = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == submission.JobId);
+        Assert.Equal(JobState.Cancelled.ToString(), immutable.State);
+        Assert.Equal(45, immutable.ProgressPercent);
+        Assert.Equal(QueueNowPlusTwo, immutable.CompletedAt);
+    }
+
+    [Fact]
+    public async Task Concurrent_cancel_and_fail_allow_exactly_one_terminal_transition_from_stale_tracked_entities()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using (var migrationContext = CreateContext(database))
+        {
+            await migrationContext.Database.MigrateAsync();
+        }
+
+        Guid jobId;
+        Guid predictionId;
+        await using (var seedContext = CreateContext(database))
+        {
+            var model = await SaveModelAsync(seedContext);
+            var submission = await new PredictionRepository(seedContext).CreateQueuedAsync(Creation(model), CancellationToken.None);
+            jobId = submission.JobId;
+            predictionId = submission.PredictionId;
+            await new PostgresJobQueue(seedContext, TimeProvider.System).ClaimAsync("worker-a", QueueNow, TimeSpan.FromMinutes(2), CancellationToken.None);
+            await seedContext.Database.ExecuteSqlRawAsync("""
+                CREATE FUNCTION delay_terminal_job_update() RETURNS trigger AS $$
+                BEGIN
+                    IF OLD."State" = 'Running' AND NEW."State" IN ('Cancelled', 'Failed') THEN
+                        PERFORM pg_sleep(0.2);
+                    END IF;
+                    RETURN NEW;
+                END $$ LANGUAGE plpgsql;
+                CREATE TRIGGER delay_terminal_job_update BEFORE UPDATE ON analysis_jobs
+                FOR EACH ROW EXECUTE FUNCTION delay_terminal_job_update();
+                """);
+        }
+
+        await using var cancelContext = CreateContext(database);
+        await using var failContext = CreateContext(database);
+        await cancelContext.Jobs.SingleAsync(entity => entity.Id == jobId);
+        await cancelContext.Predictions.SingleAsync(entity => entity.Id == predictionId);
+        await failContext.Jobs.SingleAsync(entity => entity.Id == jobId);
+        await failContext.Predictions.SingleAsync(entity => entity.Id == predictionId);
+        var cancelTask = new PostgresJobQueue(cancelContext, TimeProvider.System).CancelAsync(jobId, QueueNowPlusOne, CancellationToken.None);
+        var failTask = new PostgresJobQueue(failContext, TimeProvider.System).FailAsync(jobId, "worker-a", true, "failed", "failure", QueueNowPlusTwo, CancellationToken.None);
+        var results = await Task.WhenAll(cancelTask, failTask);
+
+        await using var verifyContext = CreateContext(database);
+        var job = await verifyContext.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == jobId);
+        var prediction = await verifyContext.Predictions.AsNoTracking().SingleAsync(entity => entity.Id == predictionId);
+        Assert.Equal(1, results.Count(result => result));
+        var expectedJobState = results[0] ? JobState.Cancelled : JobState.Failed;
+        var expectedPredictionState = results[0] ? PredictionState.Cancelled : PredictionState.Failed;
+        Assert.Equal(expectedJobState.ToString(), job.State);
+        Assert.Equal(expectedPredictionState.ToString(), prediction.State);
+        Assert.Equal(results[0] ? QueueNowPlusOne : QueueNowPlusTwo, job.CompletedAt);
+        Assert.Null(job.WorkerId);
+        Assert.Null(job.LeaseExpiresAt);
+    }
+
+    [Fact]
+    public async Task Enqueue_uses_the_injected_time_provider_for_created_and_updated_timestamps()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using var context = CreateContext(database);
+        await context.Database.MigrateAsync();
+        var clock = new FakeTimeProvider(QueueNow);
+        var queue = new PostgresJobQueue(context, clock);
+
+        var directId = await queue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        var conditionalId = await queue.EnqueueIfNotPendingAsync(JobType.BuildModel, Guid.NewGuid(), CancellationToken.None);
+
+        var direct = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == directId);
+        var conditional = await context.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == conditionalId);
+        Assert.Equal(QueueNow, direct.CreatedAt);
+        Assert.Equal(QueueNow, direct.UpdatedAt);
+        Assert.Equal(QueueNowPlusOne, conditional.CreatedAt);
+        Assert.Equal(QueueNowPlusOne, conditional.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task JobRepository_GetLatestAsync_returns_the_newest_job_for_type_and_subject()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using var context = CreateContext(database);
+        await context.Database.MigrateAsync();
+        var subjectId = ModelSubject.Id;
+        var expectedId = Guid.NewGuid();
+        context.Jobs.AddRange(
+            JobEntity(Guid.NewGuid(), JobType.BuildModel, subjectId, JobState.Succeeded, QueueNow),
+            JobEntity(Guid.NewGuid(), JobType.ParseTraining, subjectId, JobState.Failed, QueueNowPlusThree),
+            JobEntity(Guid.NewGuid(), JobType.BuildModel, Guid.NewGuid(), JobState.Failed, QueueNowPlusThree),
+            JobEntity(expectedId, JobType.BuildModel, subjectId, JobState.Failed, QueueNowPlusTwo));
+        await context.SaveChangesAsync();
+
+        var latest = await new JobRepository(context).GetLatestAsync(JobType.BuildModel, subjectId, CancellationToken.None);
+
+        Assert.NotNull(latest);
+        Assert.Equal(expectedId, latest!.Id);
+        Assert.Equal(JobType.BuildModel, latest.Type);
+        Assert.Equal(subjectId, latest.SubjectId);
+        Assert.Equal(QueueNowPlusTwo, latest.CreatedAt);
+    }
+
+    [Fact]
+    public async Task JobRepository_GetLatestAsync_prefers_updated_at_when_build_jobs_share_created_at()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using var context = CreateContext(database);
+        await context.Database.MigrateAsync();
+        var subjectId = ModelSubject.Id;
+        var expectedId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+        var otherId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        var createdAt = QueueNow;
+        var expected = JobEntity(expectedId, JobType.BuildModel, subjectId, JobState.Failed, createdAt);
+        expected.UpdatedAt = QueueNowPlusTwo;
+        var other = JobEntity(otherId, JobType.BuildModel, subjectId, JobState.Running, createdAt);
+        other.UpdatedAt = QueueNowPlusOne;
+        context.Jobs.AddRange(expected, other);
+        await context.SaveChangesAsync();
+
+        var latest = await new JobRepository(context).GetLatestAsync(JobType.BuildModel, subjectId, CancellationToken.None);
+
+        Assert.NotNull(latest);
+        Assert.Equal(expectedId, latest!.Id);
+        Assert.Equal(JobState.Failed, latest.State);
+        Assert.Equal(QueueNowPlusTwo, latest.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task Expired_running_job_can_be_reclaimed_without_losing_started_time_or_progress()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using var context = CreateContext(database);
+        await context.Database.MigrateAsync();
+        var queue = new PostgresJobQueue(context, TimeProvider.System);
+
+        var id = await queue.EnqueueAsync(JobType.ParseTraining, Guid.NewGuid(), CancellationToken.None);
+        await queue.ClaimAsync("worker-a", QueueNow, TimeSpan.FromMinutes(2), CancellationToken.None);
+        Assert.True(await queue.ReportProgressAsync(id, "worker-a", 60, "running", QueueNowPlusOne, CancellationToken.None));
+
+        var reclaimed = await queue.ClaimAsync("worker-b", QueueNowPlusThree, TimeSpan.FromMinutes(2), CancellationToken.None);
+
+        Assert.NotNull(reclaimed);
+        Assert.Equal(id, reclaimed!.Id);
+        Assert.Equal("worker-b", reclaimed.WorkerId);
+        Assert.Equal(2, reclaimed.AttemptCount);
+        Assert.Equal(60, reclaimed.ProgressPercent);
+        Assert.Equal(QueueNow, reclaimed.StartedAt);
+        Assert.Equal("running", reclaimed.ProgressStage);
+    }
+
+    [Fact]
+    public async Task EnqueueIfNotPendingAsync_creates_one_queued_successor_when_a_build_is_running()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using var context = CreateContext(database);
+        await context.Database.MigrateAsync();
+        var queue = new PostgresJobQueue(context, TimeProvider.System);
+        var subjectId = ModelSubject.Id;
+
+        var runningId = await queue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None);
+        await queue.ClaimAsync("worker-a", QueueNow, TimeSpan.FromMinutes(2), CancellationToken.None);
+
+        var successorId = await queue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None);
+
+        Assert.NotEqual(runningId, successorId);
+        var jobs = await context.Jobs.AsNoTracking()
+            .Where(job => job.Type == JobType.BuildModel.ToString() && job.SubjectId == subjectId)
+            .OrderBy(job => job.CreatedAt)
+            .ToListAsync();
+        Assert.Equal(2, jobs.Count);
+        Assert.Equal(JobState.Running.ToString(), jobs[0].State);
+        Assert.Equal(JobState.Queued.ToString(), jobs[1].State);
+        Assert.Equal(successorId, jobs[1].Id);
+    }
+
+    [Fact]
+    public async Task Concurrent_EnqueueIfNotPendingAsync_calls_coalesce_to_the_same_queued_successor_while_a_build_is_running()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using (var migrationContext = CreateContext(database))
+        {
+            await migrationContext.Database.MigrateAsync();
+        }
+
+        var subjectId = ModelSubject.Id;
+        await using (var runningContext = CreateContext(database))
+        {
+            var runningQueue = new PostgresJobQueue(runningContext, TimeProvider.System);
+            await runningQueue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None);
+            await runningQueue.ClaimAsync("worker-a", QueueNow, TimeSpan.FromMinutes(2), CancellationToken.None);
+        }
+
+        var enqueueTasks = new List<Task<Guid>>();
+        var contexts = new List<RouteTimerDbContext>();
+        try
+        {
+            for (var i = 0; i < 5; i++)
+            {
+                var workerContext = CreateContext(database);
+                contexts.Add(workerContext);
+                var queue = new PostgresJobQueue(workerContext, TimeProvider.System);
+                enqueueTasks.Add(queue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None));
+            }
+
+            var results = await Task.WhenAll(enqueueTasks);
+
+            Assert.Single(results.Distinct());
+
+            await using var verifyContext = CreateContext(database);
+            var jobs = await verifyContext.Jobs.AsNoTracking()
+                .Where(job => job.Type == JobType.BuildModel.ToString() && job.SubjectId == subjectId)
+                .OrderBy(job => job.CreatedAt)
+                .ToListAsync();
+            Assert.Equal(2, jobs.Count);
+            Assert.Equal(JobState.Running.ToString(), jobs[0].State);
+            Assert.Equal(JobState.Queued.ToString(), jobs[1].State);
+            Assert.All(results, result => Assert.Equal(jobs[1].Id, result));
+        }
+        finally
+        {
+            foreach (var workerContext in contexts)
+            {
+                await workerContext.DisposeAsync();
+            }
+        }
     }
 
     [Fact]
@@ -382,7 +740,7 @@ public sealed class PostgresJobQueueTests
             {
                 var workerContext = CreateContext(database);
                 contexts.Add(workerContext);
-                var queue = new PostgresJobQueue(workerContext);
+                var queue = new PostgresJobQueue(workerContext, TimeProvider.System);
                 enqueueTasks.Add(queue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None));
             }
 
@@ -412,13 +770,13 @@ public sealed class PostgresJobQueueTests
         await using var database = await StartDatabaseAsync();
         await using var context = CreateContext(database);
         await context.Database.MigrateAsync();
-        var queue = new PostgresJobQueue(context);
+        var queue = new PostgresJobQueue(context, TimeProvider.System);
         var subjectId = ModelSubject.Id;
         var now = DateTimeOffset.UtcNow;
 
         var firstId = await queue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None);
         await queue.ClaimAsync("worker-a", now, TimeSpan.FromMinutes(2), CancellationToken.None);
-        await queue.CompleteAsync(firstId, "worker-a", CancellationToken.None);
+        await queue.CompleteAsync(firstId, "worker-a", now, CancellationToken.None);
 
         var secondId = await queue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None);
 
@@ -433,7 +791,7 @@ public sealed class PostgresJobQueueTests
         await using var database = await StartDatabaseAsync();
         await using var context = CreateContext(database);
         await context.Database.MigrateAsync();
-        var queue = new PostgresJobQueue(context);
+        var queue = new PostgresJobQueue(context, TimeProvider.System);
         var subjectId = ModelSubject.Id;
         var now = DateTimeOffset.UtcNow;
 
@@ -442,7 +800,7 @@ public sealed class PostgresJobQueueTests
         // Transient (non-permanent) failure with attempts remaining returns the job to Queued rather
         // than Failed - the unique index still guards it, so a later caller must still coalesce onto
         // this same row instead of inserting a duplicate.
-        await queue.FailAsync(firstId, "worker-a", permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Transient failure.", CancellationToken.None);
+        await queue.FailAsync(firstId, "worker-a", permanent: false, diagnosticCode: "timeout", diagnosticMessage: "Transient failure.", now: now, cancellationToken: CancellationToken.None);
 
         var secondId = await queue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None);
 
@@ -454,19 +812,18 @@ public sealed class PostgresJobQueueTests
 
     /// <summary>
     /// Reproduces, deterministically, the narrow race the code guards against: a racing insert fails
-    /// with a unique-index conflict against a job that is still Queued/Running at that exact instant,
-    /// but that job is claimed and completed (by a different connection) before the fallback lookup for
-    /// "who won" runs - so that lookup finds nothing. EnqueueIfNotPendingAsync must retry its insert in
-    /// that case rather than letting an InvalidOperationException from an empty sequence escape (which
-    /// would otherwise surface as a spurious failure of an unrelated, already-successful caller, e.g.
+    /// with a unique-index conflict against a job that is still Queued at that exact instant, but that
+    /// queued row becomes terminal (by a different connection) before the fallback lookup for "who won"
+    /// runs - so that lookup finds nothing. EnqueueIfNotPendingAsync must retry its insert in that case
+    /// rather than letting an InvalidOperationException from an empty sequence escape (which would
+    /// otherwise surface as a spurious failure of an unrelated, already-successful caller, e.g.
     /// ParseTrainingJobHandler after it already saved a parsed activity).
     ///
     /// Postgres only checks the unique constraint against rows committed at insert time, so genuinely
-    /// reproducing "conflict, then the row disappears before the next statement" requires the completion
-    /// to happen inside the single await gap between the racing insert's failure and its own fallback
-    /// SELECT - not just "at some point during the test". A SaveChangesInterceptor gives us that precise
-    /// hook: EF Core invokes SaveChangesFailedAsync synchronously, while still inside the failing
-    /// SaveChangesAsync call, before the exception is handed back to our code's catch block.
+    /// reproducing "pre-check sees no queued job, insert conflicts, then the row leaves Queued before
+    /// the fallback lookup" requires the queued row to appear inside the racing SaveChangesAsync call
+    /// and the terminal transition to happen before the exception is handed back to our code's catch
+    /// block. A SaveChangesInterceptor gives us those precise hooks.
     /// </summary>
     [Fact]
     public async Task EnqueueIfNotPendingAsync_retries_once_when_the_conflicting_job_becomes_terminal_before_the_fallback_lookup_runs()
@@ -479,26 +836,33 @@ public sealed class PostgresJobQueueTests
 
         var subjectId = ModelSubject.Id;
         await using var completerContext = CreateContext(database);
-        var completerQueue = new PostgresJobQueue(completerContext);
-        var conflictingId = await completerQueue.EnqueueAsync(JobType.BuildModel, subjectId, CancellationToken.None);
-        await completerQueue.ClaimAsync("worker-a", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5), CancellationToken.None);
+        var completerQueue = new PostgresJobQueue(completerContext, TimeProvider.System);
+        Guid? conflictingId = null;
 
-        // Fires from inside the racing context's own failing SaveChangesAsync call - i.e. strictly
-        // between its failed insert and its fallback SELECT - and completes the conflicting job there,
-        // via a wholly separate connection, so the fallback SELECT is guaranteed to find nothing active.
-        var interceptor = new CompleteJobOnSaveFailureInterceptor(
-            () => completerQueue.CompleteAsync(conflictingId, "worker-a", CancellationToken.None));
+        // Inserts the conflicting queued row only after EnqueueIfNotPendingAsync's initial queued lookup
+        // has found nothing, then completes it between the failed insert and fallback SELECT. That leaves
+        // the bounded retry path as the only way to return a fresh queued successor.
+        var interceptor = new InsertThenCompleteJobOnSaveFailureInterceptor(
+            async () => conflictingId = await completerQueue.EnqueueAsync(JobType.BuildModel, subjectId, CancellationToken.None),
+            () => completerContext.Jobs
+                .Where(job => job.Id == conflictingId!.Value)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(job => job.State, JobState.Succeeded.ToString())
+                    .SetProperty(job => job.ProgressPercent, 100)
+                    .SetProperty(job => job.ProgressStage, "completed")
+                    .SetProperty(job => job.UpdatedAt, DateTimeOffset.UtcNow)
+                    .SetProperty(job => job.CompletedAt, DateTimeOffset.UtcNow)));
         var racingOptions = new DbContextOptionsBuilder<RouteTimerDbContext>()
             .UseNpgsql(database.GetConnectionString())
             .AddInterceptors(interceptor)
             .Options;
         await using var racingContext = new RouteTimerDbContext(racingOptions);
-        var racingQueue = new PostgresJobQueue(racingContext);
+        var racingQueue = new PostgresJobQueue(racingContext, TimeProvider.System);
 
         var resultId = await racingQueue.EnqueueIfNotPendingAsync(JobType.BuildModel, subjectId, CancellationToken.None);
 
         Assert.True(interceptor.WasInvoked);
-        Assert.NotEqual(conflictingId, resultId);
+        Assert.NotEqual(conflictingId!.Value, resultId);
         var jobs = await completerContext.Jobs.AsNoTracking().Where(job => job.SubjectId == subjectId).ToListAsync();
         Assert.Equal(2, jobs.Count);
         var freshJob = Assert.Single(jobs, job => job.Id == resultId);
@@ -512,6 +876,24 @@ public sealed class PostgresJobQueueTests
         PredictionAssumptions.RoadCalmDryMovingOnly,
         DateTimeOffset.UtcNow);
 
+    private static AnalysisJobEntity JobEntity(Guid id, JobType type, Guid subjectId, JobState state, DateTimeOffset createdAt) => new()
+    {
+        Id = id,
+        Type = type.ToString(),
+        SubjectId = subjectId,
+        State = state.ToString(),
+        ProgressPercent = state == JobState.Succeeded ? 100 : 0,
+        ProgressStage = state switch
+        {
+            JobState.Succeeded => "completed",
+            JobState.Failed => "failed",
+            _ => "queued"
+        },
+        CreatedAt = createdAt,
+        UpdatedAt = createdAt,
+        CompletedAt = state is JobState.Succeeded or JobState.Failed ? createdAt : null
+    };
+
     private static async Task<RiderModelSnapshot> SaveModelAsync(RouteTimerDbContext context)
     {
         var models = new RiderModelRepository(context);
@@ -521,12 +903,26 @@ public sealed class PostgresJobQueueTests
         return (await models.GetAsync(id, CancellationToken.None))!;
     }
 
-    /// <summary>Completes a specific job, via a caller-supplied callback, the moment the context this
-    /// interceptor is attached to fails a SaveChangesAsync call - used to land a completion inside the
-    /// otherwise-unreachable gap between a failed racing insert and its own fallback lookup.</summary>
-    private sealed class CompleteJobOnSaveFailureInterceptor(Func<Task> onSaveFailed) : SaveChangesInterceptor
+    /// <summary>Inserts a conflicting queued job during the racing SaveChangesAsync call, then completes
+    /// it inside the otherwise-unreachable gap between the failed insert and its fallback lookup.</summary>
+    private sealed class InsertThenCompleteJobOnSaveFailureInterceptor(Func<Task> beforeSave, Func<Task> onSaveFailed) : SaveChangesInterceptor
     {
         public bool WasInvoked { get; private set; }
+        private bool _insertedConflict;
+
+        public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (!_insertedConflict)
+            {
+                _insertedConflict = true;
+                await beforeSave();
+            }
+
+            return await base.SavingChangesAsync(eventData, result, cancellationToken);
+        }
 
         public override async Task SaveChangesFailedAsync(DbContextErrorEventData eventData, CancellationToken cancellationToken = default)
         {

@@ -1,2 +1,103 @@
-.dashboard-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); }
-.dashboard-grid article { border: 1px solid #d6d6d6; border-radius: .5rem; padding: 1rem; }
+.dashboard-grid {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+}
+
+.dashboard-card {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1.25rem;
+    border: 1px solid #d8e0eb;
+    border-radius: 1rem;
+    background: linear-gradient(180deg, #ffffff 0%, #f6f9fc 100%);
+    box-shadow: 0 14px 30px rgba(15, 23, 42, 0.06);
+}
+
+.dashboard-card__header {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+}
+
+.dashboard-card__header h2 {
+    margin: 0 0 0.35rem;
+}
+
+.dashboard-card__header p {
+    margin: 0;
+    color: #465468;
+}
+
+.dashboard-card__link,
+.dashboard-card__action {
+    color: #0b5cad;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.dashboard-card__link:hover,
+.dashboard-card__action:hover {
+    text-decoration: underline;
+}
+
+.dashboard-metric-list {
+    display: grid;
+    gap: 0.85rem;
+}
+
+.dashboard-metric-list__label {
+    display: block;
+    color: #5b6778;
+    font-size: 0.92rem;
+}
+
+.dashboard-metric-list__value {
+    display: block;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #10243f;
+}
+
+.dashboard-prediction-list {
+    display: grid;
+    gap: 0.85rem;
+    padding: 0;
+    margin: 0;
+    list-style: none;
+}
+
+.dashboard-prediction-list__item {
+    display: grid;
+    gap: 0.5rem;
+    padding: 0.9rem 1rem;
+    border: 1px solid #d8e0eb;
+    border-radius: 0.85rem;
+    background-color: #fff;
+}
+
+.dashboard-prediction-list__item a {
+    color: #10243f;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.dashboard-prediction-list__item a:hover {
+    text-decoration: underline;
+}
+
+.dashboard-prediction-list__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+    color: #465468;
+}
+
+@media (max-width: 640.98px) {
+    .dashboard-card__header {
+        flex-direction: column;
+    }
+}

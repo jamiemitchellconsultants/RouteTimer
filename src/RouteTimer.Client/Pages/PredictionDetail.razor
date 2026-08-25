@@ -1,0 +1,245 @@
+@page "/predictions/{Id:guid}"
+@implements IDisposable
+@using RouteTimer.Client.Api
+@using RouteTimer.Client.Components
+@using RouteTimer.Client.Formatting
+@using RouteTimer.Contracts.Predictions
+@inject IRouteTimerApiClient Api
+
+<PageTitle>Prediction detail | RouteTimer</PageTitle>
+
+<h1>Prediction detail</h1>
+<p>Inspect the stored model snapshot, assumptions, and route metrics for one prediction.</p>
+
+@if (isLoading)
+{
+    <p data-testid="prediction-detail-loading">Loading prediction...</p>
+}
+else if (problem is not null || fallbackProblem)
+{
+    <div data-testid="prediction-detail-error">
+        <ProblemMessage Problem="@problem" FallbackMessage="We could not load the prediction detail." />
+    </div>
+}
+else if (prediction is null)
+{
+    <div data-testid="prediction-detail-not-found" class="prediction-detail-panel">
+        <p>This prediction was not found.</p>
+        <a href="/predictions">Back to predictions</a>
+    </div>
+}
+else
+{
+    <section class="prediction-detail-panel">
+        <dl data-testid="prediction-detail-summary" class="prediction-detail-grid">
+            <div>
+                <dt>Prediction ID</dt>
+                <dd>@prediction.Summary.Id</dd>
+            </div>
+            <div>
+                <dt>Model ID</dt>
+                <dd>@prediction.Summary.ModelId</dd>
+            </div>
+            <div>
+                <dt>State</dt>
+                <dd>@RouteTimerText.Sentence(prediction.Summary.State)</dd>
+            </div>
+            <div>
+                <dt>Confidence</dt>
+                <dd>
+                    @if (!string.IsNullOrWhiteSpace(prediction.Summary.Confidence))
+                    {
+                        <ConfidenceBadge Confidence="@prediction.Summary.Confidence" />
+                    }
+                    else
+                    {
+                        <span>Unavailable</span>
+                    }
+                </dd>
+            </div>
+            <div>
+                <dt>Distance</dt>
+                <dd>@DisplayMetric(RouteTimerFormat.Distance(prediction.Summary.DistanceMetres))</dd>
+            </div>
+            <div>
+                <dt>Ascent</dt>
+                <dd>@DisplayMetric(RouteTimerFormat.Ascent(prediction.Summary.AscentMetres))</dd>
+            </div>
+            <div>
+                <dt>Moving time</dt>
+                <dd>@DisplayMetric(RouteTimerFormat.DetailedDuration(prediction.Summary.MovingSeconds))</dd>
+            </div>
+            <div>
+                <dt>Average speed</dt>
+                <dd>@DisplayMetric(RouteTimerFormat.SpeedKilometresPerHour(prediction.Summary.AverageSpeedMetresPerSecond))</dd>
+            </div>
+            <div>
+                <dt>Average power</dt>
+                <dd>@DisplayMetric(RouteTimerFormat.Power(prediction.Summary.AveragePowerWatts))</dd>
+            </div>
+            <div>
+                <dt>Model version</dt>
+                <dd>@prediction.Summary.ModelVersion</dd>
+            </div>
+            <div>
+                <dt>Calibrated model</dt>
+                <dd>@DisplayBoolean(prediction.Summary.ModelWasCalibrated)</dd>
+            </div>
+            <div>
+                <dt>Validation state</dt>
+                <dd>@RouteTimerText.Sentence(prediction.Summary.ValidationStatus)</dd>
+            </div>
+            <div>
+                <dt>Median validation error</dt>
+                <dd>@DisplayMetric(RouteTimerFormat.Percentage(prediction.Summary.ValidationMedianAbsolutePercentageError))</dd>
+            </div>
+            <div>
+                <dt>P90 validation error</dt>
+                <dd>@DisplayMetric(RouteTimerFormat.Percentage(prediction.Summary.ValidationP90AbsolutePercentageError))</dd>
+            </div>
+            <div>
+                <dt>Rider weight</dt>
+                <dd>@RouteTimerFormat.Weight(prediction.Summary.RiderWeightKg)</dd>
+            </div>
+            <div>
+                <dt>Bike and equipment</dt>
+                <dd>@RouteTimerFormat.Weight(prediction.Summary.BikeWeightKg)</dd>
+            </div>
+            <div>
+                <dt>Surface</dt>
+                <dd>@RouteTimerText.Sentence(prediction.Summary.SurfaceAssumption)</dd>
+            </div>
+            <div>
+                <dt>Wind</dt>
+                <dd>@RouteTimerText.Sentence(prediction.Summary.WindAssumption)</dd>
+            </div>
+            <div>
+                <dt>Weather</dt>
+                <dd>@RouteTimerText.Sentence(prediction.Summary.WeatherAssumption)</dd>
+            </div>
+            <div>
+                <dt>Moving only</dt>
+                <dd>@DisplayBoolean(prediction.Summary.MovingOnlyAssumption)</dd>
+            </div>
+            <div>
+                <dt>Created</dt>
+                <dd>@RouteTimerFormat.Timestamp(prediction.Summary.CreatedAt)</dd>
+            </div>
+            <div>
+                <dt>Completed</dt>
+                <dd>@DisplayMetric(RouteTimerFormat.Timestamp(prediction.Summary.CompletedAt))</dd>
+            </div>
+        </dl>
+    </section>
+
+    <section class="prediction-detail-panel">
+        <h2>Warnings</h2>
+        @if (prediction.Summary.Warnings.Count == 0)
+        {
+            <p>None</p>
+        }
+        else
+        {
+            <ul data-testid="prediction-detail-warnings" class="prediction-detail-list">
+                @foreach (var warning in prediction.Summary.Warnings)
+                {
+                    <li>@RouteTimerText.Sentence(warning)</li>
+                }
+            </ul>
+        }
+    </section>
+
+    <section class="prediction-detail-panel">
+        <h2>Visualization status</h2>
+
+        @if (segmentsReceivedOutOfOrder)
+        {
+            <p data-testid="prediction-detail-order-warning" class="prediction-detail-warning">
+                Prediction segments arrived out of order and were sorted for visualization.
+            </p>
+        }
+
+        @if (visualizationReady)
+        {
+            <div data-testid="prediction-detail-visualization">
+                <PredictionVisualization Segments="orderedSegments" />
+            </div>
+        }
+        else
+        {
+            <p data-testid="prediction-detail-visualization-pending">
+                Visualization becomes available after the prediction succeeds with stored route segments.
+            </p>
+        }
+    </section>
+}
+
+@code {
+    private readonly CancellationTokenSource pageCancellation = new();
+    private PredictionDetailResponse? prediction;
+    private IReadOnlyList<PredictionSegmentResponse> orderedSegments = [];
+    private ApiProblemException? problem;
+    private bool fallbackProblem;
+    private bool isLoading = true;
+    private bool segmentsReceivedOutOfOrder;
+    private bool visualizationReady;
+
+    [Parameter]
+    public Guid Id { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        isLoading = true;
+        problem = null;
+        fallbackProblem = false;
+        orderedSegments = [];
+        segmentsReceivedOutOfOrder = false;
+        visualizationReady = false;
+
+        try
+        {
+            prediction = await Api.GetPredictionAsync(Id, pageCancellation.Token);
+            if (prediction is not null)
+            {
+                orderedSegments = prediction.Segments.OrderBy(segment => segment.Sequence).ToArray();
+                segmentsReceivedOutOfOrder = prediction.Segments
+                    .Select(segment => segment.Sequence)
+                    .SequenceEqual(orderedSegments.Select(segment => segment.Sequence)) is false;
+                visualizationReady = prediction.Summary.State.Equals("Succeeded", StringComparison.OrdinalIgnoreCase)
+                    && orderedSegments.Count > 0;
+            }
+        }
+        catch (ApiProblemException apiProblem)
+        {
+            problem = apiProblem;
+            prediction = null;
+        }
+        catch (HttpRequestException)
+        {
+            fallbackProblem = true;
+            prediction = null;
+        }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (!pageCancellation.IsCancellationRequested)
+            {
+                isLoading = false;
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        pageCancellation.Cancel();
+        pageCancellation.Dispose();
+    }
+
+    private static string DisplayBoolean(bool value) => value ? "Yes" : "No";
+
+    private static string DisplayMetric(string value) =>
+        value == "—" ? "Unavailable" : value;
+}

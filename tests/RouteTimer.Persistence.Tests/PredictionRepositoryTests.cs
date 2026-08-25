@@ -1,9 +1,12 @@
 using Microsoft.EntityFrameworkCore;
+using RouteTimer.Domain.Jobs;
 using RouteTimer.Domain.Models;
 using RouteTimer.Domain.Physics;
 using RouteTimer.Domain.Predictions;
 using RouteTimer.Domain.Profile;
 using RouteTimer.Persistence;
+using RouteTimer.Persistence.Entities;
+using RouteTimer.Persistence.Jobs;
 using RouteTimer.Persistence.Repositories;
 using RouteTimer.Services.Persistence;
 using RouteTimer.Services.Predictions;
@@ -40,9 +43,13 @@ public sealed class PredictionRepositoryTests
         var model = await SaveModelAsync(context);
         var repository = new PredictionRepository(context);
         var created = await repository.CreateQueuedAsync(Creation(model), CancellationToken.None);
-        await repository.PublishAsync(created.PredictionId, new PredictionPublication(100, 5, TimeSpan.FromSeconds(20), 5, 200, ConfidenceLevel.Medium, ["default-coefficients"],
+        var job = await context.Jobs.SingleAsync(entity => entity.Id == created.JobId);
+        job.State = "Running";
+        job.WorkerId = "worker-a";
+        await context.SaveChangesAsync();
+        Assert.True(await repository.TryPublishAsync(created.PredictionId, created.JobId, "worker-a", new PredictionPublication(100, 5, TimeSpan.FromSeconds(20), 5, 200, ConfidenceLevel.Medium, ["default-coefficients"],
             [new PersistedPredictionSegment(2, 51.2, -2.2, 110, 100, 25, .05, .001, 200, 5, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(20), ConfidenceLevel.Medium),
-             new PersistedPredictionSegment(1, 51.1, -2.1, 105, 75, 25, .04, .002, 190, 4, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15), ConfidenceLevel.High)]), CancellationToken.None);
+             new PersistedPredictionSegment(1, 51.1, -2.1, 105, 75, 25, .04, .002, 190, 4, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15), ConfidenceLevel.High)]), CancellationToken.None));
 
         var summary = Assert.Single(await repository.GetSummariesAsync(CancellationToken.None));
         var detail = await repository.GetAsync(created.PredictionId, CancellationToken.None);
@@ -52,6 +59,250 @@ public sealed class PredictionRepositoryTests
         Assert.Equal(new[] { 1, 2 }, detail.Segments.Select(segment => segment.Sequence));
         Assert.Equal(TimeSpan.FromSeconds(20), detail.MovingTime);
         Assert.Null(await repository.GetAsync(Guid.NewGuid(), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Publish_requires_matching_running_job_and_worker()
+    {
+        await using var database = await StartDatabaseAsync();
+        Guid predictionId;
+        Guid jobId;
+        await using (var setup = CreateContext(database))
+        {
+            await setup.Database.MigrateAsync();
+            var model = await SaveModelAsync(setup);
+            var created = await new PredictionRepository(setup).CreateQueuedAsync(Creation(model), CancellationToken.None);
+            predictionId = created.PredictionId;
+            jobId = created.JobId;
+        }
+
+        await using (var unpublished = CreateContext(database))
+        {
+            Assert.False(await new PredictionRepository(unpublished).TryPublishAsync(predictionId, jobId, "worker-a", Publication(), CancellationToken.None));
+        }
+
+        await using (var claimed = CreateContext(database))
+        {
+            var queue = new PostgresJobQueue(claimed, TimeProvider.System);
+            Assert.NotNull(await queue.ClaimAsync("worker-b", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(2), CancellationToken.None));
+        }
+
+        await using var verify = CreateContext(database);
+        var repository = new PredictionRepository(verify);
+        Assert.False(await repository.TryPublishAsync(predictionId, jobId, "worker-a", Publication(), CancellationToken.None));
+
+        var prediction = await verify.Predictions.AsNoTracking().SingleAsync(entity => entity.Id == predictionId);
+        var job = await verify.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == jobId);
+        Assert.Equal(PredictionState.Queued.ToString(), prediction.State);
+        Assert.Empty(await verify.PredictionSegments.AsNoTracking().Where(entity => entity.PredictionId == predictionId).ToListAsync());
+        Assert.Equal(JobState.Running.ToString(), job.State);
+        Assert.Equal("worker-b", job.WorkerId);
+    }
+
+    // Break caught: deleting a prediction can leave its claimed job or retained upload behind, or let partial rows survive.
+    [Fact]
+    public async Task Delete_cancels_active_job_and_removes_segments_prediction_and_gpx_atomically()
+    {
+        await using var database = await StartDatabaseAsync();
+        var deletedAt = new DateTimeOffset(2026, 8, 25, 14, 0, 0, TimeSpan.Zero);
+        Guid predictionId;
+        Guid jobId;
+        Guid uploadId;
+        await using (var setup = CreateContext(database))
+        {
+            await setup.Database.MigrateAsync();
+            var model = await SaveModelAsync(setup);
+            var created = await new PredictionRepository(setup).CreateQueuedAsync(Creation(model), CancellationToken.None);
+            predictionId = created.PredictionId;
+            jobId = created.JobId;
+            uploadId = (await setup.Predictions.AsNoTracking().SingleAsync(entity => entity.Id == predictionId)).UploadId;
+
+            var queue = new PostgresJobQueue(setup, TimeProvider.System);
+            Assert.NotNull(await queue.ClaimAsync("worker-a", deletedAt.AddMinutes(-2), TimeSpan.FromMinutes(2), CancellationToken.None));
+            Assert.True(await queue.ReportProgressAsync(jobId, "worker-a", 45, "running", deletedAt.AddMinutes(-1), CancellationToken.None));
+
+            setup.PredictionSegments.Add(new PredictionSegmentEntity
+            {
+                PredictionId = predictionId,
+                Sequence = 1,
+                Latitude = 51.1,
+                Longitude = -2.1,
+                ElevationMetres = 100,
+                CumulativeDistanceMetres = 100,
+                SegmentDistanceMetres = 100,
+                Gradient = .04,
+                CurvaturePerMetre = .001,
+                PredictedPowerWatts = 200,
+                PredictedSpeedMetresPerSecond = 5,
+                SegmentMovingSeconds = 20,
+                CumulativeMovingSeconds = 20,
+                Confidence = ConfidenceLevel.Medium.ToString()
+            });
+            await setup.SaveChangesAsync();
+        }
+
+        await using (var deleting = CreateContext(database))
+        {
+            Assert.True(await new PredictionRepository(deleting).DeleteAsync(predictionId, deletedAt, CancellationToken.None));
+        }
+
+        await using var verify = CreateContext(database);
+        var job = await verify.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == jobId);
+        Assert.Equal(JobState.Cancelled.ToString(), job.State);
+        Assert.Equal(45, job.ProgressPercent);
+        Assert.Equal("cancelled", job.ProgressStage);
+        Assert.Equal(deletedAt, job.CompletedAt);
+        Assert.Null(job.WorkerId);
+        Assert.Null(job.LeaseExpiresAt);
+        Assert.Null(await verify.Predictions.AsNoTracking().SingleOrDefaultAsync(entity => entity.Id == predictionId));
+        Assert.Empty(await verify.PredictionSegments.AsNoTracking().Where(entity => entity.PredictionId == predictionId).ToListAsync());
+        Assert.Null(await verify.Uploads.AsNoTracking().SingleOrDefaultAsync(entity => entity.Id == uploadId));
+    }
+
+    // Break caught: prediction deletion removes the immutable rider-model snapshot or its shared retained GPX while another prediction still references them.
+    [Fact]
+    public async Task Delete_keeps_referenced_immutable_rider_model()
+    {
+        await using var database = await StartDatabaseAsync();
+        Guid firstPredictionId;
+        Guid secondPredictionId;
+        Guid riderModelId;
+        Guid sharedUploadId;
+        await using (var setup = CreateContext(database))
+        {
+            await setup.Database.MigrateAsync();
+            var model = await SaveModelAsync(setup);
+            riderModelId = model.Id;
+            var repository = new PredictionRepository(setup);
+            firstPredictionId = (await repository.CreateQueuedAsync(Creation(model), CancellationToken.None)).PredictionId;
+            secondPredictionId = (await repository.CreateQueuedAsync(Creation(model), CancellationToken.None)).PredictionId;
+            sharedUploadId = (await setup.Predictions.AsNoTracking().SingleAsync(entity => entity.Id == firstPredictionId)).UploadId;
+        }
+
+        await using (var deleting = CreateContext(database))
+        {
+            Assert.True(await new PredictionRepository(deleting).DeleteAsync(firstPredictionId, DateTimeOffset.UtcNow, CancellationToken.None));
+        }
+
+        await using var verify = CreateContext(database);
+        Assert.Null(await verify.Predictions.AsNoTracking().SingleOrDefaultAsync(entity => entity.Id == firstPredictionId));
+        Assert.NotNull(await verify.Predictions.AsNoTracking().SingleOrDefaultAsync(entity => entity.Id == secondPredictionId));
+        Assert.NotNull(await verify.RiderModels.AsNoTracking().SingleOrDefaultAsync(entity => entity.Id == riderModelId));
+        Assert.NotNull(await verify.Uploads.AsNoTracking().SingleOrDefaultAsync(entity => entity.Id == sharedUploadId));
+    }
+
+    // Break caught: a worker that finishes after the delete wins can still recreate the prediction result by publishing late.
+    [Fact]
+    public async Task Late_worker_cannot_publish_after_delete()
+    {
+        await using var database = await StartDatabaseAsync();
+        Guid predictionId;
+        Guid jobId;
+        await using (var setup = CreateContext(database))
+        {
+            await setup.Database.MigrateAsync();
+            var model = await SaveModelAsync(setup);
+            var created = await new PredictionRepository(setup).CreateQueuedAsync(Creation(model), CancellationToken.None);
+            predictionId = created.PredictionId;
+            jobId = created.JobId;
+            Assert.NotNull(await new PostgresJobQueue(setup, TimeProvider.System).ClaimAsync("worker-a", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(2), CancellationToken.None));
+        }
+
+        await using (var deleting = CreateContext(database))
+        {
+            Assert.True(await new PredictionRepository(deleting).DeleteAsync(predictionId, DateTimeOffset.UtcNow, CancellationToken.None));
+        }
+
+        await using var verify = CreateContext(database);
+        var published = await new PredictionRepository(verify).TryPublishAsync(predictionId, jobId, "worker-a", Publication(), CancellationToken.None);
+
+        Assert.False(published);
+        Assert.Null(await verify.Predictions.AsNoTracking().SingleOrDefaultAsync(entity => entity.Id == predictionId));
+        var job = await verify.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == jobId);
+        Assert.Equal(JobState.Cancelled.ToString(), job.State);
+        Assert.Empty(await verify.PredictionSegments.AsNoTracking().Where(entity => entity.PredictionId == predictionId).ToListAsync());
+    }
+
+    // Break caught: concurrent deletion and publication both mutate the prediction, leaving a
+    // succeeded job with a deleted prediction or a partially persisted segment set.
+    [Fact]
+    public async Task Concurrent_delete_and_publish_leave_a_consistent_terminal_state()
+    {
+        await using var database = await StartDatabaseAsync();
+        Guid predictionId;
+        Guid jobId;
+        await using (var setup = CreateContext(database))
+        {
+            await setup.Database.MigrateAsync();
+            var model = await SaveModelAsync(setup);
+            var created = await new PredictionRepository(setup).CreateQueuedAsync(Creation(model), CancellationToken.None);
+            predictionId = created.PredictionId;
+            jobId = created.JobId;
+            Assert.NotNull(await new PostgresJobQueue(setup, TimeProvider.System)
+                .ClaimAsync("worker-a", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(2), CancellationToken.None));
+        }
+
+        var deletedTask = Task.Run(async () =>
+        {
+            await using var deleting = CreateContext(database);
+            return await new PredictionRepository(deleting).DeleteAsync(predictionId, DateTimeOffset.UtcNow, CancellationToken.None);
+        });
+        var publishedTask = Task.Run(async () =>
+        {
+            await using var publishing = CreateContext(database);
+            return await new PredictionRepository(publishing)
+                .TryPublishAsync(predictionId, jobId, "worker-a", Publication(), CancellationToken.None);
+        });
+
+        var (deleted, published) = (await deletedTask, await publishedTask);
+        Assert.True(deleted || published);
+
+        await using var verify = CreateContext(database);
+        var job = await verify.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == jobId);
+        var prediction = await verify.Predictions.AsNoTracking().SingleOrDefaultAsync(entity => entity.Id == predictionId);
+        var segments = await verify.PredictionSegments.AsNoTracking().Where(entity => entity.PredictionId == predictionId).ToListAsync();
+        if (prediction is null)
+        {
+            Assert.Equal(JobState.Cancelled.ToString(), job.State);
+            Assert.Empty(segments);
+        }
+        else
+        {
+            Assert.Equal(PredictionState.Succeeded.ToString(), prediction.State);
+            Assert.Equal(JobState.Running.ToString(), job.State);
+            Assert.True(published);
+            Assert.Single(segments);
+        }
+    }
+
+    // Break caught: deleting a missing prediction can still mutate unrelated retained uploads or prediction jobs.
+    [Fact]
+    public async Task Missing_delete_returns_false_without_mutation()
+    {
+        await using var database = await StartDatabaseAsync();
+        Guid existingPredictionId;
+        Guid existingJobId;
+        Guid uploadId;
+        await using (var setup = CreateContext(database))
+        {
+            await setup.Database.MigrateAsync();
+            var model = await SaveModelAsync(setup);
+            var created = await new PredictionRepository(setup).CreateQueuedAsync(Creation(model), CancellationToken.None);
+            existingPredictionId = created.PredictionId;
+            existingJobId = created.JobId;
+            uploadId = (await setup.Predictions.AsNoTracking().SingleAsync(entity => entity.Id == existingPredictionId)).UploadId;
+        }
+
+        await using (var deleting = CreateContext(database))
+        {
+            Assert.False(await new PredictionRepository(deleting).DeleteAsync(Guid.NewGuid(), DateTimeOffset.UtcNow, CancellationToken.None));
+        }
+
+        await using var verify = CreateContext(database);
+        Assert.NotNull(await verify.Predictions.AsNoTracking().SingleOrDefaultAsync(entity => entity.Id == existingPredictionId));
+        Assert.NotNull(await verify.Uploads.AsNoTracking().SingleOrDefaultAsync(entity => entity.Id == uploadId));
+        var job = await verify.Jobs.AsNoTracking().SingleAsync(entity => entity.Id == existingJobId);
+        Assert.Equal(JobState.Queued.ToString(), job.State);
     }
 
     // Break caught: concurrent identical GPX submissions race through the pre-insert lookup and one surfaces a unique-constraint server error.
@@ -157,5 +408,23 @@ public sealed class PredictionRepositoryTests
         var validation = new ModelValidationSummary(ModelValidationStatus.Passed, .05, .08);
         var id = await models.SaveAsync(new RiderModel(new PowerModel([], 200), PhysicalCoefficients.Default, DescentLimitModel.Conservative, false, "v1"), profile, validation, CancellationToken.None);
         return (await models.GetAsync(id, CancellationToken.None))!;
+    }
+
+    private static PredictionPublication Publication() => new(100, 5, TimeSpan.FromSeconds(20), 5, 200, ConfidenceLevel.Medium, ["default-coefficients"],
+        [new PersistedPredictionSegment(1, 51.1, -2.1, 105, 100, 100, .04, .001, 200, 5, TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(20), ConfidenceLevel.Medium)]);
+
+    private static async Task<PostgreSqlContainer> StartDatabaseAsync()
+    {
+        var database = new PostgreSqlBuilder("postgres:16-alpine").Build();
+        await database.StartAsync();
+        return database;
+    }
+
+    private static RouteTimerDbContext CreateContext(PostgreSqlContainer database)
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>()
+            .UseNpgsql(database.GetConnectionString())
+            .Options;
+        return new RouteTimerDbContext(options);
     }
 }

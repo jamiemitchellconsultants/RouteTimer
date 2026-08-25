@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
 using Microsoft.AspNetCore.Components.WebAssembly.Authentication;
+using RouteTimer.Client.Api;
+using RouteTimer.Client.Jobs;
 using RouteTimer.Client;
 
 var builder = WebAssemblyHostBuilder.CreateDefault(args);
@@ -18,5 +20,8 @@ builder.Services.AddScoped(sp =>
         .ConfigureHandler(authorizedUrls: [builder.HostEnvironment.BaseAddress]);
     return new HttpClient(handler) { BaseAddress = new Uri(builder.HostEnvironment.BaseAddress) };
 });
+builder.Services.AddScoped<IRouteTimerApiClient>(sp => new RouteTimerApiClient(sp.GetRequiredService<HttpClient>()));
+builder.Services.AddScoped<JobPoller>();
+builder.Services.AddSingleton(TimeProvider.System);
 
 await builder.Build().RunAsync();

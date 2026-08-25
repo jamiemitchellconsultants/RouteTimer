@@ -215,8 +215,42 @@ public sealed class AnalysisWorkerTests
         Assert.Contains(jobTwo.Id, jobQueue.Completed);
     }
 
+    [Fact]
+    public async Task Treats_operation_canceled_from_lost_job_ownership_as_expected_cancellation()
+    {
+        var job = MakeJob(JobType.PredictRoute);
+        var jobQueue = new FakeJobQueue();
+        jobQueue.EnqueueClaim(job);
+        var handler = new FakeJobHandler(JobType.PredictRoute, new OperationCanceledException("lost ownership"));
+        var worker = CreateWorker(jobQueue, handler);
+
+        await worker.ProcessIterationAsync(CancellationToken.None);
+
+        Assert.Empty(jobQueue.Completed);
+        Assert.Empty(jobQueue.Failed);
+    }
+
     private static AnalysisJob MakeJob(JobType type) =>
-        new(Guid.NewGuid(), type, Guid.NewGuid(), JobState.Running, 1, "worker-1", DateTimeOffset.UtcNow.AddMinutes(5), DateTimeOffset.UtcNow);
+        RunningJob(type, Guid.NewGuid(), "worker-1", DateTimeOffset.UtcNow.AddMinutes(5));
+
+    private static AnalysisJob RunningJob(JobType type, Guid subjectId, string workerId, DateTimeOffset? leaseExpiresAt)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new AnalysisJob(
+            Guid.NewGuid(),
+            type,
+            subjectId,
+            JobState.Running,
+            0,
+            "running",
+            1,
+            now,
+            now,
+            now,
+            null,
+            workerId,
+            leaseExpiresAt);
+    }
 
     private static AnalysisWorker CreateWorker(IJobQueue jobQueue, params IJobHandler[] handlers) =>
         CreateWorker(jobQueue, new FakeTimeProvider(), handlers);
@@ -281,13 +315,17 @@ public sealed class AnalysisWorkerTests
             }
         }
 
-        public Task<bool> CompleteAsync(Guid jobId, string workerId, CancellationToken cancellationToken)
+        public Task<bool> ReportProgressAsync(Guid jobId, string workerId, int progressPercent, string stage, DateTimeOffset now, CancellationToken cancellationToken) => Task.FromResult(true);
+
+        public Task<bool> CancelAsync(Guid jobId, DateTimeOffset now, CancellationToken cancellationToken) => Task.FromResult(true);
+
+        public Task<bool> CompleteAsync(Guid jobId, string workerId, DateTimeOffset now, CancellationToken cancellationToken)
         {
             Completed.Add(jobId);
             return Task.FromResult(true);
         }
 
-        public Task<bool> FailAsync(Guid jobId, string workerId, bool permanent, string? diagnosticCode, string? diagnosticMessage, CancellationToken cancellationToken)
+        public Task<bool> FailAsync(Guid jobId, string workerId, bool permanent, string? diagnosticCode, string? diagnosticMessage, DateTimeOffset now, CancellationToken cancellationToken)
         {
             Failed.Add((jobId, permanent, diagnosticCode, diagnosticMessage));
             return Task.FromResult(true);

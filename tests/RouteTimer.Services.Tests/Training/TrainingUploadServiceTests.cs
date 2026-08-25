@@ -1,23 +1,43 @@
 using RouteTimer.Services.Training;
 using RouteTimer.Services.Persistence;
-using RouteTimer.Domain.Jobs;
-using RouteTimer.Services.Jobs;
 
 namespace RouteTimer.Services.Tests.Training;
 
 public sealed class TrainingUploadServiceTests
 {
+    private static readonly DateTimeOffset UploadNow = new(2026, 8, 25, 15, 0, 0, TimeSpan.Zero);
+
+    // Break caught: duplicate upload acceptance returns stale identifiers from a previous accepted upload.
+    [Fact]
+    public async Task Duplicate_upload_returns_duplicate_without_partial_identifiers()
+    {
+        var repository = new InMemoryTrainingUploadRepository();
+        var service = new TrainingUploadService(repository, new FixedTimeProvider(UploadNow));
+        var duplicateContent = new byte[] { 1, 2, 3 };
+
+        var first = await service.AcceptAsync([new TrainingUpload("first.fit", new MemoryStream(duplicateContent))], CancellationToken.None);
+        var duplicate = await service.AcceptAsync([new TrainingUpload("second.fit", new MemoryStream(duplicateContent))], CancellationToken.None);
+
+        Assert.Equal(UploadOutcome.Accepted, Assert.Single(first).Outcome);
+        var result = Assert.Single(duplicate);
+        Assert.Equal("second.fit", result.FileName);
+        Assert.Equal(UploadOutcome.Duplicate, result.Outcome);
+        Assert.Null(result.UploadId);
+        Assert.Null(result.JobId);
+        Assert.Equal("duplicate-upload", result.ErrorCode);
+        Assert.Single(repository.AcceptedUploads);
+    }
+
     [Fact]
     public async Task Accept_batch_returns_independent_accepted_duplicate_and_invalid_results()
     {
-        var repository = new InMemoryStoredUploadRepository();
-        var jobs = new InMemoryJobQueue();
-        var service = new TrainingUploadService(repository, jobs);
+        var repository = new InMemoryTrainingUploadRepository();
+        var service = new TrainingUploadService(repository, new FixedTimeProvider(UploadNow));
         var uploads = new[]
         {
-            new TrainingUpload("one.fit", [1, 2, 3]),
-            new TrainingUpload("copy.fit", [1, 2, 3]),
-            new TrainingUpload("broken.txt", [9])
+            new TrainingUpload("one.fit", new MemoryStream([1, 2, 3])),
+            new TrainingUpload("copy.fit", new MemoryStream([1, 2, 3])),
+            new TrainingUpload("broken.txt", new MemoryStream([9]))
         };
 
         var results = await service.AcceptAsync(uploads, CancellationToken.None);
@@ -26,40 +46,93 @@ public sealed class TrainingUploadServiceTests
             result => Assert.Equal(UploadOutcome.Accepted, result.Outcome),
             result => Assert.Equal(UploadOutcome.Duplicate, result.Outcome),
             result => Assert.Equal(UploadOutcome.Invalid, result.Outcome));
-        var saved = Assert.Single(repository.Uploads);
+        var saved = Assert.Single(repository.AcceptedUploads);
         Assert.Equal("one.fit", saved.FileName);
         Assert.Equal(new byte[] { 1, 2, 3 }, saved.Content);
-        Assert.Single(jobs.Enqueued);
+        Assert.Equal(UploadNow, saved.CreatedAt);
     }
 
-    private sealed class InMemoryJobQueue : IJobQueue
+    // Break caught: invalid FIT uploads are fully buffered or persisted before empty/oversized content is rejected.
+    [Fact]
+    public async Task Accept_rejects_empty_and_oversized_fit_uploads_without_calling_repository()
     {
-        public List<(JobType Type, Guid SubjectId)> Enqueued { get; } = [];
-        public Task<Guid> EnqueueAsync(JobType type, Guid subjectId, CancellationToken cancellationToken) { Enqueued.Add((type, subjectId)); return Task.FromResult(Guid.NewGuid()); }
-        public Task<Guid> EnqueueIfNotPendingAsync(JobType type, Guid subjectId, CancellationToken cancellationToken) { Enqueued.Add((type, subjectId)); return Task.FromResult(Guid.NewGuid()); }
-        public Task<AnalysisJob?> ClaimAsync(string workerId, DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken) => Task.FromResult<AnalysisJob?>(null);
-        public Task<bool> RenewLeaseAsync(Guid jobId, string workerId, DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken) => Task.FromResult(false);
-        public Task<bool> CompleteAsync(Guid jobId, string workerId, CancellationToken cancellationToken) => Task.FromResult(false);
-        public Task<bool> FailAsync(Guid jobId, string workerId, bool permanent, string? diagnosticCode, string? diagnosticMessage, CancellationToken cancellationToken) => Task.FromResult(false);
+        var repository = new InMemoryTrainingUploadRepository();
+        var service = new TrainingUploadService(repository, new FixedTimeProvider(UploadNow));
+
+        var results = await service.AcceptAsync(
+            [
+                new TrainingUpload("empty.fit", new MemoryStream()),
+                new TrainingUpload("huge.fit", new OversizedStream(50 * 1024 * 1024 + 1))
+            ],
+            CancellationToken.None);
+
+        Assert.Collection(results,
+            result =>
+            {
+                Assert.Equal("empty.fit", result.FileName);
+                Assert.Equal(UploadOutcome.Invalid, result.Outcome);
+                Assert.Null(result.UploadId);
+                Assert.Null(result.JobId);
+                Assert.Equal("invalid-fit-upload", result.ErrorCode);
+            },
+            result =>
+            {
+                Assert.Equal("huge.fit", result.FileName);
+                Assert.Equal(UploadOutcome.Invalid, result.Outcome);
+                Assert.Null(result.UploadId);
+                Assert.Null(result.JobId);
+                Assert.Equal("invalid-fit-upload", result.ErrorCode);
+            });
+        Assert.Empty(repository.AcceptedUploads);
     }
 
-    private sealed class InMemoryStoredUploadRepository : IStoredUploadRepository
+    private sealed class InMemoryTrainingUploadRepository : ITrainingUploadRepository
     {
-        public List<StoredUpload> Uploads { get; } = [];
+        public List<StoredUpload> AcceptedUploads { get; } = [];
 
-        public Task<bool> StoreIfAbsentAsync(StoredUpload upload, CancellationToken cancellationToken)
+        public Task<TrainingUploadAcceptance> AcceptAsync(StoredUpload upload, DateTimeOffset now, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (Uploads.Any(existing => existing.Kind == upload.Kind && existing.Sha256.SequenceEqual(upload.Sha256)))
+            if (AcceptedUploads.Any(existing => existing.Kind == upload.Kind && existing.Sha256.SequenceEqual(upload.Sha256)))
             {
-                return Task.FromResult(false);
+                return Task.FromResult(new TrainingUploadAcceptance(false, null, null));
             }
 
-            Uploads.Add(upload);
-            return Task.FromResult(true);
+            AcceptedUploads.Add(upload);
+            return Task.FromResult(new TrainingUploadAcceptance(true, upload.Id, Guid.NewGuid()));
         }
+    }
 
-        public Task<StoredUpload?> GetAsync(Guid id, CancellationToken cancellationToken) =>
-            Task.FromResult(Uploads.SingleOrDefault(upload => upload.Id == id));
+    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+
+    private sealed class OversizedStream(long length) : Stream
+    {
+        private long position;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => length;
+        public override long Position { get => position; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var read = (int)Math.Min(count, length - position);
+            if (read <= 0)
+            {
+                return 0;
+            }
+
+            Array.Fill(buffer, (byte)1, offset, read);
+            position += read;
+            return read;
+        }
     }
 }

@@ -13,12 +13,14 @@ public sealed class PredictionJobHandler(
     IRiderModelRepository models,
     IGpxRouteParser parser,
     IRouteProcessor processor,
-    IRoutePredictor predictor) : IJobHandler
+    IRoutePredictor predictor,
+    IJobProgressReporter progress) : IJobHandler
 {
     public JobType Handles => JobType.PredictRoute;
 
     public async Task HandleAsync(AnalysisJob job, CancellationToken cancellationToken)
     {
+        await progress.ReportAsync(job, 5, JobProgressStages.LoadingPrediction, cancellationToken);
         var prediction = await predictions.GetForProcessingAsync(job.SubjectId, cancellationToken)
             ?? throw new PredictionJobException("prediction-missing", "The prediction no longer exists.");
         RiderModelSnapshot? model;
@@ -39,8 +41,10 @@ public sealed class PredictionJobHandler(
         try
         {
             await using var content = new MemoryStream(prediction.Upload.Content, writable: false);
+            await progress.ReportAsync(job, 20, JobProgressStages.ProcessingRoute, cancellationToken);
             var parsed = await parser.ParseAsync(content, cancellationToken);
             var route = processor.Process(parsed.Points);
+            await progress.ReportAsync(job, 45, JobProgressStages.SimulatingRoute, cancellationToken);
             var result = predictor.Predict(route, prediction.Profile, model.Model);
             PredictionPublication publication;
             try
@@ -52,7 +56,12 @@ public sealed class PredictionJobHandler(
                 throw new PredictionJobException("invalid-prediction-result", "The prediction contains overflowing time values.", exception);
             }
 
-            await predictions.PublishAsync(prediction.Id, publication, cancellationToken);
+            var workerId = job.WorkerId ?? throw new InvalidOperationException("A claimed prediction job is required.");
+            await progress.ReportAsync(job, 90, JobProgressStages.SavingResult, cancellationToken);
+            if (!await predictions.TryPublishAsync(prediction.Id, job.Id, workerId, publication, cancellationToken))
+            {
+                return;
+            }
         }
         catch (PredictionJobException)
         {

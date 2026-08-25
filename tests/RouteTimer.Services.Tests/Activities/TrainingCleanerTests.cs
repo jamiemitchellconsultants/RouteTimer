@@ -11,7 +11,7 @@ public sealed class TrainingCleanerTests
     {
         var parsed = ActivityFixtures.EligibleRideWithGap(TimeSpan.FromSeconds(11));
 
-        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed);
+        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed, "gap.fit");
 
         var boundary = Assert.Single(cleaned.Samples, sample => sample.CrossesDiscontinuity);
         Assert.Equal(parsed.Samples[2].Timestamp, boundary.Timestamp);
@@ -23,7 +23,7 @@ public sealed class TrainingCleanerTests
     {
         var parsed = ActivityFixtures.RideWithFilteredGapBoundary();
 
-        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed);
+        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed, "gap-filtered.fit");
 
         var boundary = Assert.Single(cleaned.Samples, sample => sample.CrossesDiscontinuity);
         Assert.Equal(parsed.Samples[3].Timestamp, boundary.Timestamp);
@@ -36,7 +36,7 @@ public sealed class TrainingCleanerTests
     {
         var parsed = ActivityFixtures.WithPauseGapAndCoasting();
 
-        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed);
+        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed, "coasting.fit");
 
         Assert.Single(cleaned.Samples, sample => sample.CrossesDiscontinuity);
         Assert.Contains(cleaned.Samples, sample => sample.PowerWatts == 0);
@@ -48,7 +48,7 @@ public sealed class TrainingCleanerTests
     {
         var parsed = ActivityFixtures.WithPowerCoverage(0.5);
 
-        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed);
+        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed, "power-coverage.fit");
 
         Assert.Equal(ActivityEligibility.Ineligible, cleaned.Quality.Eligibility);
         Assert.Contains("insufficient-power-coverage", cleaned.Quality.ReasonCodes);
@@ -60,10 +60,30 @@ public sealed class TrainingCleanerTests
     {
         var parsed = ActivityFixtures.NonlinearElevationRide();
 
-        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed);
+        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed, "nonlinear.fit");
 
         Assert.Equal(
             parsed.Samples.Select(sample => sample.Position!.Value.ElevationMetres),
             cleaned.Samples.Select(sample => sample.Position.ElevationMetres));
+    }
+
+    [Fact]
+    public void Clean_carries_normalized_metadata_and_source_filename()
+    {
+        var parsed = ActivityFixtures.WithPowerCoverage(1) with
+        {
+            DeviceManufacturer = "  Garmin  ",
+            DeviceProduct = "  Edge  ",
+            DeviceDistanceMetres = double.NaN,
+            DeviceAscentMetres = -1,
+        };
+
+        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed, "23940033376_ACTIVITY.fit");
+
+        Assert.Equal("23940033376_ACTIVITY.fit", cleaned.Metadata.SourceFileName);
+        Assert.Equal("Garmin", cleaned.Metadata.DeviceManufacturer);
+        Assert.Equal("Edge", cleaned.Metadata.DeviceProduct);
+        Assert.Null(cleaned.Metadata.DistanceMetres);
+        Assert.Null(cleaned.Metadata.AscentMetres);
     }
 }

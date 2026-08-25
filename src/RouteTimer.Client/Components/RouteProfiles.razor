@@ -1,0 +1,108 @@
+@using RouteTimer.Contracts.Predictions
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<div class="prediction-visualization__profiles" data-testid="prediction-visualization-profiles">
+    <section class="prediction-visualization__profile-card">
+        <h3>Elevation</h3>
+        <div class="prediction-visualization__chart-shell">
+            <canvas id="@elevationCanvasId"></canvas>
+        </div>
+    </section>
+
+    <section class="prediction-visualization__profile-card">
+        <h3>Gradient</h3>
+        <div class="prediction-visualization__chart-shell">
+            <canvas id="@gradientCanvasId"></canvas>
+        </div>
+    </section>
+
+    <section class="prediction-visualization__profile-card">
+        <h3>Power</h3>
+        <div class="prediction-visualization__chart-shell">
+            <canvas id="@powerCanvasId"></canvas>
+        </div>
+    </section>
+
+    <section class="prediction-visualization__profile-card">
+        <h3>Speed</h3>
+        <div class="prediction-visualization__chart-shell">
+            <canvas id="@speedCanvasId"></canvas>
+        </div>
+    </section>
+</div>
+
+@code {
+    private readonly string componentId = $"route-profiles-{Guid.NewGuid():N}";
+    private readonly string elevationCanvasId = $"route-profile-elevation-{Guid.NewGuid():N}";
+    private readonly string gradientCanvasId = $"route-profile-gradient-{Guid.NewGuid():N}";
+    private readonly string powerCanvasId = $"route-profile-power-{Guid.NewGuid():N}";
+    private readonly string speedCanvasId = $"route-profile-speed-{Guid.NewGuid():N}";
+    private IJSObjectReference? module;
+    private string? initializedSignature;
+    private DotNetObjectReference<RouteProfiles>? dotNetReference;
+
+    [Parameter]
+    public IReadOnlyList<PredictionSegmentResponse> Segments { get; set; } = [];
+
+    [Parameter]
+    public int SelectedSequence { get; set; }
+
+    [Parameter]
+    public EventCallback<int> SequenceSelected { get; set; }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Segments.Count == 0)
+        {
+            return;
+        }
+
+        module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/route-visualization.js");
+        dotNetReference ??= DotNetObjectReference.Create(this);
+
+        var signature = string.Join(',', Segments.Select(segment => segment.Sequence));
+        if (!string.Equals(signature, initializedSignature, StringComparison.Ordinal))
+        {
+            await module.InvokeVoidAsync(
+                "initializeProfiles",
+                componentId,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["elevation"] = elevationCanvasId,
+                    ["gradient"] = gradientCanvasId,
+                    ["power"] = powerCanvasId,
+                    ["speed"] = speedCanvasId
+                },
+                Segments,
+                dotNetReference);
+            initializedSignature = signature;
+        }
+
+        await SelectAsync(SelectedSequence);
+    }
+
+    [JSInvokable]
+    public async Task OnSequenceSelected(int sequence) => await InvokeAsync(() => SequenceSelected.InvokeAsync(sequence));
+
+    public async Task SelectAsync(int sequence)
+    {
+        if (module is null)
+        {
+            return;
+        }
+
+        await module.InvokeVoidAsync("selectProfileSequence", componentId, sequence);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (module is not null)
+        {
+            await module.InvokeVoidAsync("disposeProfiles", componentId);
+            await module.DisposeAsync();
+        }
+
+        dotNetReference?.Dispose();
+    }
+}

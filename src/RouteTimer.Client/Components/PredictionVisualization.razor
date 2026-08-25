@@ -1,0 +1,124 @@
+@using System.Net
+@using RouteTimer.Client.Api
+@using RouteTimer.Client.Formatting
+@using RouteTimer.Contracts.Predictions
+@inject IConfiguration Configuration
+
+<section class="prediction-visualization">
+    <div class="prediction-visualization__selection" data-testid="prediction-visualization-selection">
+        @if (SelectedSegment is null)
+        {
+            <p>Select a route segment to inspect its synchronized metrics.</p>
+        }
+        else
+        {
+            <p>
+                <strong>Selected segment @SelectedSegment.Sequence</strong>
+                · @RouteTimerFormat.Distance(SelectedSegment.CumulativeDistanceMetres)
+                · @RouteTimerFormat.Ascent(SelectedSegment.ElevationMetres)
+                · @RouteTimerFormat.Percentage(SelectedSegment.Gradient)
+                · @RouteTimerFormat.Power(SelectedSegment.PredictedPowerWatts)
+                · @RouteTimerFormat.SpeedKilometresPerHour(SelectedSegment.PredictedSpeedMetresPerSecond)
+                · @RouteTimerText.Sentence(SelectedSegment.Confidence) confidence
+            </p>
+        }
+    </div>
+
+    @if (configurationProblem is not null)
+    {
+        <div data-testid="prediction-visualization-problem">
+            <ProblemMessage Problem="@configurationProblem" FallbackMessage="Map tile configuration is unavailable." />
+        </div>
+    }
+    else
+    {
+        <RouteMap @ref="routeMap"
+                  Segments="orderedSegments"
+                  TileUrl="@tileUrl"
+                  TileAttribution="@tileAttribution"
+                  SelectedSequence="@selectedSequence"
+                  SequenceSelected="HandleMapSequenceSelected" />
+
+        <RouteProfiles @ref="routeProfiles"
+                       Segments="orderedSegments"
+                       SelectedSequence="@selectedSequence"
+                       SequenceSelected="HandleProfileSequenceSelected" />
+    }
+</section>
+
+@code {
+    private RouteMap? routeMap;
+    private RouteProfiles? routeProfiles;
+    private IReadOnlyList<PredictionSegmentResponse> orderedSegments = [];
+    private ApiProblemException? configurationProblem;
+    private string tileUrl = string.Empty;
+    private string tileAttribution = string.Empty;
+    private int selectedSequence;
+
+    [Parameter]
+    public IReadOnlyList<PredictionSegmentResponse> Segments { get; set; } = [];
+
+    private PredictionSegmentResponse? SelectedSegment => orderedSegments.FirstOrDefault(segment => segment.Sequence == selectedSequence);
+
+    protected override void OnParametersSet()
+    {
+        orderedSegments = Segments
+            .OrderBy(segment => segment.Sequence)
+            .ToArray();
+
+        tileUrl = Configuration["MapTiles:Url"] ?? string.Empty;
+        tileAttribution = Configuration["MapTiles:Attribution"] ?? string.Empty;
+        configurationProblem = string.IsNullOrWhiteSpace(tileUrl) || string.IsNullOrWhiteSpace(tileAttribution)
+            ? new ApiProblemException(
+                HttpStatusCode.InternalServerError,
+                "map-tiles-missing",
+                "Map tile configuration is unavailable.",
+                "Set both MapTiles:Url and MapTiles:Attribution in the client appsettings before loading route visualization.")
+            : null;
+
+        if (orderedSegments.Count == 0)
+        {
+            selectedSequence = 0;
+            return;
+        }
+
+        if (orderedSegments.Any(segment => segment.Sequence == selectedSequence))
+        {
+            return;
+        }
+
+        selectedSequence = orderedSegments[0].Sequence;
+    }
+
+    private async Task HandleMapSequenceSelected(int sequence)
+    {
+        if (selectedSequence == sequence)
+        {
+            return;
+        }
+
+        selectedSequence = sequence;
+        if (routeProfiles is not null)
+        {
+            await routeProfiles.SelectAsync(sequence);
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task HandleProfileSequenceSelected(int sequence)
+    {
+        if (selectedSequence == sequence)
+        {
+            return;
+        }
+
+        selectedSequence = sequence;
+        if (routeMap is not null)
+        {
+            await routeMap.SelectAsync(sequence);
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+}

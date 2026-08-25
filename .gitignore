@@ -10,3 +10,4 @@ TestResults/
 !.env.example
 node_modules/
 wwwroot/vendor/
+src/RouteTimer.Client/wwwroot/vendor/

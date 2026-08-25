@@ -4,4 +4,5 @@ public sealed record CleanedActivity(
     string Name,
     IReadOnlyList<CleanRideSample> Samples,
     TimeSpan MovingDuration,
-    ActivityQuality Quality);
+    ActivityQuality Quality,
+    TrainingActivityMetadata Metadata);

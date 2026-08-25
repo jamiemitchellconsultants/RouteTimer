@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
+using RouteTimer.Domain.Jobs;
 using RouteTimer.Domain.Models;
 using RouteTimer.Domain.Profile;
 using RouteTimer.Persistence.Entities;
+using RouteTimer.Services.Jobs;
 using RouteTimer.Services.Persistence;
 
 namespace RouteTimer.Persistence.Repositories;
@@ -18,12 +20,13 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
         StoredUploadEntity? upload;
         if (context.Database.IsRelational())
         {
-            await context.Database.ExecuteSqlInterpolatedAsync($"""
+            var uploadIds = await context.Database.SqlQuery<Guid>($"""
                 INSERT INTO stored_uploads ("Id", "Kind", "FileName", "Content", "Sha256", "CreatedAt")
                 VALUES ({creation.Upload.Id}, {creation.Upload.Kind}, {creation.Upload.FileName}, {creation.Upload.Content}, {creation.Upload.Sha256}, {creation.Upload.CreatedAt})
-                ON CONFLICT ("Kind", "Sha256") DO NOTHING;
-                """, cancellationToken);
-            upload = await context.Uploads.SingleAsync(entity => entity.Kind == "gpx" && entity.Sha256 == creation.Upload.Sha256, cancellationToken);
+                ON CONFLICT ("Kind", "Sha256") DO UPDATE SET "FileName" = stored_uploads."FileName"
+                RETURNING "Id" AS "Value";
+                """).ToListAsync(cancellationToken);
+            upload = await context.Uploads.SingleAsync(entity => entity.Id == uploadIds.Single(), cancellationToken);
         }
         else
         {
@@ -68,7 +71,10 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
             Type = "PredictRoute",
             SubjectId = prediction.Id,
             State = "Queued",
-            CreatedAt = creation.CreatedAt
+            ProgressPercent = 0,
+            ProgressStage = "queued",
+            CreatedAt = creation.CreatedAt,
+            UpdatedAt = creation.CreatedAt
         };
         context.Predictions.Add(prediction);
         context.Jobs.Add(job);
@@ -89,14 +95,61 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
             new RiderProfile(prediction.RiderWeightKg, prediction.BikeWeightKg));
     }
 
-    public async Task PublishAsync(Guid predictionId, PredictionPublication publication, CancellationToken cancellationToken)
+    public async Task<bool> TryPublishAsync(Guid predictionId, Guid jobId, string workerId, PredictionPublication publication, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(publication);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
         await using var transaction = context.Database.IsRelational()
             ? await context.Database.BeginTransactionAsync(cancellationToken)
             : null;
-        var prediction = await context.Predictions.Include(entity => entity.Segments).SingleOrDefaultAsync(entity => entity.Id == predictionId, cancellationToken)
-            ?? throw new InvalidOperationException("Prediction does not exist.");
+
+        var running = "Running";
+        var predictRoute = "PredictRoute";
+        if (context.Database.IsRelational())
+        {
+            var matchingJob = await context.Database.SqlQuery<Guid>(
+                $"""
+                SELECT "Id" AS "Value" FROM analysis_jobs
+                WHERE "Id" = {jobId}
+                  AND "SubjectId" = {predictionId}
+                  AND "Type" = {predictRoute}
+                  AND "State" = {running}
+                  AND "WorkerId" = {workerId}
+                FOR UPDATE
+                """).ToListAsync(cancellationToken);
+            if (matchingJob.Count == 0)
+            {
+                return false;
+            }
+        }
+        else if (!await context.Jobs.AnyAsync(entity =>
+                     entity.Id == jobId && entity.SubjectId == predictionId && entity.Type == predictRoute &&
+                     entity.State == running && entity.WorkerId == workerId, cancellationToken))
+        {
+            return false;
+        }
+
+        if (context.Database.IsRelational())
+        {
+            var matchingPrediction = await context.Database.SqlQuery<Guid>(
+                $"""
+                SELECT "Id" AS "Value" FROM predictions
+                WHERE "Id" = {predictionId}
+                FOR UPDATE
+                """).ToListAsync(cancellationToken);
+            if (matchingPrediction.Count == 0)
+            {
+                if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
+                return false;
+            }
+        }
+
+        var prediction = await context.Predictions.Include(entity => entity.Segments).SingleOrDefaultAsync(entity => entity.Id == predictionId, cancellationToken);
+        if (prediction is null)
+        {
+            if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
+            return false;
+        }
         prediction.Segments.Clear();
         foreach (var segment in publication.Segments)
         {
@@ -130,6 +183,96 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
         prediction.CompletedAt = DateTimeOffset.UtcNow;
         await context.SaveChangesAsync(cancellationToken);
         if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        return true;
+    }
+
+    public async Task<bool> DeleteAsync(Guid predictionId, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await using var transaction = context.Database.IsRelational()
+            ? await context.Database.BeginTransactionAsync(cancellationToken)
+            : null;
+
+        // Lock all matching jobs before reading or deleting the prediction. This serializes
+        // cancellation/deletion with a worker's owner-guarded publication transaction.
+        var jobIds = context.Database.IsRelational()
+            ? await context.Database.SqlQuery<Guid>($"""
+                SELECT "Id" AS "Value" FROM analysis_jobs
+                WHERE "SubjectId" = {predictionId} AND "Type" = {JobType.PredictRoute.ToString()}
+                  AND "State" IN ({JobState.Queued.ToString()}, {JobState.Running.ToString()})
+                FOR UPDATE
+                """).ToListAsync(cancellationToken)
+            : await context.Jobs
+                .Where(entity => entity.SubjectId == predictionId && entity.Type == JobType.PredictRoute.ToString() &&
+                    (entity.State == JobState.Queued.ToString() || entity.State == JobState.Running.ToString()))
+                .Select(entity => entity.Id)
+                .ToListAsync(cancellationToken);
+
+        if (context.Database.IsRelational())
+        {
+            var matchingPrediction = await context.Database.SqlQuery<Guid>(
+                $"""
+                SELECT "Id" AS "Value" FROM predictions
+                WHERE "Id" = {predictionId}
+                FOR UPDATE
+                """).ToListAsync(cancellationToken);
+            if (matchingPrediction.Count == 0)
+            {
+                if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
+                return false;
+            }
+        }
+
+        var prediction = await context.Predictions.SingleOrDefaultAsync(entity => entity.Id == predictionId, cancellationToken);
+        if (prediction is null)
+        {
+            if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
+            return false;
+        }
+
+        var uploadId = prediction.UploadId;
+        if (context.Database.IsRelational())
+        {
+            var lockedUpload = await context.Database.SqlQuery<Guid>($"""
+                SELECT "Id" AS "Value" FROM stored_uploads
+                WHERE "Id" = {uploadId}
+                FOR UPDATE
+                """).ToListAsync(cancellationToken);
+            if (lockedUpload.Count == 0)
+            {
+                if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
+                return false;
+            }
+        }
+
+        // The upload lock serializes this reference check with CreateQueuedAsync's
+        // deduplicated upload selection and subsequent prediction insert.
+        var jobs = await context.Jobs.Where(entity => jobIds.Contains(entity.Id)).ToListAsync(cancellationToken);
+        foreach (var job in jobs)
+        {
+            job.State = JobState.Cancelled.ToString();
+            job.ProgressStage = JobProgressStages.Cancelled;
+            job.UpdatedAt = now;
+            job.CompletedAt = now;
+            job.WorkerId = null;
+            job.LeaseExpiresAt = null;
+            job.DiagnosticCode = null;
+            job.DiagnosticMessage = null;
+        }
+
+        context.Predictions.Remove(prediction);
+        await context.SaveChangesAsync(cancellationToken);
+
+        var stillReferenced = await context.Predictions.AnyAsync(entity => entity.UploadId == uploadId, cancellationToken);
+        if (!stillReferenced)
+        {
+            var upload = await context.Uploads.SingleOrDefaultAsync(entity => entity.Id == uploadId, cancellationToken);
+            if (upload is not null) context.Uploads.Remove(upload);
+            await context.SaveChangesAsync(cancellationToken);
+        }
+
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        return true;
     }
 
     public async Task FailAsync(Guid predictionId, string code, string message, CancellationToken cancellationToken)

@@ -26,7 +26,8 @@ public sealed class BuildModelJobHandler(
     IPhysicsCalibrator calibrator,
     IDescentLimitBuilder descentBuilder,
     IModelValidator validator,
-    IRiderModelRepository models) : IJobHandler
+    IRiderModelRepository models,
+    IJobProgressReporter progress) : IJobHandler
 {
     /// <summary>Bump whenever the model-building algorithm or its configuration changes materially.</summary>
     public const string AlgorithmVersion = RiderModelAggregateValidator.CurrentAlgorithmVersion;
@@ -36,6 +37,8 @@ public sealed class BuildModelJobHandler(
     public async Task HandleAsync(AnalysisJob job, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(job);
+
+        await progress.ReportAsync(job, 5, JobProgressStages.LoadingEvidence, cancellationToken);
 
         var profile = await profiles.GetAsync(cancellationToken);
         if (profile is null)
@@ -61,6 +64,7 @@ public sealed class BuildModelJobHandler(
         PowerModel powerModel;
         try
         {
+            await progress.ReportAsync(job, 20, JobProgressStages.BuildingPowerModel, cancellationToken);
             powerModel = builder.Build(profile, enrichedActivities);
         }
         catch (InvalidOperationException)
@@ -68,7 +72,9 @@ public sealed class BuildModelJobHandler(
             throw new ModelBuildException("no-power-evidence", "No eligible training activities have power data available.");
         }
 
+        await progress.ReportAsync(job, 40, JobProgressStages.CalibratingPhysics, cancellationToken);
         var calibration = calibrator.Calibrate(profile, enrichedActivities);
+        await progress.ReportAsync(job, 55, JobProgressStages.BuildingDescentLimits, cancellationToken);
         var descentLimits = descentBuilder.Build(enrichedActivities);
         var model = new RiderModel(
             powerModel,
@@ -76,8 +82,10 @@ public sealed class BuildModelJobHandler(
             descentLimits,
             calibration.WasCalibrated,
             AlgorithmVersion);
+        await progress.ReportAsync(job, 70, JobProgressStages.ValidatingModel, cancellationToken);
         var validation = validator.Validate(profile, enrichedActivities);
 
+        await progress.ReportAsync(job, 90, JobProgressStages.SavingModel, cancellationToken);
         await models.SaveAsync(model, profile, validation, cancellationToken);
     }
 }

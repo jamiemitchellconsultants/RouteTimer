@@ -5,6 +5,7 @@ using RouteTimer.Domain.Physics;
 using RouteTimer.Domain.Profile;
 using RouteTimer.Domain.Routes;
 using RouteTimer.Services.Activities;
+using RouteTimer.Services.Jobs;
 using RouteTimer.Services.Models;
 using RouteTimer.Services.Persistence;
 using RouteTimer.Services.Physics;
@@ -33,7 +34,7 @@ public sealed class BuildModelJobHandlerTests
         var validation = new ModelValidationSummary(ModelValidationStatus.Passed, .05, .09);
         var validator = new FakeModelValidator { Result = validation };
         var models = new FakeRiderModelRepository();
-        var handler = new BuildModelJobHandler(profiles, activities, geometry, builder, calibrator, descents, validator, models);
+        var handler = new BuildModelJobHandler(profiles, activities, geometry, builder, calibrator, descents, validator, models, new FakeJobProgressReporter());
 
         await handler.HandleAsync(MakeJob(), CancellationToken.None);
 
@@ -71,7 +72,8 @@ public sealed class BuildModelJobHandlerTests
             calibrator,
             descents,
             validator,
-            models);
+            models,
+            new FakeJobProgressReporter());
 
         await handler.HandleAsync(MakeJob(), CancellationToken.None);
 
@@ -115,7 +117,8 @@ public sealed class BuildModelJobHandlerTests
             new FakePhysicsCalibrator(),
             new FakeDescentLimitBuilder(),
             new FakeModelValidator(),
-            new FakeRiderModelRepository());
+            new FakeRiderModelRepository(),
+            new FakeJobProgressReporter());
 
         await handler.HandleAsync(MakeJob(), CancellationToken.None);
 
@@ -140,7 +143,8 @@ public sealed class BuildModelJobHandlerTests
             new FakePhysicsCalibrator { Result = calibration },
             new FakeDescentLimitBuilder { Result = DescentLimitModel.Conservative },
             new FakeModelValidator(),
-            models);
+            models,
+            new FakeJobProgressReporter());
 
         await handler.HandleAsync(MakeJob(), CancellationToken.None);
 
@@ -199,12 +203,34 @@ public sealed class BuildModelJobHandlerTests
         Assert.Equal(validation, models.Saved!.Value.Validation);
     }
 
+    [Fact]
+    public async Task Handle_reports_all_model_build_progress_stages_in_order()
+    {
+        var progress = new FakeJobProgressReporter();
+        var handler = CreateHandler(progress: progress);
+        var job = MakeJob();
+
+        await handler.HandleAsync(job, CancellationToken.None);
+
+        Assert.Equal(
+            [
+                (job, 5, JobProgressStages.LoadingEvidence),
+                (job, 20, JobProgressStages.BuildingPowerModel),
+                (job, 40, JobProgressStages.CalibratingPhysics),
+                (job, 55, JobProgressStages.BuildingDescentLimits),
+                (job, 70, JobProgressStages.ValidatingModel),
+                (job, 90, JobProgressStages.SavingModel)
+            ],
+            progress.Reports);
+    }
+
     private static BuildModelJobHandler CreateHandler(
         FakeProfileRepository? profiles = null,
         FakeTrainingActivityRepository? activities = null,
         FakePowerModelBuilder? builder = null,
         FakeModelValidator? validator = null,
-        FakeRiderModelRepository? models = null) =>
+        FakeRiderModelRepository? models = null,
+        FakeJobProgressReporter? progress = null) =>
         new(
             profiles ?? new FakeProfileRepository { Profile = SampleProfile },
             activities ?? new FakeTrainingActivityRepository { Activities = ThreeEligibleActivities() },
@@ -213,10 +239,30 @@ public sealed class BuildModelJobHandlerTests
             new FakePhysicsCalibrator(),
             new FakeDescentLimitBuilder(),
             validator ?? new FakeModelValidator(),
-            models ?? new FakeRiderModelRepository());
+            models ?? new FakeRiderModelRepository(),
+            progress ?? new FakeJobProgressReporter());
 
     private static AnalysisJob MakeJob() =>
-        new(Guid.NewGuid(), JobType.BuildModel, ModelSubject.Id, JobState.Running, 1, "worker-1", DateTimeOffset.UtcNow.AddMinutes(5), DateTimeOffset.UtcNow);
+        RunningJob(JobType.BuildModel, ModelSubject.Id, "worker-1", DateTimeOffset.UtcNow.AddMinutes(5));
+
+    private static AnalysisJob RunningJob(JobType type, Guid subjectId, string workerId, DateTimeOffset? leaseExpiresAt)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new AnalysisJob(
+            Guid.NewGuid(),
+            type,
+            subjectId,
+            JobState.Running,
+            0,
+            "running",
+            1,
+            now,
+            now,
+            now,
+            null,
+            workerId,
+            leaseExpiresAt);
+    }
 
     private static IReadOnlyList<CleanedActivity> ThreeEligibleActivities() =>
         [EligibleActivity("one"), EligibleActivity("two"), EligibleActivity("three")];
@@ -225,7 +271,7 @@ public sealed class BuildModelJobHandlerTests
     {
         var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
         var samples = new[] { new CleanRideSample(start, TimeSpan.Zero, new GeoPoint(51, -2, 100), 7, 200, null, null, false, 0) };
-        return new CleanedActivity(name, samples, TimeSpan.FromMinutes(20), new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []));
+        return new CleanedActivity(name, samples, TimeSpan.FromMinutes(20), new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []), ActivityFixtures.Metadata($"{name}.fit", start, start, null, null, null, null));
     }
 
     private static CleanedActivity IneligibleActivity() =>
@@ -242,7 +288,7 @@ public sealed class BuildModelJobHandlerTests
         var quality = eligibility == ActivityEligibility.Eligible
             ? new ActivityQuality(eligibility, 1, 1, 1, 1, new Dictionary<string, int>(), [])
             : new ActivityQuality(eligibility, .1, .1, .1, 0, new Dictionary<string, int> { ["gap"] = 1 }, ["too-short"]);
-        return new CleanedActivity(name, samples, TimeSpan.FromMinutes(20), quality);
+        return new CleanedActivity(name, samples, TimeSpan.FromMinutes(20), quality, ActivityFixtures.Metadata($"{name}.fit", start, start.AddMinutes(20), null, null, null, null));
     }
 
     private static DescentLimitModel LearnedDescentModel() => new(
@@ -274,6 +320,14 @@ public sealed class BuildModelJobHandlerTests
         public Task<CleanedActivity?> GetAsync(Guid activityId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<IReadOnlyList<CleanedActivity>> GetAllAsync(CancellationToken cancellationToken) => Task.FromResult(Activities);
+
+        public Task<IReadOnlyList<TrainingActivitySummary>> GetSummariesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<TrainingActivityDetail?> GetDetailAsync(Guid activityId, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<TrainingActivityCounts> GetCountsAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<bool> DeleteAsync(Guid activityId, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private sealed class FakeTrainingGeometryEnricher : ITrainingGeometryEnricher
@@ -353,5 +407,16 @@ public sealed class BuildModelJobHandlerTests
         public Task<RiderModelSnapshot?> GetCurrentAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<RiderModelSnapshot?> GetAsync(Guid modelId, CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+
+    private sealed class FakeJobProgressReporter : IJobProgressReporter
+    {
+        public List<(AnalysisJob Job, int ProgressPercent, string Stage)> Reports { get; } = [];
+
+        public Task ReportAsync(AnalysisJob job, int progressPercent, string stage, CancellationToken cancellationToken)
+        {
+            Reports.Add((job, progressPercent, stage));
+            return Task.CompletedTask;
+        }
     }
 }

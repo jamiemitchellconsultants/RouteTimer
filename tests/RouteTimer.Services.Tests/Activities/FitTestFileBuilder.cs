@@ -4,32 +4,84 @@ namespace RouteTimer.Services.Tests.Activities;
 
 internal static class FitTestFileBuilder
 {
-    public static MemoryStream ActivityWithPause()
+    public static MemoryStream ActivityWithPause() => CyclingActivity(
+        startedAt: new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero),
+        endedAt: new DateTimeOffset(2026, 1, 1, 12, 0, 2, TimeSpan.Zero),
+        recordOffsetsSeconds: [0, 2],
+        timerEventOffsetsSeconds: [(0, EventType.Start), (1, EventType.Stop)],
+        powersWatts: [220, 0],
+        totalTimerSeconds: 1,
+        totalDistanceMetres: 10,
+        totalAscentMetres: null,
+        manufacturer: Manufacturer.Development,
+        product: 1,
+        productName: null,
+        includeSessionTimestamp: true);
+
+    public static MemoryStream CyclingActivity(
+        DateTimeOffset startedAt,
+        DateTimeOffset endedAt,
+        double? totalDistanceMetres,
+        ushort? totalAscentMetres,
+        bool includeSessionTimestamp = true,
+        ushort manufacturer = Manufacturer.Garmin,
+        ushort product = 1,
+        string? productName = "Edge",
+        IReadOnlyList<int>? recordOffsetsSeconds = null,
+        IReadOnlyList<(int OffsetSeconds, EventType EventType)>? timerEventOffsetsSeconds = null,
+        IReadOnlyList<ushort>? powersWatts = null,
+        float totalTimerSeconds = 1)
     {
         var stream = new MemoryStream();
-        var start = new Dynastream.Fit.DateTime(new System.DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc));
+        var start = new Dynastream.Fit.DateTime(startedAt.UtcDateTime);
         var encoder = new Encode(ProtocolVersion.V20);
         encoder.Open(stream);
 
         var fileId = new FileIdMesg();
         fileId.SetType(Dynastream.Fit.File.Activity);
-        fileId.SetManufacturer(Manufacturer.Development);
-        fileId.SetProduct(1);
+        fileId.SetManufacturer(manufacturer);
+        fileId.SetProduct(product);
+        if (!string.IsNullOrWhiteSpace(productName))
+        {
+            fileId.SetProductName(productName);
+        }
+
         fileId.SetSerialNumber(1);
         fileId.SetTimeCreated(start);
         encoder.Write(fileId);
 
-        encoder.Write(TimerEvent(start, EventType.Start));
-        encoder.Write(Record(start, 220));
-        encoder.Write(TimerEvent(new Dynastream.Fit.DateTime(start.GetTimeStamp() + 1), EventType.Stop));
-        encoder.Write(Record(new Dynastream.Fit.DateTime(start.GetTimeStamp() + 2), 0));
+        var offsets = recordOffsetsSeconds ?? [0, 2];
+        var powers = powersWatts ?? [220, 0];
+        var events = timerEventOffsetsSeconds ?? [(0, EventType.Start), (1, EventType.Stop)];
+        var timeline = events
+            .Select(item => (OffsetSeconds: item.OffsetSeconds, Order: 0, Message: (Mesg)TimerEvent(new Dynastream.Fit.DateTime(start.GetTimeStamp() + (uint)item.OffsetSeconds), item.EventType)))
+            .Concat(offsets.Select((offsetSeconds, index) => (OffsetSeconds: offsetSeconds, Order: 1, Message: (Mesg)Record(new Dynastream.Fit.DateTime(start.GetTimeStamp() + (uint)offsetSeconds), powers[index]))))
+            .OrderBy(item => item.OffsetSeconds)
+            .ThenBy(item => item.Order);
+        foreach (var item in timeline)
+        {
+            encoder.Write(item.Message);
+        }
 
         var session = new SessionMesg();
         session.SetSport(Sport.Cycling);
         session.SetStartTime(start);
-        session.SetTimestamp(new Dynastream.Fit.DateTime(start.GetTimeStamp() + 2));
-        session.SetTotalTimerTime(1);
-        session.SetTotalDistance(10);
+        if (includeSessionTimestamp)
+        {
+            session.SetTimestamp(new Dynastream.Fit.DateTime(endedAt.UtcDateTime));
+        }
+
+        session.SetTotalTimerTime(totalTimerSeconds);
+        if (totalDistanceMetres.HasValue)
+        {
+            session.SetTotalDistance((float)totalDistanceMetres.Value);
+        }
+
+        if (totalAscentMetres.HasValue)
+        {
+            session.SetTotalAscent(totalAscentMetres.Value);
+        }
+
         encoder.Write(session);
         encoder.Close();
         stream.Position = 0;

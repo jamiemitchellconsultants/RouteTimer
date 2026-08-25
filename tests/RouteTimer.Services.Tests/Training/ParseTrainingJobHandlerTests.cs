@@ -3,6 +3,7 @@ using RouteTimer.Domain.Jobs;
 using RouteTimer.Services.Activities;
 using RouteTimer.Services.Jobs;
 using RouteTimer.Services.Persistence;
+using RouteTimer.Services.Tests.Activities;
 using RouteTimer.Services.Training;
 using RouteTimer.Services.Validation;
 
@@ -10,19 +11,28 @@ namespace RouteTimer.Services.Tests.Training;
 
 public sealed class ParseTrainingJobHandlerTests
 {
+    private static readonly DateTimeOffset SampleStartedAt = new(2026, 8, 1, 9, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset SampleEndedAt = new(2026, 8, 1, 9, 30, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset SampleCleanedEndedAt = new(2026, 8, 1, 9, 25, 0, TimeSpan.Zero);
+
     private static readonly ParsedFitActivity SampleParsed = new(
         "Morning Ride",
         ActivitySport.Cycling,
-        DateTimeOffset.UtcNow,
+        SampleStartedAt,
+        SampleEndedAt,
+        "Garmin",
+        "Edge",
         [],
         TimeSpan.FromMinutes(30),
-        10_000);
+        10_000,
+        250);
 
     private static readonly CleanedActivity SampleCleaned = new(
         "Morning Ride",
         [],
         TimeSpan.FromMinutes(25),
-        new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []));
+        new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []),
+        ActivityFixtures.Metadata("ride.fit", SampleStartedAt, SampleCleanedEndedAt, "Garmin", "Edge", 10_000, 250));
 
     [Fact]
     public async Task Handle_parses_cleans_and_saves_the_upload_referenced_by_the_job()
@@ -33,12 +43,13 @@ public sealed class ParseTrainingJobHandlerTests
         var cleaner = new FakeTrainingCleaner { Result = SampleCleaned };
         var activities = new FakeTrainingActivityRepository();
         var jobs = new FakeJobQueue();
-        var handler = new ParseTrainingJobHandler(uploads, parser, cleaner, activities, jobs);
-        var job = new AnalysisJob(Guid.NewGuid(), JobType.ParseTraining, uploadId, JobState.Running, 1, "worker-1", DateTimeOffset.UtcNow.AddMinutes(5), DateTimeOffset.UtcNow);
+        var handler = new ParseTrainingJobHandler(uploads, parser, cleaner, activities, jobs, new FakeJobProgressReporter());
+        var job = RunningJob(uploadId);
 
         await handler.HandleAsync(job, CancellationToken.None);
 
         Assert.Same(SampleParsed, cleaner.ReceivedActivity);
+        Assert.Equal("ride.fit", cleaner.ReceivedSourceFileName);
         Assert.Equal(uploadId, activities.SavedUploadId);
         Assert.Same(SampleCleaned, activities.SavedActivity);
     }
@@ -52,8 +63,8 @@ public sealed class ParseTrainingJobHandlerTests
         var cleaner = new FakeTrainingCleaner { Result = SampleCleaned };
         var activities = new FakeTrainingActivityRepository();
         var jobs = new FakeJobQueue();
-        var handler = new ParseTrainingJobHandler(uploads, parser, cleaner, activities, jobs);
-        var job = new AnalysisJob(Guid.NewGuid(), JobType.ParseTraining, uploadId, JobState.Running, 1, "worker-1", DateTimeOffset.UtcNow.AddMinutes(5), DateTimeOffset.UtcNow);
+        var handler = new ParseTrainingJobHandler(uploads, parser, cleaner, activities, jobs, new FakeJobProgressReporter());
+        var job = RunningJob(uploadId);
 
         await handler.HandleAsync(job, CancellationToken.None);
 
@@ -62,12 +73,45 @@ public sealed class ParseTrainingJobHandlerTests
         Assert.Equal(ModelSubject.Id, enqueued.SubjectId);
     }
 
+    // Break caught: parse training progress is missing a stage or reports stages after the work has already completed.
+    [Fact]
+    public async Task Parse_handler_reports_every_stage_monotonically()
+    {
+        var uploadId = Guid.NewGuid();
+        var uploads = new FakeStoredUploadRepository { Upload = new StoredUpload(uploadId, "ride.fit", "fit", [1, 2, 3], [], DateTimeOffset.UtcNow) };
+        var parser = new FakeFitActivityParser { Result = SampleParsed };
+        var cleaner = new FakeTrainingCleaner { Result = SampleCleaned };
+        var activities = new FakeTrainingActivityRepository();
+        var jobs = new FakeJobQueue();
+        var progress = new FakeJobProgressReporter();
+        var handler = new ParseTrainingJobHandler(uploads, parser, cleaner, activities, jobs, progress);
+        var job = RunningJob(uploadId);
+
+        await handler.HandleAsync(job, CancellationToken.None);
+
+        Assert.Equal(
+            new[]
+            {
+                (10, "reading-upload"),
+                (25, "decoding-fit"),
+                (50, "cleaning-activity"),
+                (75, "saving-activity"),
+                (90, "queueing-model-rebuild")
+            },
+            progress.Reports);
+        Assert.True(progress.ReportIndexes["reading-upload"] < uploads.GetIndex);
+        Assert.True(progress.ReportIndexes["decoding-fit"] < parser.ParseIndex);
+        Assert.True(progress.ReportIndexes["cleaning-activity"] < cleaner.CleanIndex);
+        Assert.True(progress.ReportIndexes["saving-activity"] < activities.SaveIndex);
+        Assert.True(progress.ReportIndexes["queueing-model-rebuild"] < jobs.EnqueueIndex);
+    }
+
     [Fact]
     public async Task Handle_throws_permanent_activity_input_exception_when_upload_is_missing()
     {
         var uploads = new FakeStoredUploadRepository { Upload = null };
-        var handler = new ParseTrainingJobHandler(uploads, new FakeFitActivityParser(), new FakeTrainingCleaner(), new FakeTrainingActivityRepository(), new FakeJobQueue());
-        var job = new AnalysisJob(Guid.NewGuid(), JobType.ParseTraining, Guid.NewGuid(), JobState.Running, 1, "worker-1", DateTimeOffset.UtcNow.AddMinutes(5), DateTimeOffset.UtcNow);
+        var handler = new ParseTrainingJobHandler(uploads, new FakeFitActivityParser(), new FakeTrainingCleaner(), new FakeTrainingActivityRepository(), new FakeJobQueue(), new FakeJobProgressReporter());
+        var job = RunningJob(Guid.NewGuid());
 
         var exception = await Assert.ThrowsAsync<ActivityInputException>(() => handler.HandleAsync(job, CancellationToken.None));
 
@@ -80,8 +124,8 @@ public sealed class ParseTrainingJobHandlerTests
         var uploadId = Guid.NewGuid();
         var uploads = new FakeStoredUploadRepository { Upload = new StoredUpload(uploadId, "ride.fit", "fit", [1, 2, 3], [], DateTimeOffset.UtcNow) };
         var parser = new FakeFitActivityParser { ThrownException = new ActivityInputException("corrupt-fit", "The FIT file is corrupt.") };
-        var handler = new ParseTrainingJobHandler(uploads, parser, new FakeTrainingCleaner(), new FakeTrainingActivityRepository(), new FakeJobQueue());
-        var job = new AnalysisJob(Guid.NewGuid(), JobType.ParseTraining, uploadId, JobState.Running, 1, "worker-1", DateTimeOffset.UtcNow.AddMinutes(5), DateTimeOffset.UtcNow);
+        var handler = new ParseTrainingJobHandler(uploads, parser, new FakeTrainingCleaner(), new FakeTrainingActivityRepository(), new FakeJobQueue(), new FakeJobProgressReporter());
+        var job = RunningJob(uploadId);
 
         var exception = await Assert.ThrowsAsync<ActivityInputException>(() => handler.HandleAsync(job, CancellationToken.None));
 
@@ -92,19 +136,26 @@ public sealed class ParseTrainingJobHandlerTests
     private sealed class FakeStoredUploadRepository : IStoredUploadRepository
     {
         public StoredUpload? Upload { get; init; }
+        public int GetIndex { get; private set; }
 
         public Task<bool> StoreIfAbsentAsync(StoredUpload upload, CancellationToken cancellationToken) => throw new NotSupportedException();
 
-        public Task<StoredUpload?> GetAsync(Guid id, CancellationToken cancellationToken) => Task.FromResult(Upload);
+        public Task<StoredUpload?> GetAsync(Guid id, CancellationToken cancellationToken)
+        {
+            GetIndex = OperationLog.Next();
+            return Task.FromResult(Upload);
+        }
     }
 
     private sealed class FakeFitActivityParser : IFitActivityParser
     {
         public ParsedFitActivity? Result { get; init; }
         public ActivityInputException? ThrownException { get; init; }
+        public int ParseIndex { get; private set; }
 
         public Task<ParsedFitActivity> ParseAsync(Stream input, CancellationToken cancellationToken)
         {
+            ParseIndex = OperationLog.Next();
             if (ThrownException is not null)
             {
                 throw ThrownException;
@@ -118,10 +169,14 @@ public sealed class ParseTrainingJobHandlerTests
     {
         public CleanedActivity? Result { get; init; }
         public ParsedFitActivity? ReceivedActivity { get; private set; }
+        public string? ReceivedSourceFileName { get; private set; }
+        public int CleanIndex { get; private set; }
 
-        public CleanedActivity Clean(ParsedFitActivity activity)
+        public CleanedActivity Clean(ParsedFitActivity activity, string sourceFileName)
         {
+            CleanIndex = OperationLog.Next();
             ReceivedActivity = activity;
+            ReceivedSourceFileName = sourceFileName;
             return Result!;
         }
     }
@@ -130,9 +185,11 @@ public sealed class ParseTrainingJobHandlerTests
     {
         public Guid SavedUploadId { get; private set; }
         public CleanedActivity? SavedActivity { get; private set; }
+        public int SaveIndex { get; private set; }
 
         public Task<Guid> SaveAsync(Guid uploadId, CleanedActivity activity, CancellationToken cancellationToken)
         {
+            SaveIndex = OperationLog.Next();
             SavedUploadId = uploadId;
             SavedActivity = activity;
             return Task.FromResult(Guid.NewGuid());
@@ -141,16 +198,22 @@ public sealed class ParseTrainingJobHandlerTests
         public Task<CleanedActivity?> GetAsync(Guid activityId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<IReadOnlyList<CleanedActivity>> GetAllAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<IReadOnlyList<TrainingActivitySummary>> GetSummariesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<TrainingActivityDetail?> GetDetailAsync(Guid activityId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<TrainingActivityCounts> GetCountsAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> DeleteAsync(Guid activityId, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private sealed class FakeJobQueue : IJobQueue
     {
         public List<(JobType Type, Guid SubjectId)> EnqueuedIfNotPending { get; } = [];
+        public int EnqueueIndex { get; private set; }
 
         public Task<Guid> EnqueueAsync(JobType type, Guid subjectId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<Guid> EnqueueIfNotPendingAsync(JobType type, Guid subjectId, CancellationToken cancellationToken)
         {
+            EnqueueIndex = OperationLog.Next();
             EnqueuedIfNotPending.Add((type, subjectId));
             return Task.FromResult(Guid.NewGuid());
         }
@@ -159,8 +222,51 @@ public sealed class ParseTrainingJobHandlerTests
 
         public Task<bool> RenewLeaseAsync(Guid jobId, string workerId, DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken) => throw new NotSupportedException();
 
-        public Task<bool> CompleteAsync(Guid jobId, string workerId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> ReportProgressAsync(Guid jobId, string workerId, int progressPercent, string stage, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
 
-        public Task<bool> FailAsync(Guid jobId, string workerId, bool permanent, string? diagnosticCode, string? diagnosticMessage, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> CancelAsync(Guid jobId, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<bool> CompleteAsync(Guid jobId, string workerId, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<bool> FailAsync(Guid jobId, string workerId, bool permanent, string? diagnosticCode, string? diagnosticMessage, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+
+    private sealed class FakeJobProgressReporter : IJobProgressReporter
+    {
+        public List<(int Percent, string Stage)> Reports { get; } = [];
+        public Dictionary<string, int> ReportIndexes { get; } = [];
+
+        public Task ReportAsync(AnalysisJob job, int progressPercent, string stage, CancellationToken cancellationToken)
+        {
+            ReportIndexes[stage] = OperationLog.Next();
+            Reports.Add((progressPercent, stage));
+            return Task.CompletedTask;
+        }
+    }
+
+    private static class OperationLog
+    {
+        private static int next;
+
+        public static int Next() => Interlocked.Increment(ref next);
+    }
+
+    private static AnalysisJob RunningJob(Guid uploadId)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new AnalysisJob(
+            Guid.NewGuid(),
+            JobType.ParseTraining,
+            uploadId,
+            JobState.Running,
+            0,
+            "running",
+            1,
+            now,
+            now,
+            now,
+            null,
+            "worker-1",
+            now.AddMinutes(5));
     }
 }

@@ -1,25 +1,253 @@
-﻿@page "/"
+@page "/"
+@implements IDisposable
+@using RouteTimer.Client.Api
+@using RouteTimer.Client.Components
+@using RouteTimer.Client.Formatting
+@using RouteTimer.Contracts.Models
+@using RouteTimer.Contracts.Predictions
+@using RouteTimer.Contracts.Profile
+@using RouteTimer.Contracts.Training
+@inject IRouteTimerApiClient Api
 
 <PageTitle>RouteTimer</PageTitle>
 
 <h1>RouteTimer dashboard</h1>
 
-<p>Train on your road rides, then predict moving time for a GPX route in calm, dry conditions.</p>
+<p>Train on your road rides, tune your rider model, and review your latest predictions from one place.</p>
 
 <section class="dashboard-grid" aria-label="RouteTimer status">
-    <article>
-        <h2>Rider profile</h2>
-        <p>Set rider and bike/equipment mass before submitting predictions.</p>
-        <a href="profile">Manage profile</a>
+    <article class="dashboard-card">
+        <div class="dashboard-card__header">
+            <div>
+                <h2>Rider profile</h2>
+                <p>Set rider and bike/equipment mass before submitting predictions.</p>
+            </div>
+            <a class="dashboard-card__link" href="profile">Manage</a>
+        </div>
+
+        @if (profileState.IsLoading)
+        {
+            <p data-testid="dashboard-profile-state">Loading rider profile...</p>
+        }
+        else if (profileState.HasError)
+        {
+            <div data-testid="dashboard-profile-error">
+                <ProblemMessage Problem="@profileState.Problem" FallbackMessage="We could not load your rider profile." />
+            </div>
+        }
+        else if (profileState.Value is null)
+        {
+            <p data-testid="dashboard-profile-state">No rider profile saved yet.</p>
+            <a data-testid="dashboard-profile-action" class="dashboard-card__action" href="profile">Add rider profile</a>
+        }
+        else
+        {
+            <div data-testid="dashboard-profile-state" class="dashboard-metric-list">
+                <div>
+                    <span class="dashboard-metric-list__label">Rider weight</span>
+                    <span class="dashboard-metric-list__value">@RouteTimerFormat.Weight(profileState.Value.RiderWeightKg)</span>
+                </div>
+                <div>
+                    <span class="dashboard-metric-list__label">Bike and equipment</span>
+                    <span class="dashboard-metric-list__value">@RouteTimerFormat.Weight(profileState.Value.BikeAndEquipmentWeightKg)</span>
+                </div>
+            </div>
+        }
     </article>
-    <article>
-        <h2>Training evidence</h2>
-        <p>Upload FIT activities with power data to learn your typical riding power.</p>
-        <a href="training">Upload FIT files</a>
+
+    <article class="dashboard-card">
+        <div class="dashboard-card__header">
+            <div>
+                <h2>Training evidence</h2>
+                <p>Upload FIT rides with power data to keep your rider model representative.</p>
+            </div>
+            <a class="dashboard-card__link" href="training">Open training</a>
+        </div>
+
+        @if (trainingState.IsLoading)
+        {
+            <p data-testid="dashboard-training-state">Loading training activity summary...</p>
+        }
+        else if (trainingState.HasError)
+        {
+            <div data-testid="dashboard-training-error">
+                <ProblemMessage Problem="@trainingState.Problem" FallbackMessage="We could not load your training activity summary." />
+            </div>
+        }
+        else if (trainingState.Value is null || trainingState.Value.Count == 0)
+        {
+            <p data-testid="dashboard-training-empty">No training rides uploaded yet.</p>
+        }
+        else
+        {
+            <div data-testid="dashboard-training-summary" class="dashboard-metric-list">
+                <div>
+                    <span class="dashboard-metric-list__label">Eligible rides</span>
+                    <span class="dashboard-metric-list__value">@EligibleTrainingCount of @trainingState.Value.Count rides</span>
+                </div>
+                <p>@EligibleTrainingCount eligible of @trainingState.Value.Count rides</p>
+            </div>
+        }
     </article>
-    <article>
-        <h2>Route prediction</h2>
-        <p>Upload an elevation-bearing GPX route for a detailed moving-time estimate.</p>
-        <a href="predictions">Predict a route</a>
+
+    <article class="dashboard-card">
+        <div class="dashboard-card__header">
+            <div>
+                <h2>Rider model</h2>
+                <p>Review readiness, validation quality, and any active rebuild progress.</p>
+            </div>
+            <a class="dashboard-card__link" href="training">Review evidence</a>
+        </div>
+
+        @if (modelState.IsLoading)
+        {
+            <p data-testid="dashboard-model-state">Loading rider model status...</p>
+        }
+        else if (modelState.HasError)
+        {
+            <div data-testid="dashboard-model-error">
+                <ProblemMessage Problem="@modelState.Problem" FallbackMessage="We could not load the rider model status." />
+            </div>
+        }
+        else if (modelState.Value is not null)
+        {
+            <div data-testid="dashboard-model-state">
+                <ModelStatus Status="@modelState.Value" />
+            </div>
+        }
+    </article>
+
+    <article class="dashboard-card">
+        <div class="dashboard-card__header">
+            <div>
+                <h2>Recent predictions</h2>
+                <p>Jump back into your latest route estimates without reopening uploads.</p>
+            </div>
+            <a class="dashboard-card__link" href="predictions">Open predictions</a>
+        </div>
+
+        @if (predictionState.IsLoading)
+        {
+            <p data-testid="dashboard-predictions-state">Loading recent predictions...</p>
+        }
+        else if (predictionState.HasError)
+        {
+            <div data-testid="dashboard-predictions-error">
+                <ProblemMessage Problem="@predictionState.Problem" FallbackMessage="We could not load recent predictions." />
+            </div>
+        }
+        else if (RecentPredictions.Count == 0)
+        {
+            <p data-testid="dashboard-predictions-empty">No saved predictions yet.</p>
+        }
+        else
+        {
+            <ul data-testid="dashboard-predictions-list" class="dashboard-prediction-list">
+                @foreach (var prediction in RecentPredictions)
+                {
+                    <li class="dashboard-prediction-list__item">
+                        <a href="@($"predictions/{prediction.Id}")">
+                            Prediction from @RouteTimerFormat.Timestamp(prediction.CreatedAt)
+                        </a>
+                        <div class="dashboard-prediction-list__meta">
+                            <span>@RouteTimerFormat.Distance(prediction.DistanceMetres)</span>
+                            <span>@RouteTimerFormat.Duration(prediction.MovingSeconds)</span>
+                            @if (!string.IsNullOrWhiteSpace(prediction.Confidence))
+                            {
+                                <ConfidenceBadge Confidence="@prediction.Confidence" />
+                            }
+                        </div>
+                    </li>
+                }
+            </ul>
+        }
     </article>
 </section>
+
+@code {
+    private readonly DashboardSectionState<ProfileResponse?> profileState = new();
+    private readonly DashboardSectionState<IReadOnlyList<TrainingActivitySummaryResponse>> trainingState = new();
+    private readonly DashboardSectionState<ModelStatusResponse> modelState = new();
+    private readonly DashboardSectionState<IReadOnlyList<PredictionSummaryResponse>> predictionState = new();
+    private readonly CancellationTokenSource pageCancellation = new();
+
+    private int EligibleTrainingCount => trainingState.Value?.Count(activity =>
+        activity.Eligibility.Equals("Eligible", StringComparison.OrdinalIgnoreCase)) ?? 0;
+
+    private IReadOnlyList<PredictionSummaryResponse> RecentPredictions => predictionState.Value?
+        .OrderByDescending(prediction => prediction.CreatedAt)
+        .Take(5)
+        .ToArray() ?? [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Task.WhenAll(
+            LoadProfileAsync(),
+            LoadTrainingAsync(),
+            LoadModelAsync(),
+            LoadPredictionsAsync());
+    }
+
+    public void Dispose()
+    {
+        pageCancellation.Cancel();
+        pageCancellation.Dispose();
+    }
+
+    private Task LoadProfileAsync() => LoadSectionAsync(
+        profileState,
+        ct => Api.GetProfileAsync(ct));
+
+    private Task LoadTrainingAsync() => LoadSectionAsync(
+        trainingState,
+        ct => Api.GetTrainingActivitiesAsync(ct));
+
+    private Task LoadModelAsync() => LoadSectionAsync(
+        modelState,
+        ct => Api.GetModelStatusAsync(ct));
+
+    private Task LoadPredictionsAsync() => LoadSectionAsync(
+        predictionState,
+        ct => Api.GetPredictionsAsync(ct));
+
+    private async Task LoadSectionAsync<T>(DashboardSectionState<T> state, Func<CancellationToken, Task<T>> loader)
+    {
+        try
+        {
+            state.Value = await loader(pageCancellation.Token);
+            state.Problem = null;
+            state.ShowFallbackError = false;
+        }
+        catch (ApiProblemException problem)
+        {
+            state.Problem = problem;
+            state.ShowFallbackError = false;
+        }
+        catch (HttpRequestException)
+        {
+            state.Problem = null;
+            state.ShowFallbackError = true;
+        }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (!pageCancellation.IsCancellationRequested)
+            {
+                state.IsLoading = false;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
+
+    private sealed class DashboardSectionState<T>
+    {
+        public bool IsLoading { get; set; } = true;
+        public T? Value { get; set; }
+        public ApiProblemException? Problem { get; set; }
+        public bool ShowFallbackError { get; set; }
+        public bool HasError => Problem is not null || ShowFallbackError;
+    }
+}

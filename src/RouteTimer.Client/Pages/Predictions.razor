@@ -1,68 +1,523 @@
 @page "/predictions"
-@inject HttpClient Http
+@implements IDisposable
+@using RouteTimer.Client.Api
+@using RouteTimer.Client.Components
+@using RouteTimer.Client.Formatting
+@using RouteTimer.Client.Jobs
+@using RouteTimer.Contracts.Jobs
+@using RouteTimer.Contracts.Models
 @using RouteTimer.Contracts.Predictions
+@using RouteTimer.Contracts.Uploads
+@inject IRouteTimerApiClient Api
+@inject JobPoller JobPoller
+@inject NavigationManager Navigation
+@inject TimeProvider TimeProvider
 
 <PageTitle>Predictions | RouteTimer</PageTitle>
 
 <h1>Route predictions</h1>
-<p>Upload an elevation-bearing GPX route to create a moving-time prediction.</p>
+<p>Upload one GPX route, monitor the durable job, and revisit saved prediction snapshots.</p>
 
-<label for="gpx-upload">Prediction GPX file</label>
-<InputFile id="gpx-upload" OnChange="SelectFile" accept=".gpx" />
-@if (selectedFileName is not null)
-{
-    <p>@selectedFileName is ready to predict.</p>
-    <button @onclick="SubmitAsync" disabled="@submitting">@(submitting ? "Checking route…" : "Create route preview")</button>
-}
-@if (preview is not null)
-{
-    <section aria-label="Route preview">
-        <h2>@preview.Name</h2>
-        <p>@Math.Round(preview.DistanceMetres / 1000, 1) km · @Math.Round(preview.AscentMetres) m ascent · @preview.SampleCount segments</p>
+<section class="predictions-page">
+    <section class="predictions-panel">
+        <h2>Submit a route</h2>
+        <label for="gpx-upload">Prediction GPX file</label>
+        <InputFile id="gpx-upload" OnChange="SelectFiles" accept=".gpx" />
+
+        @if (tooManyFilesSelected)
+        {
+            <p data-testid="predictions-too-many-files" class="predictions-message predictions-message--warning">
+                Please select a single GPX route.
+            </p>
+        }
+        else if (selectedFiles.Count == 0)
+        {
+            <p data-testid="predictions-upload-empty" class="predictions-message">Select one GPX file to start a prediction.</p>
+        }
+        else
+        {
+            <div class="predictions-submit-actions">
+                <p>@selectedFiles[0].Name is ready to predict.</p>
+                <button data-testid="predictions-submit"
+                        class="predictions-button"
+                        @onclick="SubmitAsync"
+                        disabled="@(!CanSubmit)">
+                    @(isSubmitting ? "Submitting route…" : "Submit prediction")
+                </button>
+            </div>
+        }
+
+        @if (submissionProblem is not null || submissionFallbackProblem)
+        {
+            <div data-testid="predictions-submit-error">
+                <ProblemMessage Problem="@submissionProblem" FallbackMessage="We could not submit the route prediction." />
+            </div>
+        }
     </section>
-}
-@if (status is not null)
-{
-    <p role="status">@status</p>
-}
+
+    <section class="predictions-panel">
+        <h2>Rider model status</h2>
+
+        @if (modelLoading)
+        {
+            <p>Loading rider model status...</p>
+        }
+        else if (modelProblem is not null || modelFallbackProblem)
+        {
+            <ProblemMessage Problem="@modelProblem" FallbackMessage="We could not load the rider model status." />
+        }
+        else if (modelStatus is not null)
+        {
+            <div class="predictions-model-status">
+                <ModelStatus Status="@modelStatus" />
+                @if (!modelStatus.IsReady && !string.IsNullOrWhiteSpace(modelStatus.BlockingReason))
+                {
+                    <p data-testid="predictions-model-guidance" class="predictions-message predictions-message--warning">
+                        @modelStatus.BlockingReason
+                    </p>
+                }
+            </div>
+        }
+    </section>
+
+    <section class="predictions-panel">
+        <h2>Prediction history</h2>
+
+        @if (predictionsLoading)
+        {
+            <p>Loading prediction history...</p>
+        }
+        else if (predictionsProblem is not null || predictionsFallbackProblem)
+        {
+            <div data-testid="predictions-history-error">
+                <ProblemMessage Problem="@predictionsProblem" FallbackMessage="We could not load your prediction history." />
+            </div>
+        }
+        else if (VisiblePredictions.Count == 0)
+        {
+            <p data-testid="predictions-history-empty">No saved predictions yet.</p>
+        }
+        else
+        {
+            <ul data-testid="predictions-history-list" class="predictions-history-list">
+                @foreach (var prediction in VisiblePredictions)
+                {
+                    <li data-testid="predictions-history-item" class="predictions-history-item">
+                        <div class="predictions-history-item__header">
+                            <div>
+                                <h3>
+                                    <a href="@($"predictions/{prediction.Id}")">Prediction @prediction.Id</a>
+                                </h3>
+                                <p>@RouteTimerFormat.Timestamp(prediction.CreatedAt)</p>
+                            </div>
+
+                            <div class="predictions-history-item__actions">
+                                @if (queuedPredictionIds.Contains(prediction.Id))
+                                {
+                                    <span class="predictions-state">Queued</span>
+                                }
+                                <span class="predictions-state">@RouteTimerText.Sentence(prediction.State)</span>
+                                <button data-testid="@($"prediction-delete-request-{prediction.Id}")"
+                                        class="predictions-button predictions-button--secondary"
+                                        @onclick="@(() => RequestDelete(prediction.Id))"
+                                        disabled="@isDeleting">
+                                    Delete
+                                </button>
+                            </div>
+                        </div>
+
+                        <p>
+                            @DisplayMetric(RouteTimerFormat.Distance(prediction.DistanceMetres))
+                            · @DisplayMetric(RouteTimerFormat.Ascent(prediction.AscentMetres))
+                            · @DisplayMetric(RouteTimerFormat.Duration(prediction.MovingSeconds))
+                        </p>
+
+                        <p>
+                            @DisplayMetric(RouteTimerFormat.SpeedKilometresPerHour(prediction.AverageSpeedMetresPerSecond))
+                            · @DisplayMetric(RouteTimerFormat.Power(prediction.AveragePowerWatts))
+                        </p>
+
+                        <div class="predictions-history-item__meta">
+                            @if (!string.IsNullOrWhiteSpace(prediction.Confidence))
+                            {
+                                <ConfidenceBadge Confidence="@prediction.Confidence" />
+                            }
+
+                            <span>@prediction.ModelVersion</span>
+                            <span>@RouteTimerText.Sentence(prediction.ValidationStatus)</span>
+                        </div>
+
+                        @if (prediction.Warnings.Count > 0)
+                        {
+                            <ul class="predictions-history-warnings">
+                                @foreach (var warning in prediction.Warnings)
+                                {
+                                    <li>@RouteTimerText.Sentence(warning)</li>
+                                }
+                            </ul>
+                        }
+
+                        @if (activePredictionJobs.TryGetValue(prediction.Id, out var job))
+                        {
+                            <JobProgress Job="@job" />
+                        }
+
+                        @if (confirmingDeleteId == prediction.Id)
+                        {
+                            <div data-testid="prediction-delete-confirmation" class="predictions-delete-confirmation">
+                                <p>Deleting this prediction removes its retained GPX and result. Training data and rider models will not change.</p>
+                                <div class="predictions-delete-confirmation__actions">
+                                    <button data-testid="prediction-delete-confirm"
+                                            class="predictions-button predictions-button--danger"
+                                            @onclick="ConfirmDeleteAsync"
+                                            disabled="@isDeleting">
+                                        @(isDeleting ? "Deleting…" : "Delete prediction")
+                                    </button>
+                                    <button data-testid="prediction-delete-cancel"
+                                            class="predictions-button predictions-button--secondary"
+                                            @onclick="CancelDelete"
+                                            disabled="@isDeleting">
+                                        Cancel
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+</section>
 
 @code {
-    private string? selectedFileName;
-    private IBrowserFile? selectedFile;
-    private bool submitting;
-    private string? status;
-    private PredictionRoutePreview? preview;
+    private readonly CancellationTokenSource pageCancellation = new();
+    private readonly Dictionary<Guid, PredictionSummaryResponse> pendingPredictions = new();
+    private readonly Dictionary<Guid, Guid> pendingPredictionJobs = new();
+    private readonly Dictionary<Guid, JobResponse> activePredictionJobs = new();
+    private readonly HashSet<Guid> queuedPredictionIds = [];
+    private IReadOnlyList<IBrowserFile> selectedFiles = [];
+    private IReadOnlyList<PredictionSummaryResponse> predictions = [];
+    private ModelStatusResponse? modelStatus;
+    private ApiProblemException? submissionProblem;
+    private ApiProblemException? modelProblem;
+    private ApiProblemException? predictionsProblem;
+    private bool submissionFallbackProblem;
+    private bool modelFallbackProblem;
+    private bool predictionsFallbackProblem;
+    private bool modelLoading = true;
+    private bool predictionsLoading = true;
+    private bool tooManyFilesSelected;
+    private bool isSubmitting;
+    private bool isDeleting;
+    private Guid? confirmingDeleteId;
+    private CancellationTokenSource? activeSubmissionCancellation;
+    private CancellationTokenSource? activeDeleteCancellation;
 
-    private void SelectFile(InputFileChangeEventArgs args)
+    private bool CanSubmit =>
+        !isSubmitting
+        && !tooManyFilesSelected
+        && selectedFiles.Count == 1
+        && modelStatus?.IsReady == true;
+
+    private IReadOnlyList<PredictionSummaryResponse> VisiblePredictions => pendingPredictions.Values
+        .Concat(predictions)
+        .GroupBy(prediction => prediction.Id)
+        .Select(group => group.First())
+        .OrderByDescending(prediction => prediction.CreatedAt)
+        .ToArray();
+
+    protected override async Task OnInitializedAsync()
     {
-        selectedFile = args.File;
-        selectedFileName = selectedFile.Name;
-        status = null;
-        preview = null;
+        await Task.WhenAll(LoadModelStatusAsync(), LoadPredictionsAsync());
+    }
+
+    public void Dispose()
+    {
+        activeSubmissionCancellation?.Cancel();
+        activeSubmissionCancellation?.Dispose();
+        activeDeleteCancellation?.Cancel();
+        activeDeleteCancellation?.Dispose();
+        pageCancellation.Cancel();
+        pageCancellation.Dispose();
+    }
+
+    private void SelectFiles(InputFileChangeEventArgs args)
+    {
+        tooManyFilesSelected = false;
+        submissionProblem = null;
+        submissionFallbackProblem = false;
+
+        try
+        {
+            selectedFiles = args.GetMultipleFiles(1);
+        }
+        catch (InvalidOperationException)
+        {
+            selectedFiles = [];
+            tooManyFilesSelected = true;
+        }
     }
 
     private async Task SubmitAsync()
     {
-        if (selectedFile is null) return;
-        submitting = true;
+        if (!CanSubmit)
+        {
+            return;
+        }
+
+        isSubmitting = true;
+        submissionProblem = null;
+        submissionFallbackProblem = false;
+
         try
         {
-            using var content = new MultipartFormDataContent();
-            content.Add(new StreamContent(selectedFile.OpenReadStream(50 * 1024 * 1024)), "file", selectedFile.Name);
-            using var response = await Http.PostAsync("api/predictions", content);
-            if (response.IsSuccessStatusCode)
-            {
-                preview = await response.Content.ReadFromJsonAsync<PredictionRoutePreview>();
-                status = preview is null ? "Route preview could not be read." : "Route preview created.";
-            }
-            else
-            {
-                status = "GPX route could not be processed.";
-            }
+            activeSubmissionCancellation?.Dispose();
+            activeSubmissionCancellation = CancellationTokenSource.CreateLinkedTokenSource(pageCancellation.Token);
+
+            var selectedFile = selectedFiles[0];
+            var upload = new ClientFileUpload(
+                selectedFile.Name,
+                selectedFile.Size,
+                () => selectedFile.OpenReadStream(UploadLimits.MaximumFileBytes, pageCancellation.Token));
+
+            var response = await Api.SubmitPredictionAsync(upload, activeSubmissionCancellation.Token);
+            selectedFiles = [];
+
+            var createdAt = TimeProvider.GetUtcNow();
+            pendingPredictions[response.PredictionId] = new PredictionSummaryResponse(
+                response.PredictionId,
+                "Queued",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                [],
+                response.ModelId,
+                modelStatus?.AlgorithmVersion ?? "Pending",
+                modelStatus?.WasCalibrated ?? false,
+                modelStatus?.ValidationStatus ?? "Pending",
+                modelStatus?.ValidationMedianAbsolutePercentageError,
+                modelStatus?.ValidationP90AbsolutePercentageError,
+                0,
+                0,
+                "pending",
+                "pending",
+                "pending",
+                true,
+                createdAt,
+                null);
+            pendingPredictionJobs[response.PredictionId] = response.JobId;
+            activePredictionJobs[response.PredictionId] = CreateQueuedJob(response.JobId, createdAt);
+            queuedPredictionIds.Add(response.PredictionId);
+
+            await InvokeAsync(StateHasChanged);
+            _ = StartPredictionPollingAsync(response.PredictionId, response.JobId);
+        }
+        catch (ApiProblemException apiProblem)
+        {
+            submissionProblem = apiProblem;
+        }
+        catch (HttpRequestException)
+        {
+            submissionFallbackProblem = true;
+        }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+            return;
         }
         finally
         {
-            submitting = false;
+            if (!pageCancellation.IsCancellationRequested)
+            {
+                isSubmitting = false;
+            }
+
+            activeSubmissionCancellation?.Dispose();
+            activeSubmissionCancellation = null;
         }
     }
+
+    private async Task PollPredictionJobAsync(Guid predictionId, Guid jobId)
+    {
+        try
+        {
+            var outcome = await JobPoller.PollAsync(
+                jobId,
+                async job =>
+                {
+                    activePredictionJobs[predictionId] = job;
+                    pendingPredictions[predictionId] = pendingPredictions[predictionId] with
+                    {
+                        State = job.State,
+                        CompletedAt = job.CompletedAt
+                    };
+
+                    await InvokeAsync(StateHasChanged);
+                },
+                pageCancellation.Token);
+
+            if (outcome == JobPollOutcome.Succeeded)
+            {
+                queuedPredictionIds.Remove(predictionId);
+                await InvokeAsync(() => Navigation.NavigateTo($"/predictions/{predictionId}"));
+                return;
+            }
+
+            pendingPredictions.Remove(predictionId);
+            pendingPredictionJobs.Remove(predictionId);
+            activePredictionJobs.Remove(predictionId);
+            queuedPredictionIds.Remove(predictionId);
+
+            await LoadPredictionsAsync(showLoading: false);
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task StartPredictionPollingAsync(Guid predictionId, Guid jobId)
+    {
+        await Task.Yield();
+        await PollPredictionJobAsync(predictionId, jobId);
+    }
+
+    private void RequestDelete(Guid predictionId) => confirmingDeleteId = predictionId;
+
+    private void CancelDelete() => confirmingDeleteId = null;
+
+    private async Task ConfirmDeleteAsync()
+    {
+        if (isDeleting || confirmingDeleteId is null)
+        {
+            return;
+        }
+
+        isDeleting = true;
+        var predictionId = confirmingDeleteId.Value;
+
+        try
+        {
+            activeDeleteCancellation?.Dispose();
+            activeDeleteCancellation = CancellationTokenSource.CreateLinkedTokenSource(pageCancellation.Token);
+
+            var deleted = await Api.DeletePredictionAsync(predictionId, activeDeleteCancellation.Token);
+            if (deleted)
+            {
+                predictions = predictions.Where(prediction => prediction.Id != predictionId).ToArray();
+                pendingPredictions.Remove(predictionId);
+                pendingPredictionJobs.Remove(predictionId);
+                activePredictionJobs.Remove(predictionId);
+                queuedPredictionIds.Remove(predictionId);
+            }
+
+            confirmingDeleteId = null;
+            await LoadPredictionsAsync(showLoading: false);
+        }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (!pageCancellation.IsCancellationRequested)
+            {
+                isDeleting = false;
+            }
+
+            activeDeleteCancellation?.Dispose();
+            activeDeleteCancellation = null;
+        }
+    }
+
+    private async Task LoadModelStatusAsync(bool showLoading = true)
+    {
+        if (showLoading)
+        {
+            modelLoading = true;
+        }
+
+        modelProblem = null;
+        modelFallbackProblem = false;
+
+        try
+        {
+            modelStatus = await Api.GetModelStatusAsync(pageCancellation.Token);
+        }
+        catch (ApiProblemException apiProblem)
+        {
+            modelProblem = apiProblem;
+        }
+        catch (HttpRequestException)
+        {
+            modelFallbackProblem = true;
+        }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (!pageCancellation.IsCancellationRequested)
+            {
+                modelLoading = false;
+            }
+        }
+    }
+
+    private async Task LoadPredictionsAsync(bool showLoading = true)
+    {
+        if (showLoading)
+        {
+            predictionsLoading = true;
+        }
+
+        predictionsProblem = null;
+        predictionsFallbackProblem = false;
+
+        try
+        {
+            predictions = await Api.GetPredictionsAsync(pageCancellation.Token);
+        }
+        catch (ApiProblemException apiProblem)
+        {
+            predictionsProblem = apiProblem;
+        }
+        catch (HttpRequestException)
+        {
+            predictionsFallbackProblem = true;
+        }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (!pageCancellation.IsCancellationRequested)
+            {
+                predictionsLoading = false;
+            }
+        }
+    }
+
+    private static JobResponse CreateQueuedJob(Guid jobId, DateTimeOffset createdAt) => new(
+        jobId,
+        "PredictRoute",
+        Guid.Empty,
+        "Queued",
+        0,
+        "queued",
+        1,
+        createdAt,
+        null,
+        createdAt,
+        null,
+        null,
+        null,
+        null);
+
+    private static string DisplayMetric(string value) =>
+        value == "—" ? "Unavailable" : value;
 }

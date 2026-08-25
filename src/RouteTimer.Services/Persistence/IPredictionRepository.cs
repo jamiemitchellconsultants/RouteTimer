@@ -4,7 +4,7 @@ using RouteTimer.Domain.Profile;
 
 namespace RouteTimer.Services.Persistence;
 
-public enum PredictionState { Queued, Succeeded, Failed }
+public enum PredictionState { Queued, Succeeded, Failed, Cancelled }
 
 public sealed record PredictionAssumptions(string Surface, string Wind, string Weather, bool MovingOnly)
 {
@@ -93,7 +93,8 @@ public interface IPredictionRepository
 {
     Task<QueuedPredictionSubmission> CreateQueuedAsync(QueuedPredictionCreation creation, CancellationToken cancellationToken);
     Task<PredictionForProcessing?> GetForProcessingAsync(Guid predictionId, CancellationToken cancellationToken);
-    Task PublishAsync(Guid predictionId, PredictionPublication publication, CancellationToken cancellationToken);
+    Task<bool> TryPublishAsync(Guid predictionId, Guid jobId, string workerId, PredictionPublication publication, CancellationToken cancellationToken);
+    Task<bool> DeleteAsync(Guid predictionId, DateTimeOffset now, CancellationToken cancellationToken);
     Task FailAsync(Guid predictionId, string code, string message, CancellationToken cancellationToken);
     Task<IReadOnlyList<PredictionSummary>> GetSummariesAsync(CancellationToken cancellationToken);
     Task<PredictionDetail?> GetAsync(Guid predictionId, CancellationToken cancellationToken);

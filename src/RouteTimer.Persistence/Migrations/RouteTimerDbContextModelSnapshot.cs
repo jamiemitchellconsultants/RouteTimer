@@ -82,6 +82,9 @@ namespace RouteTimer.Persistence.Migrations
                     b.Property<int>("AttemptCount")
                         .HasColumnType("integer");
 
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -94,6 +97,17 @@ namespace RouteTimer.Persistence.Migrations
                         .HasColumnType("character varying(1024)");
 
                     b.Property<DateTimeOffset?>("LeaseExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("ProgressPercent")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ProgressStage")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset?>("StartedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("State")
@@ -109,20 +123,29 @@ namespace RouteTimer.Persistence.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
 
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("WorkerId")
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Type", "SubjectId")
-                        .IsUnique()
-                        .HasDatabaseName("IX_analysis_jobs_active_type_subject")
-                        .HasFilter("\"State\" IN ('Queued', 'Running')");
-
                     b.HasIndex("State", "LeaseExpiresAt", "CreatedAt");
 
-                    b.ToTable("analysis_jobs", (string)null);
+                    b.HasIndex(new[] { "Type", "SubjectId" }, "IX_analysis_jobs_queued_type_subject")
+                        .IsUnique()
+                        .HasFilter("\"State\" = 'Queued'");
+
+                    b.HasIndex(new[] { "Type", "SubjectId" }, "IX_analysis_jobs_running_type_subject")
+                        .IsUnique()
+                        .HasFilter("\"State\" = 'Running'");
+
+                    b.ToTable("analysis_jobs", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_analysis_jobs_progress", "\"ProgressPercent\" BETWEEN 0 AND 100");
+                        });
                 });
 
             modelBuilder.Entity("RouteTimer.Persistence.Entities.PowerBandEntity", b =>
@@ -471,8 +494,22 @@ namespace RouteTimer.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<double?>("AscentMetres")
+                        .HasColumnType("double precision");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DeviceManufacturer")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("DeviceProduct")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<double?>("DistanceMetres")
+                        .HasColumnType("double precision");
 
                     b.Property<double>("ElevationCoverage")
                         .HasColumnType("double precision");
@@ -481,6 +518,9 @@ namespace RouteTimer.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
+
+                    b.Property<DateTimeOffset?>("EndedAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("ExclusionCounts")
                         .IsRequired()
@@ -504,8 +544,16 @@ namespace RouteTimer.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("jsonb");
 
+                    b.Property<string>("SourceFileName")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
                     b.Property<double>("SpeedCoverage")
                         .HasColumnType("double precision");
+
+                    b.Property<DateTimeOffset?>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid>("UploadId")
                         .HasColumnType("uuid");

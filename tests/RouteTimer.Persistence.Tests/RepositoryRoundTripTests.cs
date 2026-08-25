@@ -1,9 +1,11 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Time.Testing;
 using RouteTimer.Persistence;
 using RouteTimer.Persistence.Entities;
 using RouteTimer.Persistence.Repositories;
 using RouteTimer.Services.Persistence;
 using RouteTimer.Domain.Activities;
+using RouteTimer.Domain.Jobs;
 using RouteTimer.Domain.Models;
 using RouteTimer.Domain.Physics;
 using RouteTimer.Domain.Profile;
@@ -115,7 +117,7 @@ public sealed class RepositoryRoundTripTests
     {
         var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         await using var context = new RouteTimerDbContext(options);
-        var repository = new TrainingActivityRepository(context);
+        var repository = new TrainingActivityRepository(context, TimeProvider.System);
         var uploadId = Guid.NewGuid();
         var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
         var samples = new[]
@@ -132,7 +134,7 @@ public sealed class RepositoryRoundTripTests
             PowerCoverage: 0.66,
             ExclusionCounts: new Dictionary<string, int> { ["gap"] = 1, ["pause"] = 2 },
             ReasonCodes: ["low-power-coverage", "elevation-gap"]);
-        var activity = new CleanedActivity("Morning Ride", samples, TimeSpan.FromSeconds(10), quality);
+        var activity = new CleanedActivity("Morning Ride", samples, TimeSpan.FromSeconds(10), quality, Metadata("morning-ride.fit", start, start.AddSeconds(10), "Garmin", "Edge", 10_000, 120));
 
         var activityId = await repository.SaveAsync(uploadId, activity, CancellationToken.None);
         var loaded = await repository.GetAsync(activityId, CancellationToken.None);
@@ -150,10 +152,255 @@ public sealed class RepositoryRoundTripTests
         Assert.Equal(0.66, loaded.Quality.PowerCoverage);
         Assert.Equal(new Dictionary<string, int> { ["gap"] = 1, ["pause"] = 2 }, loaded.Quality.ExclusionCounts);
         Assert.Equal(new[] { "low-power-coverage", "elevation-gap" }, loaded.Quality.ReasonCodes);
+        Assert.Equal("morning-ride.fit", loaded.Metadata.SourceFileName);
+        Assert.Equal(start, loaded.Metadata.StartedAt);
+        Assert.Equal(start.AddSeconds(10), loaded.Metadata.EndedAt);
+        Assert.Equal("Garmin", loaded.Metadata.DeviceManufacturer);
+        Assert.Equal("Edge", loaded.Metadata.DeviceProduct);
+        Assert.Equal(10_000, loaded.Metadata.DistanceMetres);
+        Assert.Equal(120, loaded.Metadata.AscentMetres);
         Assert.Null(missing);
 
         var storedActivity = await context.TrainingActivities.SingleAsync();
         Assert.Equal(uploadId, storedActivity.UploadId);
+        Assert.Equal("morning-ride.fit", storedActivity.SourceFileName);
+        Assert.Equal(start, storedActivity.StartedAt);
+        Assert.Equal(start.AddSeconds(10), storedActivity.EndedAt);
+        Assert.Equal("Garmin", storedActivity.DeviceManufacturer);
+        Assert.Equal("Edge", storedActivity.DeviceProduct);
+        Assert.Equal(10_000, storedActivity.DistanceMetres);
+        Assert.Equal(120, storedActivity.AscentMetres);
+    }
+
+    [Fact]
+    public async Task Save_training_activity_uses_injected_time_provider_for_created_at()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var createdAt = new DateTimeOffset(2026, 8, 25, 14, 30, 0, TimeSpan.Zero);
+        var repository = new TrainingActivityRepository(context, new FakeTimeProvider(createdAt));
+        var start = createdAt.AddHours(-1);
+        var activity = new CleanedActivity(
+            "Timed Ride",
+            [new CleanRideSample(start, TimeSpan.Zero, new GeoPoint(51, -2, 100), 5, 180, 140, 85, false, 0)],
+            TimeSpan.FromSeconds(1),
+            new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []),
+            Metadata("timed-ride.fit", start, start));
+
+        var id = await repository.SaveAsync(Guid.NewGuid(), activity, CancellationToken.None);
+
+        Assert.Equal(createdAt, (await context.TrainingActivities.SingleAsync(entity => entity.Id == id)).CreatedAt);
+    }
+
+    // Break caught: summary/detail/count projections load sample payloads indirectly or drop quality metadata needed by API callers.
+    [Fact]
+    public async Task Training_activity_projections_return_newest_first_detail_metadata_and_counts()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new TrainingActivityRepository(context, TimeProvider.System);
+        var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var older = new TrainingActivityEntity
+        {
+            Id = Guid.NewGuid(),
+            UploadId = Guid.NewGuid(),
+            Name = "Older Ride",
+            SourceFileName = "older.fit",
+            StartedAt = start,
+            EndedAt = start.AddMinutes(20),
+            DeviceManufacturer = "Garmin",
+            DeviceProduct = "Edge",
+            DistanceMetres = 10_000,
+            AscentMetres = 120,
+            MovingDurationSeconds = 1_200,
+            Eligibility = ActivityEligibility.Eligible.ToString(),
+            PositionCoverage = 1,
+            ElevationCoverage = .95,
+            SpeedCoverage = .9,
+            PowerCoverage = .85,
+            ExclusionCounts = new Dictionary<string, int>(),
+            ReasonCodes = [],
+            CreatedAt = start.AddHours(1)
+        };
+        var newerId = Guid.NewGuid();
+        var newer = new TrainingActivityEntity
+        {
+            Id = newerId,
+            UploadId = Guid.NewGuid(),
+            Name = "Newer Ride",
+            SourceFileName = "newer.fit",
+            StartedAt = start.AddDays(1),
+            EndedAt = start.AddDays(1).AddMinutes(30),
+            DeviceManufacturer = "Wahoo",
+            DeviceProduct = "Bolt",
+            DistanceMetres = 15_000,
+            AscentMetres = 250,
+            MovingDurationSeconds = 1_800,
+            Eligibility = ActivityEligibility.Ineligible.ToString(),
+            PositionCoverage = .75,
+            ElevationCoverage = .65,
+            SpeedCoverage = .55,
+            PowerCoverage = .45,
+            ExclusionCounts = new Dictionary<string, int> { ["gap"] = 2, ["pause"] = 1 },
+            ReasonCodes = ["position-gap", "low-power-coverage"],
+            CreatedAt = start.AddHours(2),
+            Samples =
+            [
+                new ActivitySampleEntity
+                {
+                    ActivityId = newerId,
+                    Sequence = 0,
+                    Timestamp = start.AddDays(1),
+                    MovingElapsedSeconds = 0,
+                    Latitude = 51,
+                    Longitude = -2,
+                    ElevationMetres = 100,
+                    SpeedMetresPerSecond = 5
+                }
+            ]
+        };
+        context.TrainingActivities.AddRange(older, newer);
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+
+        var summaries = await repository.GetSummariesAsync(CancellationToken.None);
+        var detail = await repository.GetDetailAsync(newer.Id, CancellationToken.None);
+        var counts = await repository.GetCountsAsync(CancellationToken.None);
+
+        Assert.Collection(summaries,
+            summary => Assert.Equal("newer.fit", summary.Metadata.SourceFileName),
+            summary => Assert.Equal("older.fit", summary.Metadata.SourceFileName));
+        Assert.NotNull(detail);
+        Assert.Equal(newer.Id, detail.Summary.Id);
+        Assert.Equal(newer.UploadId, detail.Summary.UploadId);
+        Assert.Equal("newer.fit", detail.Summary.Metadata.SourceFileName);
+        Assert.Equal("Wahoo", detail.Summary.Metadata.DeviceManufacturer);
+        Assert.Equal("Bolt", detail.Summary.Metadata.DeviceProduct);
+        Assert.Equal(15_000, detail.Summary.Metadata.DistanceMetres);
+        Assert.Equal(250, detail.Summary.Metadata.AscentMetres);
+        Assert.Equal(TimeSpan.FromMinutes(30), detail.Summary.MovingDuration);
+        Assert.Equal(ActivityEligibility.Ineligible, detail.Summary.Eligibility);
+        Assert.Equal(.75, detail.Summary.PositionCoverage);
+        Assert.Equal(.65, detail.Summary.ElevationCoverage);
+        Assert.Equal(.55, detail.Summary.SpeedCoverage);
+        Assert.Equal(.45, detail.Summary.PowerCoverage);
+        Assert.Equal(new[] { "position-gap", "low-power-coverage" }, detail.Summary.ReasonCodes);
+        Assert.Equal(new Dictionary<string, int> { ["gap"] = 2, ["pause"] = 1 }, detail.ExclusionCounts);
+        Assert.Equal(new TrainingActivityCounts(2, 1), counts);
+        Assert.Empty(context.ChangeTracker.Entries<ActivitySampleEntity>());
+    }
+
+    // Break caught: deleting an activity leaves retained FIT bytes or activity samples behind, corrupting future rebuild evidence.
+    [Fact]
+    public async Task Delete_training_activity_removes_activity_samples_and_source_upload()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new TrainingActivityRepository(context, TimeProvider.System);
+        var uploadId = Guid.NewGuid();
+        var activityId = Guid.NewGuid();
+        context.Uploads.Add(new StoredUploadEntity
+        {
+            Id = uploadId,
+            Kind = "fit",
+            FileName = "delete-me.fit",
+            Content = [1, 2, 3],
+            Sha256 = Enumerable.Repeat((byte)8, 32).ToArray(),
+            CreatedAt = DateTimeOffset.UtcNow
+        });
+        context.TrainingActivities.Add(new TrainingActivityEntity
+        {
+            Id = activityId,
+            UploadId = uploadId,
+            Name = "Delete Me",
+            SourceFileName = "delete-me.fit",
+            MovingDurationSeconds = 10,
+            Eligibility = ActivityEligibility.Eligible.ToString(),
+            PositionCoverage = 1,
+            ElevationCoverage = 1,
+            SpeedCoverage = 1,
+            PowerCoverage = 1,
+            ExclusionCounts = new Dictionary<string, int>(),
+            ReasonCodes = [],
+            CreatedAt = DateTimeOffset.UtcNow,
+            Samples =
+            [
+                new ActivitySampleEntity
+                {
+                    ActivityId = activityId,
+                    Sequence = 0,
+                    Timestamp = DateTimeOffset.UtcNow,
+                    MovingElapsedSeconds = 0,
+                    Latitude = 51,
+                    Longitude = -2,
+                    ElevationMetres = 100,
+                    SpeedMetresPerSecond = 5
+                }
+            ]
+        });
+        await context.SaveChangesAsync();
+
+        var deleted = await repository.DeleteAsync(activityId, CancellationToken.None);
+        var missing = await repository.DeleteAsync(Guid.NewGuid(), CancellationToken.None);
+
+        Assert.True(deleted);
+        Assert.False(missing);
+        Assert.Empty(await context.TrainingActivities.ToListAsync());
+        Assert.Empty(await context.ActivitySamples.ToListAsync());
+        Assert.Empty(await context.Uploads.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Get_job_round_trips_the_final_lifecycle_shape()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new JobRepository(context);
+        var createdAt = new DateTimeOffset(2026, 8, 25, 9, 0, 0, TimeSpan.Zero);
+        var startedAt = createdAt.AddMinutes(2);
+        var updatedAt = createdAt.AddMinutes(7);
+        var completedAt = createdAt.AddMinutes(11);
+        var entity = new AnalysisJobEntity
+        {
+            Id = Guid.NewGuid(),
+            Type = JobType.PredictRoute.ToString(),
+            SubjectId = Guid.NewGuid(),
+            State = JobState.Cancelled.ToString(),
+            ProgressPercent = 55,
+            ProgressStage = "routing",
+            AttemptCount = 2,
+            CreatedAt = createdAt,
+            StartedAt = startedAt,
+            UpdatedAt = updatedAt,
+            CompletedAt = completedAt,
+            WorkerId = "worker-9",
+            LeaseExpiresAt = createdAt.AddMinutes(10),
+            DiagnosticCode = "cancelled",
+            DiagnosticMessage = "Cancelled by operator."
+        };
+        context.Jobs.Add(entity);
+        await context.SaveChangesAsync();
+
+        var loaded = await repository.GetAsync(entity.Id, CancellationToken.None);
+
+        Assert.Equal(
+            new AnalysisJob(
+                entity.Id,
+                JobType.PredictRoute,
+                entity.SubjectId,
+                JobState.Cancelled,
+                55,
+                "routing",
+                2,
+                createdAt,
+                startedAt,
+                updatedAt,
+                completedAt,
+                "worker-9",
+                createdAt.AddMinutes(10),
+                "cancelled",
+                "Cancelled by operator."),
+            loaded);
     }
 
     // Break caught: persistence drops enriched training curvature, so later descent learning sees every sample as straight.
@@ -162,7 +409,7 @@ public sealed class RepositoryRoundTripTests
     {
         var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         await using var context = new RouteTimerDbContext(options);
-        var repository = new TrainingActivityRepository(context);
+        var repository = new TrainingActivityRepository(context, TimeProvider.System);
         var start = new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero);
         var sample = new CleanRideSample(
             start,
@@ -179,7 +426,8 @@ public sealed class RepositoryRoundTripTests
             "Curving Descent",
             [sample],
             TimeSpan.FromSeconds(1),
-            new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []));
+            new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []),
+            Metadata("curving-descent.fit", start, start));
 
         var id = await repository.SaveAsync(Guid.NewGuid(), activity, CancellationToken.None);
         var loaded = await repository.GetAsync(id, CancellationToken.None);
@@ -194,7 +442,7 @@ public sealed class RepositoryRoundTripTests
     {
         var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         await using var context = new RouteTimerDbContext(options);
-        var repository = new TrainingActivityRepository(context);
+        var repository = new TrainingActivityRepository(context, TimeProvider.System);
         var start = new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero);
         var elevations = new[] { 100d, 112, 91, 130, 96, 118, 105 };
         var raw = elevations.Select((elevation, index) => new RawRideSample(
@@ -205,8 +453,8 @@ public sealed class RepositoryRoundTripTests
             140,
             85,
             true)).ToArray();
-        var parsed = new ParsedFitActivity("Raw elevations", ActivitySport.Cycling, start, raw, TimeSpan.FromSeconds(30), 150);
-        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed);
+        var parsed = new ParsedFitActivity("Raw elevations", ActivitySport.Cycling, start, start.AddSeconds(30), "Garmin", "Edge", raw, TimeSpan.FromSeconds(30), 150, 40);
+        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed, "raw-elevations.fit");
 
         var id = await repository.SaveAsync(Guid.NewGuid(), cleaned, CancellationToken.None);
         var loaded = await repository.GetAsync(id, CancellationToken.None);
@@ -220,14 +468,16 @@ public sealed class RepositoryRoundTripTests
     {
         var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         await using var context = new RouteTimerDbContext(options);
-        var repository = new TrainingActivityRepository(context);
+        var repository = new TrainingActivityRepository(context, TimeProvider.System);
         var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
         var eligibleSamples = new[] { new CleanRideSample(start, TimeSpan.Zero, new GeoPoint(51.1, -2.1, 100), 5.0, 180, 140, 85, false, 0.5) };
         var ineligibleSamples = new[] { new CleanRideSample(start, TimeSpan.Zero, new GeoPoint(51.1, -2.1, 100), 5.0, null, null, null, false, 0.5) };
         var eligible = new CleanedActivity("Eligible Ride", eligibleSamples, TimeSpan.FromMinutes(20),
-            new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []));
+            new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []),
+            Metadata("eligible-ride.fit", start, start));
         var ineligible = new CleanedActivity("Ineligible Ride", ineligibleSamples, TimeSpan.FromMinutes(5),
-            new ActivityQuality(ActivityEligibility.Ineligible, 0.1, 0.1, 0.1, 0, new Dictionary<string, int> { ["gap"] = 3 }, ["low-coverage"]));
+            new ActivityQuality(ActivityEligibility.Ineligible, 0.1, 0.1, 0.1, 0, new Dictionary<string, int> { ["gap"] = 3 }, ["low-coverage"]),
+            Metadata("ineligible-ride.fit", start, start));
 
         await repository.SaveAsync(Guid.NewGuid(), eligible, CancellationToken.None);
         await repository.SaveAsync(Guid.NewGuid(), ineligible, CancellationToken.None);
@@ -473,4 +723,21 @@ public sealed class RepositoryRoundTripTests
         cell.ActivityCount = activityCount;
         cell.Confidence = confidence;
     }
+
+    private static TrainingActivityMetadata Metadata(
+        string sourceFileName,
+        DateTimeOffset startedAt,
+        DateTimeOffset endedAt,
+        string? deviceManufacturer = null,
+        string? deviceProduct = null,
+        double? distanceMetres = null,
+        double? ascentMetres = null) =>
+        new(
+            sourceFileName,
+            startedAt,
+            endedAt,
+            deviceManufacturer,
+            deviceProduct,
+            distanceMetres,
+            ascentMetres);
 }

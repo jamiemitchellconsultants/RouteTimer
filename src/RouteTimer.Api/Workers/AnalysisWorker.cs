@@ -50,7 +50,7 @@ public sealed class AnalysisWorker(IServiceScopeFactory scopeFactory, TimeProvid
             var handler = handlers.FirstOrDefault(candidate => candidate.Handles == job.Type);
             if (handler is null)
             {
-                LogIfNoLongerOwned(await jobs.FailAsync(job.Id, workerId, permanent: true, "no-handler", $"No handler registered for job type {job.Type}.", stoppingToken), job.Id);
+                LogIfNoLongerOwned(await jobs.FailAsync(job.Id, workerId, permanent: true, "no-handler", $"No handler registered for job type {job.Type}.", timeProvider.GetUtcNow(), stoppingToken), job.Id);
                 return;
             }
 
@@ -67,18 +67,22 @@ public sealed class AnalysisWorker(IServiceScopeFactory scopeFactory, TimeProvid
             try
             {
                 await handler.HandleAsync(job, stoppingToken);
-                LogIfNoLongerOwned(await jobs.CompleteAsync(job.Id, workerId, stoppingToken), job.Id);
+                LogIfNoLongerOwned(await jobs.CompleteAsync(job.Id, workerId, timeProvider.GetUtcNow(), stoppingToken), job.Id);
             }
             catch (RouteTimerJobException exception)
             {
-                LogIfNoLongerOwned(await jobs.FailAsync(job.Id, workerId, permanent: true, exception.Code, exception.Message, stoppingToken), job.Id);
+                LogIfNoLongerOwned(await jobs.FailAsync(job.Id, workerId, permanent: true, exception.Code, exception.Message, timeProvider.GetUtcNow(), stoppingToken), job.Id);
+            }
+            catch (OperationCanceledException) when (!stoppingToken.IsCancellationRequested)
+            {
+                logger.LogInformation("Job {JobId} stopped because this worker no longer owned it.", job.Id);
             }
             catch (Exception exception)
             {
                 // Full detail (including stack trace) goes to the log only - the stored diagnostic must stay
                 // safe, generic text; the queue's own bounded-retry logic decides when this becomes terminal.
                 logger.LogError(exception, "Unexpected error while processing job {JobId} of type {JobType}.", job.Id, job.Type);
-                LogIfNoLongerOwned(await jobs.FailAsync(job.Id, workerId, permanent: false, "processing-error", "An unexpected error occurred while processing this job.", stoppingToken), job.Id);
+                LogIfNoLongerOwned(await jobs.FailAsync(job.Id, workerId, permanent: false, "processing-error", "An unexpected error occurred while processing this job.", timeProvider.GetUtcNow(), stoppingToken), job.Id);
             }
             finally
             {
