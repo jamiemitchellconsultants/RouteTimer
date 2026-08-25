@@ -178,6 +178,22 @@ async def test_activity_page_omits_next_offset_after_a_short_final_page(
     assert page.next_offset is None
 
 
+async def test_activity_page_clears_continuation_when_a_later_source_page_is_short(
+    fake_facade: FakeActivityFacade,
+) -> None:
+    fake_facade.session.batches = {
+        0: ActivityBatch([], 50),
+        50: ActivityBatch([activity(51)], 1),
+    }
+
+    page = await GarminService(fake_facade, ChallengeStore.system()).activities(
+        '{"di_token":"a"}', offset=0
+    )
+
+    assert [item.activity_id for item in page.activities] == ["51"]
+    assert page.next_offset is None
+
+
 @pytest.mark.parametrize("activity_id", ["0", "-1", "01", "1.0", "one"])
 async def test_summary_rejects_noncanonical_or_nonpositive_ids_before_garmin_calls(
     fake_facade: FakeActivityFacade, activity_id: str
@@ -217,6 +233,19 @@ async def test_summary_rejects_a_valid_but_disallowed_garmin_activity(
         )
 
     assert raised.value.status_code == 422
+
+
+async def test_summary_rejects_an_allowed_activity_with_a_different_id(
+    fake_facade: FakeActivityFacade,
+) -> None:
+    fake_facade.session.activity = activity(456)
+
+    with pytest.raises(AdapterError, match="response-invalid") as raised:
+        await GarminService(fake_facade, ChallengeStore.system()).activity_summary(
+            '{"di_token":"a"}', "123"
+        )
+
+    assert raised.value.status_code == 502
 
 
 class FakeSummaryService:

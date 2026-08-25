@@ -98,6 +98,7 @@ class GarminService:
                 raise AdapterError("response-invalid", 502)
             activities.extend(batch.activities[: PAGE_SIZE - len(activities)])
             if batch.source_count < PAGE_SIZE:
+                next_offset = None
                 break
             current_offset += batch.source_count
             next_offset = current_offset
@@ -111,13 +112,18 @@ class GarminService:
         activity = session.get_activity(activity_id)
         if activity is None:
             raise AdapterError("activity-not-allowed", 422)
+        if activity.activity_id != activity_id:
+            raise AdapterError("response-invalid", 502)
         return ActivitySummaryResult(activity, session.dump_tokens())
 
     async def download_fit(self, token_json: str, activity_id: str) -> FitDownloadResult:
         activity_id = _canonical_activity_id(activity_id)
         session = self._facade.from_tokens(token_json)
-        if session.get_activity(activity_id) is None:
+        activity = session.get_activity(activity_id)
+        if activity is None:
             raise AdapterError("activity-not-allowed", 422)
+        if activity.activity_id != activity_id:
+            raise AdapterError("response-invalid", 502)
         content = _read_single_fit(session.download_original(activity_id))
         return FitDownloadResult(content, f"{activity_id}.fit", session.dump_tokens())
 

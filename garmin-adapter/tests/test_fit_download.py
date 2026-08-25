@@ -11,7 +11,7 @@ from routetimer_garmin.api import app, get_service
 from routetimer_garmin.challenges import ChallengeStore
 from routetimer_garmin.errors import AdapterError
 from routetimer_garmin.service import GarminService
-from tests.test_activities import FakeActivityFacade
+from tests.test_activities import FakeActivityFacade, activity
 
 
 def zip_bytes(members: dict[str, bytes]) -> bytes:
@@ -55,6 +55,20 @@ async def test_original_download_rejects_missing_or_ambiguous_fit_members(
         await GarminService(fake_facade, ChallengeStore.system()).download_fit(
             '{"di_token":"a"}', "123"
         )
+
+
+async def test_original_download_rejects_an_allowed_activity_with_a_different_id(
+    fake_facade: FakeActivityFacade,
+) -> None:
+    fake_facade.session.activity = activity(456)
+
+    with pytest.raises(AdapterError, match="response-invalid") as raised:
+        await GarminService(fake_facade, ChallengeStore.system()).download_fit(
+            '{"di_token":"a"}', "123"
+        )
+
+    assert raised.value.status_code == 502
+    assert fake_facade.session.downloaded_activity_ids == []
 
 
 async def test_original_download_rejects_a_declared_fit_larger_than_fifty_mib(
