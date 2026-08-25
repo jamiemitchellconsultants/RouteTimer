@@ -20,15 +20,11 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
         StoredUploadEntity? upload;
         if (context.Database.IsRelational())
         {
-            await context.Database.ExecuteSqlInterpolatedAsync($"""
+            var uploadIds = await context.Database.SqlQuery<Guid>($"""
                 INSERT INTO stored_uploads ("Id", "Kind", "FileName", "Content", "Sha256", "CreatedAt")
                 VALUES ({creation.Upload.Id}, {creation.Upload.Kind}, {creation.Upload.FileName}, {creation.Upload.Content}, {creation.Upload.Sha256}, {creation.Upload.CreatedAt})
-                ON CONFLICT ("Kind", "Sha256") DO NOTHING;
-                """, cancellationToken);
-            var uploadIds = await context.Database.SqlQuery<Guid>($"""
-                SELECT "Id" AS "Value" FROM stored_uploads
-                WHERE "Kind" = {creation.Upload.Kind} AND "Sha256" = {creation.Upload.Sha256}
-                FOR UPDATE
+                ON CONFLICT ("Kind", "Sha256") DO UPDATE SET "FileName" = stored_uploads."FileName"
+                RETURNING "Id" AS "Value";
                 """).ToListAsync(cancellationToken);
             upload = await context.Uploads.SingleAsync(entity => entity.Id == uploadIds.Single(), cancellationToken);
         }
