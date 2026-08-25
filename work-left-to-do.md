@@ -13,7 +13,7 @@ Continue building RouteTimer from the current `main` branch. Create a new `codex
 
 Steps 1 through 8 are complete. Continue with:
 
-9. Update API contracts and UI to show training activity quality, job progress, model readiness/validation, persisted prediction history, and detailed results. Add the requested text-only map/profile presentation only when the data workflow is complete; do not use diagrams in user responses.
+9. Update API contracts and UI to show training activity quality, job progress, model readiness/validation, persisted prediction history, and detailed results.
 10. Complete deployment hardening: add a web readiness health check, document migration/configuration/backup/rollback procedures, and validate an authenticated deployment only when deployment inputs are supplied.
 
 ## Known limitations to address
