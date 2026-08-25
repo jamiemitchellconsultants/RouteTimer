@@ -122,6 +122,13 @@ def test_stable_error_response_does_not_leak_upstream_details(
     assert secret not in response.text + caplog.text
 
 
+def test_malformed_request_uses_request_invalid_not_response_invalid(client: TestClient) -> None:
+    response = client.post("/v1/auth/login", json={"email": "rider@example.com", "password": 1})
+
+    assert response.status_code == 422
+    assert response.json() == {"code": "request-invalid", "detail": "request-invalid"}
+
+
 def test_health_and_clear_challenges_routes(client: TestClient, fake_service: FakeService) -> None:
     health = client.get("/health")
     cleared = client.delete("/v1/auth/challenges")

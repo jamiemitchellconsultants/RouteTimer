@@ -26,22 +26,23 @@ class GarminFacade:
         self._factory = factory
 
     def from_tokens(self, token_json: str) -> "TokenSession":
-        garmin = self._factory()
         try:
+            garmin = self._factory()
             garmin.client.loads(token_json)
         except Exception as error:
             raise _translate_error(error, "authentication") from None
         return TokenSession(garmin)
 
     def start_login(self, email: str, password: str) -> "CompletedLogin | PendingLogin":
-        garmin = self._factory(email, password, return_on_mfa=True)
         try:
-            needs_mfa, _ = garmin.login()
+            garmin = self._factory(email, password, return_on_mfa=True)
+            try:
+                needs_mfa, _ = garmin.login()
+            finally:
+                garmin.username = None
+                garmin.password = None
         except Exception as error:
             raise _translate_error(error, "credentials-rejected") from None
-        finally:
-            garmin.username = None
-            garmin.password = None
         if needs_mfa == "needs_mfa":
             return PendingLogin(garmin)
         if needs_mfa is not None:
@@ -79,24 +80,27 @@ class TokenSession:
         self._garmin = garmin
 
     def dump_tokens(self) -> str:
-        return cast(str, self._garmin.client.dumps())
+        try:
+            return cast(str, self._garmin.client.dumps())
+        except Exception as error:
+            raise _translate_error(error, "authentication") from None
 
     def validate(self) -> CompletedLogin:
         try:
             profile = self._garmin.client.connectapi("/userprofile-service/socialProfile")
+            user_id, display_name = _profile_identity(self._garmin, profile)
+            return CompletedLogin(user_id, display_name, self.dump_tokens())
         except Exception as error:
             raise _translate_error(error, "authentication") from None
-        user_id, display_name = _profile_identity(self._garmin, profile)
-        return CompletedLogin(user_id, display_name, self.dump_tokens())
 
 
 def _completed_login(garmin: Garmin, authentication_code: str) -> CompletedLogin:
     try:
         profile = garmin.client.connectapi("/userprofile-service/socialProfile")
+        user_id, display_name = _profile_identity(garmin, profile)
+        return CompletedLogin(user_id, display_name, cast(str, garmin.client.dumps()))
     except Exception as error:
         raise _translate_error(error, authentication_code) from None
-    user_id, display_name = _profile_identity(garmin, profile)
-    return CompletedLogin(user_id, display_name, cast(str, garmin.client.dumps()))
 
 
 def _profile_identity(garmin: Garmin, profile: object) -> tuple[str | None, str | None]:

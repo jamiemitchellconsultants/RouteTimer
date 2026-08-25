@@ -22,6 +22,8 @@ class FakeClient:
         return self.profile
 
     def dumps(self) -> str:
+        if hasattr(self, "dumps_exception"):
+            raise self.dumps_exception
         return '{"di_token":"rotated"}'
 
     def loads(self, token_json: str) -> None:
@@ -125,3 +127,35 @@ def test_validate_returns_current_tokens_and_safe_profile_identity() -> None:
     assert result.display_name == "Jamie"
     assert result.token_json == '{"di_token":"rotated"}'
     assert garmin.client.connectapi_paths == ["/userprofile-service/socialProfile"]
+
+
+def test_factory_exception_does_not_expose_credentials_or_upstream_text() -> None:
+    email = "rider@example.com"
+    password = "secret"
+
+    def failing_factory(*_: object, **__: object) -> FakeGarmin:
+        raise RuntimeError(f"factory exploded for {email} {password}")
+
+    with pytest.raises(AdapterError) as raised:
+        GarminFacade(failing_factory).start_login(email, password)
+
+    assert raised.value.code == "unavailable"
+    assert str(raised.value) == "unavailable"
+    assert email not in repr(raised.value)
+    assert password not in repr(raised.value)
+    assert "factory exploded" not in repr(raised.value)
+
+
+def test_token_dump_exception_does_not_expose_tokens_or_upstream_text() -> None:
+    token = '{"di_token":"sensitive"}'
+    garmin = FakeGarmin({"profileId": "42"}, (None, None))
+    garmin.client.dumps_exception = RuntimeError(f"dump exploded for {token}")
+    session = GarminFacade(FakeFactory(garmin)).from_tokens(token)
+
+    with pytest.raises(AdapterError) as raised:
+        session.dump_tokens()
+
+    assert raised.value.code == "unavailable"
+    assert str(raised.value) == "unavailable"
+    assert token not in repr(raised.value)
+    assert "dump exploded" not in repr(raised.value)

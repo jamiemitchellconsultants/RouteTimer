@@ -8,7 +8,13 @@ from routetimer_garmin.challenges import ChallengeStore
 from routetimer_garmin.errors import AdapterError
 from routetimer_garmin.facade import CompletedLogin
 from routetimer_garmin.service import GarminService, SessionResult
-from tests.fakes import FakeClock, FakeFacade, FakePendingLogin, FakeTokenSession
+from tests.fakes import (
+    FakeClock,
+    FakeDeadlineScheduler,
+    FakeFacade,
+    FakePendingLogin,
+    FakeTokenSession,
+)
 
 
 @pytest.fixture
@@ -49,6 +55,38 @@ async def test_mfa_challenge_expires_and_clears_pending_login(
 
     assert pending.closed
     assert service.challenge_count == 0
+
+
+def test_idle_challenge_deadline_closes_pending_login_without_store_access(
+    clock: FakeClock,
+) -> None:
+    deadlines = FakeDeadlineScheduler()
+    store = ChallengeStore(clock, timedelta(minutes=5), deadlines)
+    pending = FakePendingLogin()
+
+    store.put(pending)
+    deadlines.fire_next()
+
+    assert deadlines.delays == [300.0]
+    assert pending.closed
+    assert store.count == 0
+
+
+def test_complete_and_clear_cancel_outstanding_deadlines(clock: FakeClock) -> None:
+    deadlines = FakeDeadlineScheduler()
+    store = ChallengeStore(clock, timedelta(minutes=5), deadlines)
+    first = FakePendingLogin()
+    second = FakePendingLogin()
+    first_id = store.put(first)
+    store.put(second)
+
+    store.complete(first_id)
+    store.clear()
+
+    assert deadlines.handles[0].cancelled
+    assert deadlines.handles[1].cancelled
+    assert first.closed
+    assert second.closed
 
 
 async def test_mfa_invalid_keeps_challenge_for_retry(

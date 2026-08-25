@@ -96,7 +96,7 @@ async def adapter_error_handler(_: Request, error: AdapterError) -> JSONResponse
 async def request_validation_error_handler(_: Request, __: RequestValidationError) -> JSONResponse:
     return JSONResponse(
         status_code=422,
-        content={"code": "response-invalid", "detail": "response-invalid"},
+        content={"code": "request-invalid", "detail": "request-invalid"},
     )
 
 

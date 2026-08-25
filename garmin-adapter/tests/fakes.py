@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Callable
 
 
 class FakeClock:
@@ -13,6 +14,32 @@ class FakeClock:
 
     def advance(self, duration: timedelta) -> None:
         self._now += duration
+
+
+class FakeDeadlineHandle:
+    def __init__(self, callback: Callable[[], None]) -> None:
+        self.callback = callback
+        self.cancelled = False
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
+class FakeDeadlineScheduler:
+    def __init__(self) -> None:
+        self.handles: list[FakeDeadlineHandle] = []
+        self.delays: list[float] = []
+
+    def call_later(self, delay: float, callback: Callable[[], None]) -> FakeDeadlineHandle:
+        handle = FakeDeadlineHandle(callback)
+        self.delays.append(delay)
+        self.handles.append(handle)
+        return handle
+
+    def fire_next(self) -> None:
+        handle = self.handles.pop(0)
+        if not handle.cancelled:
+            handle.callback()
 
 
 @dataclass
