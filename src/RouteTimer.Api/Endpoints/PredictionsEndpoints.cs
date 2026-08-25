@@ -15,6 +15,7 @@ public static class PredictionEndpoints
         routes.MapPost("/api/predictions", SubmitPredictionAsync);
         routes.MapGet("/api/predictions", GetPredictionsAsync);
         routes.MapGet("/api/predictions/{id:guid}", GetPredictionAsync);
+        routes.MapDelete("/api/predictions/{id:guid}", DeletePredictionAsync);
         return routes;
     }
 
@@ -81,6 +82,14 @@ public static class PredictionEndpoints
         CancellationToken cancellationToken) =>
         (await predictions.GetAsync(id, cancellationToken)) is { } prediction
             ? TypedResults.Ok(new PredictionDetailResponse(ToDetailSummary(prediction), prediction.Segments.Select(ToSegment).ToList()))
+            : ApiProblems.NotFound(ErrorCodes.PredictionNotFound, "The prediction was not found.");
+
+    private static async Task<IResult> DeletePredictionAsync(
+        Guid id,
+        PredictionDeletionService deletions,
+        CancellationToken cancellationToken) =>
+        await deletions.DeleteAsync(id, cancellationToken)
+            ? TypedResults.NoContent()
             : ApiProblems.NotFound(ErrorCodes.PredictionNotFound, "The prediction was not found.");
 
     private static PredictionSummaryResponse ToSummary(PredictionSummary prediction) => new(

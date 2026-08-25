@@ -7,7 +7,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.DependencyInjection;
+using RouteTimer.Contracts.Jobs;
 using RouteTimer.Contracts.Predictions;
+using RouteTimer.Domain.Jobs;
 using RouteTimer.Domain.Models;
 using RouteTimer.Domain.Physics;
 using RouteTimer.Domain.Profile;
@@ -114,8 +116,13 @@ public sealed class PredictionEndpointTests
         await using var app = CreateRiderApp();
         using var client = app.CreateClient();
 
-        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/predictions/{Guid.NewGuid()}")).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/jobs/{Guid.NewGuid()}")).StatusCode);
+        using var missingPrediction = await client.GetAsync($"/api/predictions/{Guid.NewGuid()}");
+        using var missingJob = await client.GetAsync($"/api/jobs/{Guid.NewGuid()}");
+
+        Assert.Equal(HttpStatusCode.NotFound, missingPrediction.StatusCode);
+        Assert.Contains("prediction-not-found", await missingPrediction.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.NotFound, missingJob.StatusCode);
+        Assert.Contains("job-not-found", await missingJob.Content.ReadAsStringAsync());
     }
 
     [Fact]
@@ -231,8 +238,73 @@ public sealed class PredictionEndpointTests
         Assert.Equal("PredictRoute", jobJson.RootElement.GetProperty("type").GetString());
         Assert.Equal("Succeeded", jobJson.RootElement.GetProperty("state").GetString());
         Assert.Equal(1, jobJson.RootElement.GetProperty("attemptCount").GetInt32());
+        Assert.Equal(100, jobJson.RootElement.GetProperty("progressPercent").GetInt32());
+        Assert.Equal("completed", jobJson.RootElement.GetProperty("progressStage").GetString());
         Assert.True(jobJson.RootElement.TryGetProperty("createdAt", out _));
+        Assert.True(jobJson.RootElement.TryGetProperty("subjectId", out var subjectId));
+        Assert.Equal(accepted.PredictionId, subjectId.GetGuid());
+        Assert.True(jobJson.RootElement.TryGetProperty("diagnosticCode", out var diagnosticCode));
+        Assert.Equal(JsonValueKind.Null, diagnosticCode.ValueKind);
+        Assert.True(jobJson.RootElement.TryGetProperty("diagnosticMessage", out var diagnosticMessage));
+        Assert.Equal(JsonValueKind.Null, diagnosticMessage.ValueKind);
         Assert.True(jobJson.RootElement.TryGetProperty("leaseExpiresAt", out _));
+        Assert.Equal(JsonValueKind.Null, jobJson.RootElement.GetProperty("leaseExpiresAt").ValueKind);
+        Assert.False(jobJson.RootElement.TryGetProperty("workerId", out _));
+    }
+
+    [Fact]
+    public async Task Delete_returns_no_content_cancels_the_active_job_and_removes_the_prediction_resource()
+    {
+        await using var app = CreateRiderApp();
+        await SeedProfileAndModelAsync(app.Services);
+        using var client = app.CreateClient();
+        using var submitted = await client.PostAsync("/api/predictions", GpxForm());
+        var accepted = (await submitted.Content.ReadFromJsonAsync<PredictionSubmissionResponse>())!;
+        var runningLease = await MarkJobRunningAsync(app.Services, accepted.PredictionId, progressPercent: 45, progressStage: "processing-route");
+
+        using var deleteResponse = await client.DeleteAsync($"/api/predictions/{accepted.PredictionId}");
+        using var repeatedDelete = await client.DeleteAsync($"/api/predictions/{accepted.PredictionId}");
+        using var detailAfterDelete = await client.GetAsync($"/api/predictions/{accepted.PredictionId}");
+        using var jobAfterDelete = await client.GetAsync($"/api/jobs/{accepted.JobId}");
+        var job = (await jobAfterDelete.Content.ReadFromJsonAsync<JobResponse>())!;
+
+        Assert.Equal(HttpStatusCode.NoContent, deleteResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, repeatedDelete.StatusCode);
+        Assert.Contains("prediction-not-found", await repeatedDelete.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.NotFound, detailAfterDelete.StatusCode);
+        Assert.Contains("prediction-not-found", await detailAfterDelete.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, jobAfterDelete.StatusCode);
+        Assert.Equal("Cancelled", job.State);
+        Assert.Equal(45, job.ProgressPercent);
+        Assert.Equal("cancelled", job.ProgressStage);
+        Assert.NotNull(job.StartedAt);
+        Assert.NotNull(job.CompletedAt);
+        Assert.Null(job.LeaseExpiresAt);
+        Assert.Null(job.DiagnosticCode);
+        Assert.Null(job.DiagnosticMessage);
+        Assert.NotEqual(runningLease, job.LeaseExpiresAt);
+    }
+
+    [Fact]
+    public async Task Job_resource_exposes_lease_expiry_only_while_running()
+    {
+        await using var app = CreateRiderApp();
+        await SeedProfileAndModelAsync(app.Services);
+        using var client = app.CreateClient();
+        using var submitted = await client.PostAsync("/api/predictions", GpxForm());
+        var accepted = (await submitted.Content.ReadFromJsonAsync<PredictionSubmissionResponse>())!;
+        var leaseExpiresAt = await MarkJobRunningAsync(app.Services, accepted.PredictionId, progressPercent: 35, progressStage: "simulating-route");
+
+        using var jobResponse = await client.GetAsync($"/api/jobs/{accepted.JobId}");
+        var job = (await jobResponse.Content.ReadFromJsonAsync<JobResponse>())!;
+        using var jobJson = JsonDocument.Parse(await jobResponse.Content.ReadAsStringAsync());
+
+        Assert.Equal(HttpStatusCode.OK, jobResponse.StatusCode);
+        Assert.Equal("Running", job.State);
+        Assert.Equal(35, job.ProgressPercent);
+        Assert.Equal("simulating-route", job.ProgressStage);
+        Assert.Equal(leaseExpiresAt, job.LeaseExpiresAt);
+        Assert.False(jobJson.RootElement.TryGetProperty("workerId", out _));
     }
 
     private static MultipartFormDataContent GpxForm()
@@ -285,6 +357,29 @@ public sealed class PredictionEndpointTests
         job.CompletedAt = now;
         job.WorkerId = null;
         await context.SaveChangesAsync();
+    }
+
+    private static async Task<DateTimeOffset> MarkJobRunningAsync(
+        IServiceProvider services,
+        Guid predictionId,
+        int progressPercent,
+        string progressStage)
+    {
+        await using var scope = services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<RouteTimerDbContext>();
+        var job = await context.Jobs.SingleAsync(entity => entity.SubjectId == predictionId && entity.Type == JobType.PredictRoute.ToString());
+        var now = DateTimeOffset.UtcNow;
+        var leaseExpiresAt = now.AddMinutes(5);
+        job.State = JobState.Running.ToString();
+        job.ProgressPercent = progressPercent;
+        job.ProgressStage = progressStage;
+        job.AttemptCount = 1;
+        job.StartedAt = now.AddMinutes(-1);
+        job.UpdatedAt = now;
+        job.WorkerId = "endpoint-test-worker";
+        job.LeaseExpiresAt = leaseExpiresAt;
+        await context.SaveChangesAsync();
+        return leaseExpiresAt;
     }
     private sealed class ThrowingPredictionRepository : IPredictionRepository
     {

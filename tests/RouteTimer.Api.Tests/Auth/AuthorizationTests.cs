@@ -39,6 +39,7 @@ public sealed class AuthorizationTests
     [InlineData("POST", "/api/predictions")]
     [InlineData("GET", "/api/predictions")]
     [InlineData("GET", "/api/predictions/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")]
+    [InlineData("DELETE", "/api/predictions/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")]
     [InlineData("GET", "/api/jobs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")]
     public async Task Api_resources_require_authentication(string method, string path)
     {
