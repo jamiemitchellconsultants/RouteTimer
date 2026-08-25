@@ -25,7 +25,12 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
                 VALUES ({creation.Upload.Id}, {creation.Upload.Kind}, {creation.Upload.FileName}, {creation.Upload.Content}, {creation.Upload.Sha256}, {creation.Upload.CreatedAt})
                 ON CONFLICT ("Kind", "Sha256") DO NOTHING;
                 """, cancellationToken);
-            upload = await context.Uploads.SingleAsync(entity => entity.Kind == "gpx" && entity.Sha256 == creation.Upload.Sha256, cancellationToken);
+            var uploadIds = await context.Database.SqlQuery<Guid>($"""
+                SELECT "Id" AS "Value" FROM stored_uploads
+                WHERE "Kind" = {creation.Upload.Kind} AND "Sha256" = {creation.Upload.Sha256}
+                FOR UPDATE
+                """).ToListAsync(cancellationToken);
+            upload = await context.Uploads.SingleAsync(entity => entity.Id == uploadIds.Single(), cancellationToken);
         }
         else
         {
@@ -230,6 +235,22 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
         }
 
         var uploadId = prediction.UploadId;
+        if (context.Database.IsRelational())
+        {
+            var lockedUpload = await context.Database.SqlQuery<Guid>($"""
+                SELECT "Id" AS "Value" FROM stored_uploads
+                WHERE "Id" = {uploadId}
+                FOR UPDATE
+                """).ToListAsync(cancellationToken);
+            if (lockedUpload.Count == 0)
+            {
+                if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
+                return false;
+            }
+        }
+
+        // The upload lock serializes this reference check with CreateQueuedAsync's
+        // deduplicated upload selection and subsequent prediction insert.
         var jobs = await context.Jobs.Where(entity => jobIds.Contains(entity.Id)).ToListAsync(cancellationToken);
         foreach (var job in jobs)
         {
