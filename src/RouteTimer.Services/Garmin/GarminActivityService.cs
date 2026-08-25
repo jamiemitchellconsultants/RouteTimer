@@ -196,12 +196,28 @@ public sealed class GarminActivityService(
                     continue;
                 }
 
-                var uploadResult = AssertSingle(await uploads.AcceptAsync(
-                    [new TrainingUpload(
-                        BuildFileName(summary.Name, activityId),
-                        download.Content,
-                        new GarminActivitySource(activityId, safeName))],
-                    cancellationToken));
+                TrainingUploadResult uploadResult;
+                try
+                {
+                    uploadResult = AssertSingle(await uploads.AcceptAsync(
+                        [new TrainingUpload(
+                            BuildFileName(summary.Name, activityId),
+                            download.Content,
+                            new GarminActivitySource(activityId, safeName))],
+                        cancellationToken));
+                }
+                catch (TrainingUploadReadException)
+                {
+                    results.Add(new GarminImportResult(
+                        activityId,
+                        safeName,
+                        "download-failed",
+                        null,
+                        null,
+                        "garmin-unavailable"));
+                    continue;
+                }
+
                 results.Add(ToImportResult(activityId, safeName, uploadResult));
             }
         }

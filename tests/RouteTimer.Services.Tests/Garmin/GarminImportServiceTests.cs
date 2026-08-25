@@ -29,6 +29,32 @@ public sealed class GarminImportServiceTests
         Assert.Equal(["summary:1", "download:1", "summary:2", "download:2"], adapter.Operations);
     }
 
+    // Break caught: a live FIT response that fails mid-read aborts the batch and skips later selected IDs.
+    [Fact]
+    public async Task ImportAsync_continues_after_a_mid_stream_FIT_read_failure_and_disposes_the_download()
+    {
+        var adapter = new FakeAdapterClient();
+        adapter.AddActivity("1", "Road ride", "road-cycling");
+        adapter.AddActivity("2", "Gravel ride", "gravel-cycling");
+        var failingStream = new ThrowingReadStream([1, 2, 3]);
+        adapter.Downloads["1"] = new GarminAdapterFitDownload("first.fit", failingStream, "saved-token");
+        adapter.AddDownload("2", [4, 5, 6]);
+        var uploadRepository = new FakeTrainingUploadRepository();
+        var service = Service(adapter, uploadRepository: uploadRepository);
+
+        var results = await service.ImportAsync(["1", "2"], CancellationToken.None);
+
+        Assert.Equal(["1", "2"], results.Select(result => result.ActivityId));
+        Assert.Equal("download-failed", results[0].Outcome);
+        Assert.Equal("garmin-unavailable", results[0].ErrorCode);
+        Assert.Null(results[0].UploadId);
+        Assert.Null(results[0].JobId);
+        Assert.Equal("accepted", results[1].Outcome);
+        Assert.Equal(["summary:1", "download:1", "summary:2", "download:2"], adapter.Operations);
+        Assert.Equal("2", Assert.Single(uploadRepository.Accepted).Source!.ActivityId);
+        Assert.True(failingStream.IsDisposed);
+    }
+
     // Break caught: an empty, oversized, or repeated selection reaches Garmin instead of a stable request-level rejection.
     [Theory]
     [MemberData(nameof(InvalidSelections))]
@@ -376,7 +402,7 @@ public sealed class GarminImportServiceTests
         public Task ClearChallengesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
-    private sealed class TrackingStream(byte[] content) : MemoryStream(content)
+    private class TrackingStream(byte[] content) : MemoryStream(content)
     {
         public bool IsDisposed { get; private set; }
 
@@ -390,6 +416,23 @@ public sealed class GarminImportServiceTests
         {
             IsDisposed = true;
             await base.DisposeAsync();
+        }
+    }
+
+    private sealed class ThrowingReadStream(byte[] content) : TrackingStream(content)
+    {
+        private int readCount;
+
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            if (readCount++ > 0)
+            {
+                throw new IOException("Simulated private response-body failure.");
+            }
+
+            return base.ReadAsync(buffer, cancellationToken);
         }
     }
 }

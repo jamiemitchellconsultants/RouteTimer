@@ -16,6 +16,9 @@ public sealed record TrainingUploadResult(
     string? ErrorCode,
     TrainingUploadAcceptanceOutcome? AcceptanceOutcome = null);
 
+public sealed class TrainingUploadReadException(Exception innerException)
+    : Exception("The upload content could not be read.", innerException);
+
 public sealed class TrainingUploadService
 {
     private const int MaximumBytes = 50 * 1024 * 1024;
@@ -41,7 +44,16 @@ public sealed class TrainingUploadService
                 continue;
             }
 
-            var content = await ReadBoundedAsync(upload.Content, cancellationToken);
+            byte[]? content;
+            try
+            {
+                content = await ReadBoundedAsync(upload.Content, cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException and not OutOfMemoryException)
+            {
+                throw new TrainingUploadReadException(exception);
+            }
+
             if (content is null || content.Length == 0)
             {
                 results.Add(new TrainingUploadResult(upload.FileName, UploadOutcome.Invalid, null, null, "invalid-fit-upload"));
