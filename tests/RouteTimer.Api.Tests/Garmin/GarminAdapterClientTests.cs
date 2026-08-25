@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.WebUtilities;
 using RouteTimer.Api.Garmin;
 using RouteTimer.Services.Garmin;
 
@@ -83,22 +84,46 @@ public sealed class GarminAdapterClientTests
     }
 
     [Fact]
-    public async Task Get_activity_escapes_id_and_returns_activity_with_rotated_token()
+    public async Task Get_activity_posts_canonical_id_and_returns_activity_with_rotated_token()
     {
         var client = CreateClient(async (request, cancellationToken) =>
         {
             Assert.Equal(HttpMethod.Post, request.Method);
-            Assert.Equal("/v1/activities/123%2Funsafe/summary", request.RequestUri!.AbsolutePath);
+            Assert.Equal("/v1/activities/123/summary", request.RequestUri!.AbsolutePath);
             Assert.Equal("{\"token\":\"token-json\"}", await request.Content!.ReadAsStringAsync(cancellationToken));
             return JsonResponse("""
                 {"activity":{"activityId":"123","name":"Morning ride","startedAt":"2026-08-25T08:00:00Z","activityType":"road-cycling","distanceMetres":1234.5,"durationSeconds":3600,"ascentMetres":100,"averagePowerWatts":200},"tokenJson":"rotated-token"}
                 """);
         });
 
-        var result = await client.GetActivityAsync("token-json", "123/unsafe", CancellationToken.None);
+        var result = await client.GetActivityAsync("token-json", "123", CancellationToken.None);
 
         Assert.Equal("123", result.Activity.ActivityId);
         Assert.Equal("rotated-token", result.TokenJson);
+    }
+
+    [Theory]
+    [InlineData("../ride")]
+    [InlineData("0")]
+    [InlineData("-1")]
+    [InlineData("00123")]
+    [InlineData(" 123")]
+    [InlineData("ride-123")]
+    public async Task Get_activity_rejects_noncanonical_id_without_sending_a_request(string activityId)
+    {
+        var requests = 0;
+        var client = CreateClient((_, _) =>
+        {
+            requests++;
+            return Task.FromResult(JsonResponse("""
+                {"activity":{"activityId":"123","name":"Morning ride","startedAt":"2026-08-25T08:00:00Z","activityType":"road-cycling","distanceMetres":1234.5,"durationSeconds":3600,"ascentMetres":100,"averagePowerWatts":200},"tokenJson":"rotated-token"}
+                """));
+        });
+
+        var exception = await Assert.ThrowsAsync<GarminAdapterException>(() => client.GetActivityAsync("token-json", activityId, CancellationToken.None));
+
+        Assert.Equal(GarminAdapterError.RequestInvalid, exception.Error);
+        Assert.Equal(0, requests);
     }
 
     [Fact]
@@ -138,6 +163,63 @@ public sealed class GarminAdapterClientTests
         Assert.Equal("{\"di_token\":\"rotated\"}", download.TokenJson);
         await download.DisposeAsync();
         Assert.True(stream.WasDisposed);
+    }
+
+    [Fact]
+    public async Task Download_fit_rejects_padded_token_header()
+    {
+        var client = CreateClient((_, _) => Task.FromResult(FitResponse(Base64Url("{\"token\":\"x\"}") + "==")));
+
+        var exception = await Assert.ThrowsAsync<GarminAdapterException>(() => client.DownloadFitAsync("token-json", "123", CancellationToken.None));
+
+        Assert.Equal(GarminAdapterError.ResponseInvalid, exception.Error);
+    }
+
+    [Fact]
+    public async Task Download_fit_rejects_standard_base64_alphabet_in_token_header()
+    {
+        var standardBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes("{\"token\":\"\uffff\"}")).TrimEnd('=');
+        Assert.True(standardBase64.Contains('+') || standardBase64.Contains('/'));
+        var client = CreateClient((_, _) => Task.FromResult(FitResponse(standardBase64)));
+
+        var exception = await Assert.ThrowsAsync<GarminAdapterException>(() => client.DownloadFitAsync("token-json", "123", CancellationToken.None));
+
+        Assert.Equal(GarminAdapterError.ResponseInvalid, exception.Error);
+    }
+
+    [Fact]
+    public async Task Download_fit_rejects_decodable_noncanonical_token_header()
+    {
+        var canonical = Base64Url("{\"token\":\"x\"}");
+        var noncanonical = canonical + "=";
+        Assert.Equal(WebEncoders.Base64UrlDecode(canonical), WebEncoders.Base64UrlDecode(noncanonical));
+        var client = CreateClient((_, _) => Task.FromResult(FitResponse(noncanonical)));
+
+        var exception = await Assert.ThrowsAsync<GarminAdapterException>(() => client.DownloadFitAsync("token-json", "123", CancellationToken.None));
+
+        Assert.Equal(GarminAdapterError.ResponseInvalid, exception.Error);
+    }
+
+    [Theory]
+    [InlineData("../ride")]
+    [InlineData("0")]
+    [InlineData("-1")]
+    [InlineData("00123")]
+    [InlineData(" 123")]
+    [InlineData("ride-123")]
+    public async Task Download_fit_rejects_noncanonical_id_without_sending_a_request(string activityId)
+    {
+        var requests = 0;
+        var client = CreateClient((_, _) =>
+        {
+            requests++;
+            return Task.FromResult(FitResponse(Base64Url("{\"token\":\"rotated\"}")));
+        });
+
+        var exception = await Assert.ThrowsAsync<GarminAdapterException>(() => client.DownloadFitAsync("token-json", activityId, CancellationToken.None));
+
+        Assert.Equal(GarminAdapterError.RequestInvalid, exception.Error);
+        Assert.Equal(0, requests);
     }
 
     [Theory]
@@ -246,6 +328,17 @@ public sealed class GarminAdapterClientTests
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
+
+    private static HttpResponseMessage FitResponse(string tokenHeader)
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent([1, 2, 3])
+        };
+        response.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment") { FileName = "123.fit" };
+        response.Headers.Add("X-RouteTimer-Garmin-Token", tokenHeader);
+        return response;
+    }
 
     private static string Base64Url(string value) =>
         Convert.ToBase64String(Encoding.UTF8.GetBytes(value)).TrimEnd('=').Replace('+', '-').Replace('/', '_');

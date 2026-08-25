@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using System.Globalization;
 using Microsoft.AspNetCore.WebUtilities;
 using RouteTimer.Services.Garmin;
 
@@ -25,13 +26,16 @@ public sealed class GarminAdapterClient(HttpClient httpClient) : IGarminAdapterC
     public Task<GarminAdapterActivityPage> GetActivitiesAsync(string tokenJson, int offset, CancellationToken cancellationToken) =>
         SendJsonAsync<GarminAdapterActivityPage>(HttpMethod.Post, "/v1/activities/page", new { token = tokenJson, offset }, ValidatePage, cancellationToken);
 
-    public Task<GarminAdapterActivityResult> GetActivityAsync(string tokenJson, string activityId, CancellationToken cancellationToken) =>
-        SendJsonAsync<GarminAdapterActivityResult>(
+    public Task<GarminAdapterActivityResult> GetActivityAsync(string tokenJson, string activityId, CancellationToken cancellationToken)
+    {
+        activityId = ValidateActivityId(activityId);
+        return SendJsonAsync<GarminAdapterActivityResult>(
             HttpMethod.Post,
             $"/v1/activities/{Uri.EscapeDataString(activityId)}/summary",
             new { token = tokenJson },
             ValidateActivityResult,
             cancellationToken);
+    }
 
     public async Task ClearChallengesAsync(CancellationToken cancellationToken)
     {
@@ -46,6 +50,7 @@ public sealed class GarminAdapterClient(HttpClient httpClient) : IGarminAdapterC
 
     public async Task<GarminAdapterFitDownload> DownloadFitAsync(string tokenJson, string activityId, CancellationToken cancellationToken)
     {
+        activityId = ValidateActivityId(activityId);
         using var request = new HttpRequestMessage(HttpMethod.Post, $"/v1/activities/{Uri.EscapeDataString(activityId)}/fit")
         {
             Content = JsonContent.Create(new { token = tokenJson }, options: JsonOptions)
@@ -162,9 +167,21 @@ public sealed class GarminAdapterClient(HttpClient httpClient) : IGarminAdapterC
             throw ResponseInvalid();
         }
 
+        var encodedToken = headers[0];
+        if (!encodedToken.All(IsBase64UrlCharacter))
+        {
+            throw ResponseInvalid();
+        }
+
         try
         {
-            var tokenJson = StrictUtf8.GetString(WebEncoders.Base64UrlDecode(headers[0]));
+            var decodedToken = WebEncoders.Base64UrlDecode(encodedToken);
+            if (!string.Equals(WebEncoders.Base64UrlEncode(decodedToken), encodedToken, StringComparison.Ordinal))
+            {
+                throw ResponseInvalid();
+            }
+
+            var tokenJson = StrictUtf8.GetString(decodedToken);
             using var _ = JsonDocument.Parse(tokenJson);
             return tokenJson;
         }
@@ -185,6 +202,24 @@ public sealed class GarminAdapterClient(HttpClient httpClient) : IGarminAdapterC
             throw ResponseInvalid();
         }
     }
+
+    private static string ValidateActivityId(string activityId)
+    {
+        if (!long.TryParse(activityId, NumberStyles.None, CultureInfo.InvariantCulture, out var numericId) ||
+            numericId <= 0 ||
+            !string.Equals(activityId, numericId.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal))
+        {
+            throw RequestInvalid();
+        }
+
+        return activityId;
+    }
+
+    private static bool IsBase64UrlCharacter(char character) =>
+        character is >= 'A' and <= 'Z' ||
+        character is >= 'a' and <= 'z' ||
+        character is >= '0' and <= '9' ||
+        character is '-' or '_';
 
     private static bool ValidateLogin(GarminAdapterLogin login) =>
         login.State switch
@@ -223,7 +258,7 @@ public sealed class GarminAdapterClient(HttpClient httpClient) : IGarminAdapterC
             "rate-limited" => new(GarminAdapterError.RateLimited, "Garmin rate limited the request."),
             "unavailable" => new(GarminAdapterError.Unavailable, "Garmin is unavailable."),
             "response-invalid" => ResponseInvalid(),
-            "request-invalid" => new(GarminAdapterError.RequestInvalid, "The Garmin adapter rejected the request."),
+            "request-invalid" => RequestInvalid(),
             "activity-not-allowed" => new(GarminAdapterError.ActivityNotAllowed, "The Garmin activity is not available."),
             "fit-too-large" => new(GarminAdapterError.FitTooLarge, "The Garmin FIT file is too large."),
             _ => ResponseInvalid()
@@ -231,6 +266,9 @@ public sealed class GarminAdapterClient(HttpClient httpClient) : IGarminAdapterC
 
     private static GarminAdapterException AdapterUnavailable() =>
         new(GarminAdapterError.AdapterUnavailable, "The Garmin adapter is unavailable.");
+
+    private static GarminAdapterException RequestInvalid() =>
+        new(GarminAdapterError.RequestInvalid, "The Garmin adapter rejected the request.");
 
     private static GarminAdapterException ResponseInvalid() =>
         new(GarminAdapterError.ResponseInvalid, "The Garmin adapter returned an invalid response.");
