@@ -16,7 +16,15 @@ public enum LocalCredentialSetupResult
     /// minimum length (e.g. "a" followed by eleven spaces) would otherwise pass length validation
     /// while carrying almost no real entropy.
     /// </summary>
-    Padded
+    Padded,
+
+    /// <summary>
+    /// Longer than <see cref="LocalCredentialService.MaximumPassphraseLength"/>. This is not a
+    /// meaningful security boundary by itself -- the endpoint's request-size limit is what stops a
+    /// huge body from being read into memory at all -- but a JSON body can still fit tens of
+    /// thousands of characters within that byte limit, so the hasher needs its own bound.
+    /// </summary>
+    TooLong
 }
 
 /// <summary>
@@ -33,6 +41,13 @@ public sealed class LocalCredentialService(ILocalCredentialRepository credential
     /// </summary>
     public const int MinimumPassphraseLength = 12;
 
+    /// <summary>
+    /// An upper bound purely to cap how much work the hasher does and how much memory an anonymous
+    /// caller can make it allocate before any other validation runs -- generous enough that no real
+    /// passphrase ever brushes against it.
+    /// </summary>
+    public const int MaximumPassphraseLength = 256;
+
     private static readonly PasswordHasher<object> Hasher = new();
     private static readonly object HashSubject = new();
 
@@ -41,6 +56,10 @@ public sealed class LocalCredentialService(ILocalCredentialRepository credential
 
     public async Task<LocalCredentialSetupResult> SetupAsync(string passphrase, CancellationToken cancellationToken)
     {
+        // Gives the common case ("setup already ran") a clean answer without attempting a write.
+        // This is advisory only -- TryAddAsync below, not this read, is what actually decides
+        // whether a credential already exists, because two concurrent first-run callers can both
+        // observe this returning null before either has written.
         if (await credentials.GetAsync(cancellationToken) is not null)
         {
             return LocalCredentialSetupResult.AlreadyConfigured;
@@ -51,13 +70,18 @@ public sealed class LocalCredentialService(ILocalCredentialRepository credential
             return LocalCredentialSetupResult.TooShort;
         }
 
+        if (passphrase.Length > MaximumPassphraseLength)
+        {
+            return LocalCredentialSetupResult.TooLong;
+        }
+
         if (passphrase.Length != passphrase.Trim().Length)
         {
             return LocalCredentialSetupResult.Padded;
         }
 
-        await credentials.SetAsync(Hasher.HashPassword(HashSubject, passphrase), cancellationToken);
-        return LocalCredentialSetupResult.Configured;
+        var created = await credentials.TryAddAsync(Hasher.HashPassword(HashSubject, passphrase), cancellationToken);
+        return created ? LocalCredentialSetupResult.Configured : LocalCredentialSetupResult.AlreadyConfigured;
     }
 
     public async Task<bool> VerifyAsync(string passphrase, CancellationToken cancellationToken)

@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Http.Metadata;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -27,8 +29,10 @@ public sealed class LocalAuthEndpointTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains(response.Headers, header => header.Key == "Set-Cookie");
 
+        // Authenticated but no profile row exists yet: 404, not 200 or (crucially) 401. A bare
+        // "not Unauthorized" would also pass for a 500, which proves nothing about authentication.
         using var profile = await client.GetAsync("/api/profile", CancellationToken.None);
-        Assert.NotEqual(HttpStatusCode.Unauthorized, profile.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, profile.StatusCode);
     }
 
     [Fact]
@@ -207,13 +211,69 @@ public sealed class LocalAuthEndpointTests
     [Fact]
     public async Task Setup_uses_distinct_error_codes_for_too_short_versus_padded_passphrases()
     {
+        // Two separate apps: each has its own never-configured repository, since the first setup
+        // call on either would otherwise make the second return AlreadyConfigured instead of the
+        // validation code under test.
+        await using var tooShortApp = LocalApp(null);
+        using var tooShortClient = tooShortApp.CreateClient();
+        await using var paddedApp = LocalApp(null);
+        using var paddedClient = paddedApp.CreateClient();
+
+        using var tooShort = await tooShortClient.PostAsJsonAsync("/api/auth/setup", new SetLocalCredentialRequest("short"), CancellationToken.None);
+        using var tooShortBody = JsonDocument.Parse(await tooShort.Content.ReadAsStringAsync());
+        using var padded = await paddedClient.PostAsJsonAsync("/api/auth/setup", new SetLocalCredentialRequest("a" + new string(' ', 11)), CancellationToken.None);
+        using var paddedBody = JsonDocument.Parse(await padded.Content.ReadAsStringAsync());
+
+        var tooShortCode = tooShortBody.RootElement.GetProperty("code").GetString();
+        var paddedCode = paddedBody.RootElement.GetProperty("code").GetString();
+        Assert.Equal("local-credential-too-short", tooShortCode);
+        Assert.Equal("local-credential-padded", paddedCode);
+        Assert.NotEqual(tooShortCode, paddedCode);
+    }
+
+    [Fact]
+    public async Task Setup_rejects_a_passphrase_over_the_maximum_length_with_its_own_error_code()
+    {
         await using var app = LocalApp(null);
         using var client = app.CreateClient();
 
-        using var tooShort = await client.PostAsJsonAsync("/api/auth/setup", new SetLocalCredentialRequest("short"), CancellationToken.None);
-        using var tooShortBody = JsonDocument.Parse(await tooShort.Content.ReadAsStringAsync());
+        using var response = await client.PostAsJsonAsync(
+            "/api/auth/setup",
+            new SetLocalCredentialRequest(new string('a', 300)),
+            CancellationToken.None);
 
-        Assert.Equal("local-credential-too-short", tooShortBody.RootElement.GetProperty("code").GetString());
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("local-credential-too-long", body.RootElement.GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void Setup_login_and_logout_endpoints_declare_a_4096_byte_request_size_limit()
+    {
+        // This cannot be a behavioural "POST an oversized body, expect 413" test: verified against
+        // this exact endpoint (via a standalone probe app, not this suite) that
+        // Microsoft.AspNetCore.Routing.EndpointRoutingMiddleware *does* apply IRequestSizeLimitMetadata
+        // onto IHttpMaxRequestBodySizeFeature automatically for minimal API endpoints -- but
+        // Microsoft.AspNetCore.TestHost.TestServer, which WebApplicationFactory uses for every test
+        // in this suite, does not implement IHttpMaxRequestBodySizeFeature at all. The framework logs
+        // "This server does not support the IHttpMaxRequestBodySizeFeature" and the limit is silently
+        // not enforced in-process; a real Kestrel-hosted request over the limit gets 413. So the
+        // closest in-process proof is that the metadata itself is attached correctly -- the necessary
+        // condition for Kestrel's built-in enforcement to apply in production.
+        using var app = LocalApp(null);
+
+        var endpoints = app.Services.GetServices<EndpointDataSource>()
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .ToList();
+
+        foreach (var pattern in new[] { "/api/auth/setup", "/api/auth/login", "/api/auth/logout" })
+        {
+            var endpoint = Assert.Single(endpoints, e => e.RoutePattern.RawText == pattern);
+            var metadata = endpoint.Metadata.GetMetadata<IRequestSizeLimitMetadata>();
+            Assert.NotNull(metadata);
+            Assert.Equal(4096, metadata.MaxRequestBodySize);
+        }
     }
 
     [Fact]
@@ -238,6 +298,78 @@ public sealed class LocalAuthEndpointTests
         Assert.Equal("local-credential-already-configured", body.RootElement.GetProperty("code").GetString());
     }
 
+    [Fact]
+    public async Task Login_with_the_wrong_passphrase_while_already_signed_in_leaves_the_existing_session_intact()
+    {
+        await using var app = LocalApp(null);
+        using var client = app.CreateClient();
+        await client.PostAsJsonAsync("/api/auth/setup", new SetLocalCredentialRequest(Passphrase), CancellationToken.None);
+
+        using var wrongLogin = await client.PostAsJsonAsync(
+            "/api/auth/login",
+            new LocalLoginRequest("not the passphrase at all"),
+            CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, wrongLogin.StatusCode);
+        Assert.DoesNotContain(wrongLogin.Headers, header => header.Key == "Set-Cookie");
+
+        // The session established by the earlier setup call must still work -- a failed login
+        // attempt must not have signed the caller out or otherwise disturbed it.
+        var session = await client.GetFromJsonAsync<AuthSessionResponse>("/api/auth/session", CancellationToken.None);
+        Assert.NotNull(session);
+        Assert.True(session.Authenticated);
+    }
+
+    [Fact]
+    public async Task Failure_responses_never_carry_a_set_cookie_header()
+    {
+        await using var configuredApp = LocalApp("an-existing-hash");
+        using var configuredClient = configuredApp.CreateClient();
+        await using var freshApp = LocalApp(null);
+        using var freshClient = freshApp.CreateClient();
+
+        using var alreadyConfigured = await configuredClient.PostAsJsonAsync("/api/auth/setup", new SetLocalCredentialRequest(Passphrase), CancellationToken.None);
+        using var wrongLogin = await configuredClient.PostAsJsonAsync("/api/auth/login", new LocalLoginRequest("wrong passphrase entirely"), CancellationToken.None);
+        using var tooShort = await freshClient.PostAsJsonAsync("/api/auth/setup", new SetLocalCredentialRequest("short"), CancellationToken.None);
+        using var padded = await freshClient.PostAsJsonAsync("/api/auth/setup", new SetLocalCredentialRequest("a" + new string(' ', 11)), CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.Conflict, alreadyConfigured.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, wrongLogin.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, tooShort.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, padded.StatusCode);
+        Assert.DoesNotContain(alreadyConfigured.Headers, header => header.Key == "Set-Cookie");
+        Assert.DoesNotContain(wrongLogin.Headers, header => header.Key == "Set-Cookie");
+        Assert.DoesNotContain(tooShort.Headers, header => header.Key == "Set-Cookie");
+        Assert.DoesNotContain(padded.Headers, header => header.Key == "Set-Cookie");
+    }
+
+    [Fact]
+    public async Task A_session_is_revoked_once_the_stored_credential_is_removed()
+    {
+        // The recovery procedure the 409-Conflict message itself recommends is "clear the stored
+        // credential". The cookie is a self-contained, data-protected ticket with no server-side
+        // session store, so nothing re-checks the credential unless OnValidatePrincipal does --
+        // this proves it does, and that a session survives right up until the row is actually gone.
+        var repository = new AuthConfigEndpointTests.FakeLocalCredentialRepository(null);
+        await using var app = new RouteTimerApiFactory()
+            .WithAuthMode("Local")
+            .WithServices(services =>
+            {
+                services.RemoveAll<ILocalCredentialRepository>();
+                services.AddSingleton<ILocalCredentialRepository>(repository);
+            });
+        using var client = app.CreateClient();
+        await client.PostAsJsonAsync("/api/auth/setup", new SetLocalCredentialRequest(Passphrase), CancellationToken.None);
+
+        using var beforeDeletion = await client.GetAsync("/api/profile", CancellationToken.None);
+        Assert.NotEqual(HttpStatusCode.Unauthorized, beforeDeletion.StatusCode);
+
+        repository.Clear();
+
+        using var afterDeletion = await client.GetAsync("/api/profile", CancellationToken.None);
+        Assert.Equal(HttpStatusCode.Unauthorized, afterDeletion.StatusCode);
+    }
+
     private static RouteTimerApiFactory LocalApp(string? initialHash) =>
         new RouteTimerApiFactory()
             .WithAuthMode("Local")
@@ -249,16 +381,22 @@ public sealed class LocalAuthEndpointTests
             });
 
     /// <summary>
-    /// Simulates the loser of a concurrent first-run setup race: <see cref="GetAsync"/> reports no
-    /// credential exists (matching what both concurrent callers would have seen), but the write
-    /// fails with the same exception the database's singleton check constraint would raise for a
-    /// second row.
+    /// Defensive-backstop fixture, not a simulation of the real race window: the production
+    /// repository (<c>LocalCredentialRepository.TryAddAsync</c>) already catches the database's
+    /// insert-conflict <see cref="DbUpdateException"/> itself and reports it as a plain <c>false</c>
+    /// return -- that is what actually resolves a concurrent setup race now (see
+    /// <c>LocalCredentialServiceTests</c> for that invariant). This fixture instead proves that
+    /// <c>AuthEndpoints.SetupAsync</c> still maps the exception to a clean Conflict if some other
+    /// <see cref="ILocalCredentialRepository"/> implementation ever lets it escape uncaught.
     /// </summary>
     private sealed class ThrowsOnSetLocalCredentialRepository : ILocalCredentialRepository
     {
         public Task<string?> GetAsync(CancellationToken cancellationToken) => Task.FromResult<string?>(null);
 
-        public Task SetAsync(string passwordHash, CancellationToken cancellationToken) =>
+        public Task<bool> TryAddAsync(string passwordHash, CancellationToken cancellationToken) =>
             throw new DbUpdateException("Simulated unique-constraint violation from a concurrent setup.");
+
+        public Task SetAsync(string passwordHash, CancellationToken cancellationToken) =>
+            throw new NotSupportedException("Not used by this test.");
     }
 }

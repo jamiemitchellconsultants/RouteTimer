@@ -135,5 +135,19 @@ public sealed class AuthConfigEndpointTests
             hash = passwordHash;
             return Task.CompletedTask;
         }
+
+        public Task<bool> TryAddAsync(string passwordHash, CancellationToken cancellationToken)
+        {
+            if (hash is not null)
+            {
+                return Task.FromResult(false);
+            }
+
+            hash = passwordHash;
+            return Task.FromResult(true);
+        }
+
+        /// <summary>Simulates deleting the stored credential row, as the setup-conflict recovery message recommends.</summary>
+        public void Clear() => hash = null;
     }
 }

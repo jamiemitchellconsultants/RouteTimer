@@ -21,12 +21,32 @@ public sealed class LocalCredentialServiceTests
     }
 
     [Fact]
-    public async Task Setup_refuses_to_run_a_second_time()
+    public async Task Setup_refuses_to_run_a_second_time_and_does_not_change_the_stored_hash()
     {
-        var service = new LocalCredentialService(new InMemoryLocalCredentialRepository(), NullLogger<LocalCredentialService>.Instance);
+        var repository = new InMemoryLocalCredentialRepository();
+        var service = new LocalCredentialService(repository, NullLogger<LocalCredentialService>.Instance);
         await service.SetupAsync("correct horse battery staple", CancellationToken.None);
+        var storedAfterFirstSetup = repository.Stored;
 
         var result = await service.SetupAsync("a different passphrase", CancellationToken.None);
+
+        Assert.Equal(LocalCredentialSetupResult.AlreadyConfigured, result);
+        Assert.Equal(storedAfterFirstSetup, repository.Stored);
+        Assert.True(await service.VerifyAsync("correct horse battery staple", CancellationToken.None));
+        Assert.False(await service.VerifyAsync("a different passphrase", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Setup_reports_already_configured_when_the_insert_loses_a_concurrent_race_even_though_a_prior_read_reported_no_credential()
+    {
+        // Simulates the real bug this regression test exists for: two concurrent first-run callers
+        // both call GetAsync and both see null before either has written. SetupAsync's own early
+        // GetAsync check cannot catch this -- it also sees null -- so the write itself,
+        // TryAddAsync, has to be what refuses the loser. This fake's GetAsync always reports "no
+        // credential yet" while TryAddAsync always reports "someone else already holds it".
+        var service = new LocalCredentialService(new RaceLosingLocalCredentialRepository(), NullLogger<LocalCredentialService>.Instance);
+
+        var result = await service.SetupAsync("correct horse battery staple", CancellationToken.None);
 
         Assert.Equal(LocalCredentialSetupResult.AlreadyConfigured, result);
     }
@@ -64,6 +84,31 @@ public sealed class LocalCredentialServiceTests
         var service = new LocalCredentialService(new InMemoryLocalCredentialRepository(), NullLogger<LocalCredentialService>.Instance);
 
         var result = await service.SetupAsync("correct horse battery staple", CancellationToken.None);
+
+        Assert.Equal(LocalCredentialSetupResult.Configured, result);
+    }
+
+    [Fact]
+    public async Task Setup_rejects_a_passphrase_over_the_maximum_length()
+    {
+        var service = new LocalCredentialService(new InMemoryLocalCredentialRepository(), NullLogger<LocalCredentialService>.Instance);
+
+        var result = await service.SetupAsync(
+            new string('a', LocalCredentialService.MaximumPassphraseLength + 1),
+            CancellationToken.None);
+
+        Assert.Equal(LocalCredentialSetupResult.TooLong, result);
+        Assert.True(await service.IsSetupRequiredAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Setup_accepts_a_passphrase_exactly_at_the_maximum_length()
+    {
+        var service = new LocalCredentialService(new InMemoryLocalCredentialRepository(), NullLogger<LocalCredentialService>.Instance);
+
+        var result = await service.SetupAsync(
+            new string('a', LocalCredentialService.MaximumPassphraseLength),
+            CancellationToken.None);
 
         Assert.Equal(LocalCredentialSetupResult.Configured, result);
     }
@@ -168,6 +213,17 @@ public sealed class LocalCredentialServiceTests
             Stored = passwordHash;
             return Task.CompletedTask;
         }
+
+        public Task<bool> TryAddAsync(string passwordHash, CancellationToken cancellationToken)
+        {
+            if (Stored is not null)
+            {
+                return Task.FromResult(false);
+            }
+
+            Stored = passwordHash;
+            return Task.FromResult(true);
+        }
     }
 
     /// <summary>
@@ -180,5 +236,23 @@ public sealed class LocalCredentialServiceTests
 
         public Task SetAsync(string passwordHash, CancellationToken cancellationToken) =>
             throw new InvalidOperationException("Simulated write failure.");
+
+        public Task<bool> TryAddAsync(string passwordHash, CancellationToken cancellationToken) =>
+            throw new NotSupportedException("Not used by these tests -- this fake only exercises the VerifyAsync rehash path.");
+    }
+
+    /// <summary>
+    /// Simulates the loser of a true concurrent first-run setup race: <see cref="GetAsync"/> always
+    /// reports no credential exists (the stale read both concurrent callers would have made), while
+    /// <see cref="TryAddAsync"/> always reports conflict (the write itself is authoritative).
+    /// </summary>
+    private sealed class RaceLosingLocalCredentialRepository : ILocalCredentialRepository
+    {
+        public Task<string?> GetAsync(CancellationToken cancellationToken) => Task.FromResult<string?>(null);
+
+        public Task<bool> TryAddAsync(string passwordHash, CancellationToken cancellationToken) => Task.FromResult(false);
+
+        public Task SetAsync(string passwordHash, CancellationToken cancellationToken) =>
+            throw new NotSupportedException("Not used by this test.");
     }
 }

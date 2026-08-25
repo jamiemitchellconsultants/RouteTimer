@@ -1,10 +1,12 @@
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
 using RouteTimer.Api;
 using RouteTimer.Api.Auth;
 using RouteTimer.Api.Endpoints;
+using RouteTimer.Api.Security;
 using RouteTimer.Api.Workers;
 using RouteTimer.Contracts.Uploads;
 using RouteTimer.Persistence;
@@ -126,11 +128,27 @@ else
                 context.Response.StatusCode = StatusCodes.Status403Forbidden;
                 return Task.CompletedTask;
             };
+            // The cookie is a self-contained, data-protected ticket with a 30-day sliding
+            // expiry and no server-side session store, so nothing else re-checks the credential
+            // after sign-in. Without this, deleting the credential row -- the recovery path the
+            // setup-conflict response itself recommends -- would lock the rider out of setup
+            // while leaving any session already issued fully valid for up to 30 more days.
+            // Re-validating on every request closes that: once the row is gone, the very next
+            // request the existing cookie is used on gets signed out instead of let through.
+            options.Events.OnValidatePrincipal = async context =>
+            {
+                var credentials = context.HttpContext.RequestServices.GetRequiredService<LocalCredentialService>();
+                if (await credentials.IsSetupRequiredAsync(context.HttpContext.RequestAborted))
+                {
+                    context.RejectPrincipal();
+                    await context.HttpContext.SignOutAsync(LocalAuthenticationDefaults.AuthenticationScheme);
+                }
+            };
         });
 }
 var riderPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
         .RequireAuthenticatedUser()
-        .RequireRole("rider")
+        .RequireRole(LocalAuthenticationDefaults.RiderRole)
         .Build();
 builder.Services.AddAuthorizationBuilder().SetDefaultPolicy(riderPolicy).SetFallbackPolicy(riderPolicy);
 builder.Services.Configure<FormOptions>(options => options.MultipartBodyLengthLimit = UploadLimits.MaximumTrainingRequestBytes);
@@ -138,6 +156,7 @@ builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 
 
 var app = builder.Build();
 
+app.UseSameOriginEnforcement();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.MapHealthChecks("/health/live", new HealthCheckOptions

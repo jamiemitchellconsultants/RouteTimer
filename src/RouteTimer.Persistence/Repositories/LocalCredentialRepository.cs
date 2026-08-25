@@ -41,4 +41,39 @@ public sealed class LocalCredentialRepository(RouteTimerDbContext context) : ILo
 
         await context.SaveChangesAsync(cancellationToken);
     }
+
+    public async Task<bool> TryAddAsync(string passwordHash, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(passwordHash);
+
+        // Deliberately does not read-then-decide: SetAsync's read-then-upsert shape is exactly what
+        // let a concurrent setup loser silently overwrite the winner's passphrase (the loser's own
+        // read ran before the winner's write landed, so it took the UPDATE branch instead of hitting
+        // a conflict). Going straight to INSERT makes the database's primary key -- backed by
+        // CK_local_credential_singleton pinning Id = 1 -- the sole arbiter of "does a credential
+        // already exist", with no window for a stale read to get it wrong.
+        var now = DateTimeOffset.UtcNow;
+        var entity = new LocalCredentialEntity
+        {
+            Id = SingletonId,
+            PasswordHash = passwordHash,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        context.LocalCredentials.Add(entity);
+
+        try
+        {
+            await context.SaveChangesAsync(cancellationToken);
+            return true;
+        }
+        catch (DbUpdateException)
+        {
+            // Another writer's row already occupies Id = 1. Detach the failed insert so this
+            // context instance is not left tracking a phantom row that would collide with the real
+            // one -- tracked by the same key -- on the next query through this same DbContext.
+            context.Entry(entity).State = EntityState.Detached;
+            return false;
+        }
+    }
 }
