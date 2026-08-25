@@ -45,6 +45,7 @@ builder.Services.AddScoped<IProfileRepository, ProfileRepository>();
 builder.Services.AddScoped<IPredictionRepository, PredictionRepository>();
 builder.Services.AddScoped<IJobRepository, JobRepository>();
 builder.Services.AddScoped<IGarminConnectionRepository, GarminConnectionRepository>();
+builder.Services.AddScoped<IGarminActivityImportRepository, GarminActivityImportRepository>();
 builder.Services.AddScoped<TrainingUploadService>();
 builder.Services.AddScoped<TrainingActivityQueryService>();
 builder.Services.AddScoped<TrainingActivityDeletionService>();
@@ -55,6 +56,7 @@ builder.Services.AddScoped<PredictionSubmissionService>();
 builder.Services.AddScoped<PredictionQueryService>();
 builder.Services.AddScoped<PredictionDeletionService>();
 builder.Services.AddScoped<GarminConnectionService>();
+builder.Services.AddScoped<GarminActivityService>();
 var encodedGarminKey = builder.Configuration["Garmin:TokenEncryptionKey"]
     ?? throw new InvalidOperationException("Garmin:TokenEncryptionKey is required.");
 byte[] garminKey;

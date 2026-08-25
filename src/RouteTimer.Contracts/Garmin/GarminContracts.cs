@@ -15,3 +15,18 @@ public sealed record GarminConnectionResponse(
     string? GarminUserId,
     string? DisplayName,
     string? ChallengeId);
+
+public sealed record GarminActivitySummaryResponse(
+    string ActivityId,
+    string Name,
+    DateTimeOffset StartedAt,
+    string ActivityType,
+    double? DistanceMetres,
+    double? DurationSeconds,
+    double? AscentMetres,
+    double? AveragePowerWatts,
+    bool AlreadyImported);
+
+public sealed record GarminActivityPageResponse(
+    IReadOnlyList<GarminActivitySummaryResponse> Activities,
+    string? NextCursor);
