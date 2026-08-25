@@ -127,11 +127,7 @@ app.MapPost("/api/training/uploads", async (HttpRequest request, TrainingUploadS
         }
 
         var form = await request.ReadFormAsync(cancellationToken);
-        var batch = new List<TrainingUpload>(form.Files.Count);
-        foreach (var file in form.Files)
-        {
-            batch.Add(new TrainingUpload(file.FileName, file.OpenReadStream()));
-        }
+        var batch = TrainingUploadBatch.Open(form.Files);
 
         try
         {
@@ -240,3 +236,36 @@ static PredictionSegmentResponse ToSegment(RouteTimer.Services.Persistence.Persi
     segment.PredictedSpeedMetresPerSecond, segment.SegmentMovingTime.TotalSeconds, segment.CumulativeMovingTime.TotalSeconds, segment.Confidence.ToString());
 
 public partial class Program;
+
+internal static class TrainingUploadBatch
+{
+    public static List<TrainingUpload> Open(IFormFileCollection files)
+    {
+        var batch = new List<TrainingUpload>(files.Count);
+        try
+        {
+            foreach (var file in files)
+            {
+                batch.Add(new TrainingUpload(file.FileName, file.OpenReadStream()));
+            }
+
+            return batch;
+        }
+        catch
+        {
+            foreach (var upload in batch)
+            {
+                try
+                {
+                    upload.Content.Dispose();
+                }
+                catch
+                {
+                    // Preserve the stream-opening failure while ensuring later streams are attempted.
+                }
+            }
+
+            throw;
+        }
+    }
+}

@@ -290,7 +290,7 @@ public sealed class PostgresMigrationTests
         await migrator.MigrateAsync();
         context.ChangeTracker.Clear();
 
-        var activity = await new TrainingActivityRepository(context).GetAsync(activityId, CancellationToken.None);
+        var activity = await new TrainingActivityRepository(context, TimeProvider.System).GetAsync(activityId, CancellationToken.None);
         var job = await new JobRepository(context).GetAsync(jobId, CancellationToken.None);
 
         Assert.NotNull(activity);

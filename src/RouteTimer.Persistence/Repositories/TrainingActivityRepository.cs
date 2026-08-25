@@ -6,7 +6,7 @@ using RouteTimer.Services.Persistence;
 
 namespace RouteTimer.Persistence.Repositories;
 
-public sealed class TrainingActivityRepository(RouteTimerDbContext context) : ITrainingActivityRepository
+public sealed class TrainingActivityRepository(RouteTimerDbContext context, TimeProvider timeProvider) : ITrainingActivityRepository
 {
     public async Task<Guid> SaveAsync(Guid uploadId, CleanedActivity activity, CancellationToken cancellationToken)
     {
@@ -33,7 +33,7 @@ public sealed class TrainingActivityRepository(RouteTimerDbContext context) : IT
             PowerCoverage = activity.Quality.PowerCoverage,
             ExclusionCounts = activity.Quality.ExclusionCounts,
             ReasonCodes = activity.Quality.ReasonCodes,
-            CreatedAt = DateTimeOffset.UtcNow
+            CreatedAt = timeProvider.GetUtcNow()
         };
 
         for (var sequence = 0; sequence < activity.Samples.Count; sequence++)

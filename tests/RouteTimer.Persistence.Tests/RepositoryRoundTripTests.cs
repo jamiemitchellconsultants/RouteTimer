@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Time.Testing;
 using RouteTimer.Persistence;
 using RouteTimer.Persistence.Entities;
 using RouteTimer.Persistence.Repositories;
@@ -116,7 +117,7 @@ public sealed class RepositoryRoundTripTests
     {
         var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         await using var context = new RouteTimerDbContext(options);
-        var repository = new TrainingActivityRepository(context);
+        var repository = new TrainingActivityRepository(context, TimeProvider.System);
         var uploadId = Guid.NewGuid();
         var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
         var samples = new[]
@@ -171,13 +172,33 @@ public sealed class RepositoryRoundTripTests
         Assert.Equal(120, storedActivity.AscentMetres);
     }
 
+    [Fact]
+    public async Task Save_training_activity_uses_injected_time_provider_for_created_at()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var createdAt = new DateTimeOffset(2026, 8, 25, 14, 30, 0, TimeSpan.Zero);
+        var repository = new TrainingActivityRepository(context, new FakeTimeProvider(createdAt));
+        var start = createdAt.AddHours(-1);
+        var activity = new CleanedActivity(
+            "Timed Ride",
+            [new CleanRideSample(start, TimeSpan.Zero, new GeoPoint(51, -2, 100), 5, 180, 140, 85, false, 0)],
+            TimeSpan.FromSeconds(1),
+            new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []),
+            Metadata("timed-ride.fit", start, start));
+
+        var id = await repository.SaveAsync(Guid.NewGuid(), activity, CancellationToken.None);
+
+        Assert.Equal(createdAt, (await context.TrainingActivities.SingleAsync(entity => entity.Id == id)).CreatedAt);
+    }
+
     // Break caught: summary/detail/count projections load sample payloads indirectly or drop quality metadata needed by API callers.
     [Fact]
     public async Task Training_activity_projections_return_newest_first_detail_metadata_and_counts()
     {
         var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         await using var context = new RouteTimerDbContext(options);
-        var repository = new TrainingActivityRepository(context);
+        var repository = new TrainingActivityRepository(context, TimeProvider.System);
         var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
         var older = new TrainingActivityEntity
         {
@@ -275,7 +296,7 @@ public sealed class RepositoryRoundTripTests
     {
         var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         await using var context = new RouteTimerDbContext(options);
-        var repository = new TrainingActivityRepository(context);
+        var repository = new TrainingActivityRepository(context, TimeProvider.System);
         var uploadId = Guid.NewGuid();
         var activityId = Guid.NewGuid();
         context.Uploads.Add(new StoredUploadEntity
@@ -388,7 +409,7 @@ public sealed class RepositoryRoundTripTests
     {
         var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         await using var context = new RouteTimerDbContext(options);
-        var repository = new TrainingActivityRepository(context);
+        var repository = new TrainingActivityRepository(context, TimeProvider.System);
         var start = new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero);
         var sample = new CleanRideSample(
             start,
@@ -421,7 +442,7 @@ public sealed class RepositoryRoundTripTests
     {
         var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         await using var context = new RouteTimerDbContext(options);
-        var repository = new TrainingActivityRepository(context);
+        var repository = new TrainingActivityRepository(context, TimeProvider.System);
         var start = new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero);
         var elevations = new[] { 100d, 112, 91, 130, 96, 118, 105 };
         var raw = elevations.Select((elevation, index) => new RawRideSample(
@@ -447,7 +468,7 @@ public sealed class RepositoryRoundTripTests
     {
         var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         await using var context = new RouteTimerDbContext(options);
-        var repository = new TrainingActivityRepository(context);
+        var repository = new TrainingActivityRepository(context, TimeProvider.System);
         var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
         var eligibleSamples = new[] { new CleanRideSample(start, TimeSpan.Zero, new GeoPoint(51.1, -2.1, 100), 5.0, 180, 140, 85, false, 0.5) };
         var ineligibleSamples = new[] { new CleanRideSample(start, TimeSpan.Zero, new GeoPoint(51.1, -2.1, 100), 5.0, null, null, null, false, 0.5) };
