@@ -39,6 +39,8 @@ builder.Services.AddScoped<IRiderModelRepository, RiderModelRepository>();
 builder.Services.AddScoped<IJobQueue, PostgresJobQueue>();
 builder.Services.AddScoped<IJobProgressReporter, JobProgressReporter>();
 builder.Services.AddScoped<IProfileRepository, ProfileRepository>();
+builder.Services.AddScoped<ILocalCredentialRepository, LocalCredentialRepository>();
+builder.Services.AddScoped<LocalCredentialService>();
 builder.Services.AddScoped<IPredictionRepository, PredictionRepository>();
 builder.Services.AddScoped<IJobRepository, JobRepository>();
 builder.Services.AddScoped<TrainingUploadService>();
@@ -111,6 +113,7 @@ app.MapTrainingEndpoints();
 app.MapModelsEndpoints();
 app.MapPredictionEndpoints();
 app.MapJobEndpoints();
+app.MapAuthEndpoints(authMode);
 
 app.Run();
 
