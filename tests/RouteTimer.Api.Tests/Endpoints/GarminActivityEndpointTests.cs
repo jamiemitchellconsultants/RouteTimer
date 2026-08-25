@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -35,6 +36,127 @@ public sealed class GarminActivityEndpointTests
         using var response = await client.GetAsync("/api/garmin/activities");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Import_requires_authentication()
+    {
+        await using var app = new RouteTimerApiFactory();
+        using var client = app.CreateClient();
+
+        using var response = await client.PostAsJsonAsync(
+            "/api/garmin/activities/import",
+            new { activityIds = new[] { "1" } });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Import_requires_the_rider_role()
+    {
+        await using var app = new RouteTimerApiFactory().WithRiderAuthentication();
+        using var client = app.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Test-Role", "non-rider");
+
+        using var response = await client.PostAsJsonAsync(
+            "/api/garmin/activities/import",
+            new { activityIds = new[] { "1" } });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    // Break caught: a valid mixed batch returns a request-level failure, reorders rows, or leaks adapter tokens/details.
+    [Fact]
+    public async Task Import_returns_202_with_ordered_token_free_per_item_outcomes_and_safe_errors()
+    {
+        const string privateDetail = "raw token SQL stack http://garmin-adapter.internal";
+        var adapter = new FakeAdapterClient();
+        adapter.ImportActivities["1"] = Activity("1", "Road ride", "road-cycling", null, null, null, null);
+        adapter.ImportActivities["2"] = Activity("2", "Gravel ride", "gravel-cycling", null, null, null, null);
+        adapter.ImportDownloads["1"] = [1, 2, 3];
+        adapter.ImportDownloadFailures["2"] = new GarminAdapterException(GarminAdapterError.Unavailable, privateDetail);
+        await using var app = CreateRiderApp(adapter);
+        await SaveConnectionAsync(app.Services);
+        using var client = app.CreateClient();
+
+        using var response = await client.PostAsJsonAsync(
+            "/api/garmin/activities/import",
+            new { activityIds = new[] { "1", "2" } });
+        var json = await response.Content.ReadAsStringAsync();
+        using var body = JsonDocument.Parse(json);
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        Assert.Equal(["activities"], body.RootElement.EnumerateObject().Select(property => property.Name));
+        var results = body.RootElement.GetProperty("activities").EnumerateArray().ToArray();
+        Assert.Equal(2, results.Length);
+        Assert.Equal(
+            ["activityId", "name", "outcome", "uploadId", "jobId", "errorCode"],
+            results[0].EnumerateObject().Select(property => property.Name));
+        Assert.Equal("1", results[0].GetProperty("activityId").GetString());
+        Assert.Equal("Road ride", results[0].GetProperty("name").GetString());
+        Assert.Equal("accepted", results[0].GetProperty("outcome").GetString());
+        Assert.NotEqual(JsonValueKind.Null, results[0].GetProperty("uploadId").ValueKind);
+        Assert.NotEqual(JsonValueKind.Null, results[0].GetProperty("jobId").ValueKind);
+        Assert.Equal(JsonValueKind.Null, results[0].GetProperty("errorCode").ValueKind);
+        Assert.Equal("2", results[1].GetProperty("activityId").GetString());
+        Assert.Equal("download-failed", results[1].GetProperty("outcome").GetString());
+        Assert.Equal("garmin-unavailable", results[1].GetProperty("errorCode").GetString());
+        Assert.Equal(JsonValueKind.Null, results[1].GetProperty("uploadId").ValueKind);
+        Assert.Equal(JsonValueKind.Null, results[1].GetProperty("jobId").ValueKind);
+        Assert.DoesNotContain(privateDetail, json, StringComparison.Ordinal);
+        Assert.DoesNotContain("token", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(["1", "2"], adapter.ImportSummaryIds);
+        Assert.Equal(["1", "2"], adapter.ImportDownloadIds);
+
+        await using var scope = app.Services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<RouteTimerDbContext>();
+        Assert.Single(await context.Uploads.ToListAsync());
+        Assert.Single(await context.Jobs.ToListAsync());
+        Assert.Single(await context.GarminActivityImports.ToListAsync());
+    }
+
+    // Break caught: malformed Garmin import batches fall through to 404/framework errors or contact Garmin.
+    [Theory]
+    [MemberData(nameof(InvalidImportSelections))]
+    public async Task Import_rejects_zero_eleven_and_duplicate_ids_with_stable_bad_request(string[] activityIds)
+    {
+        var adapter = new FakeAdapterClient();
+        await using var app = CreateRiderApp(adapter);
+        using var client = app.CreateClient();
+
+        using var response = await client.PostAsJsonAsync(
+            "/api/garmin/activities/import",
+            new { activityIds });
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("garmin-import-limit", body.RootElement.GetProperty("code").GetString());
+        Assert.Empty(adapter.ImportSummaryIds);
+        Assert.Empty(adapter.ImportDownloadIds);
+    }
+
+    public static TheoryData<string[]> InvalidImportSelections => new()
+    {
+        Array.Empty<string>(),
+        Enumerable.Range(1, 11).Select(value => value.ToString()).ToArray(),
+        new[] { "1", "1" }
+    };
+
+    [Fact]
+    public async Task Import_without_a_saved_connection_returns_connection_required()
+    {
+        var adapter = new FakeAdapterClient();
+        await using var app = CreateRiderApp(adapter);
+        using var client = app.CreateClient();
+
+        using var response = await client.PostAsJsonAsync(
+            "/api/garmin/activities/import",
+            new { activityIds = new[] { "1" } });
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("garmin-connection-required", body.RootElement.GetProperty("code").GetString());
+        Assert.Empty(adapter.ImportSummaryIds);
     }
 
     // Break caught: the endpoint could expose adapter/token fields, omit safe metrics, or return disallowed activity types.
@@ -241,6 +363,11 @@ public sealed class GarminActivityEndpointTests
         public int ActivityCalls { get; private set; }
         public int? LastOffset { get; private set; }
         public string? LastTokenJson { get; private set; }
+        public Dictionary<string, GarminAdapterActivity> ImportActivities { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, byte[]> ImportDownloads { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, GarminAdapterException> ImportDownloadFailures { get; } = new(StringComparer.Ordinal);
+        public List<string> ImportSummaryIds { get; } = [];
+        public List<string> ImportDownloadIds { get; } = [];
 
         public Task<GarminAdapterActivityPage> GetActivitiesAsync(
             string tokenJson,
@@ -264,11 +391,22 @@ public sealed class GarminActivityEndpointTests
         public Task<GarminAdapterSession> ValidateAsync(string tokenJson, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
-        public Task<GarminAdapterActivityResult> GetActivityAsync(string tokenJson, string activityId, CancellationToken cancellationToken) =>
-            throw new NotSupportedException();
+        public Task<GarminAdapterActivityResult> GetActivityAsync(string tokenJson, string activityId, CancellationToken cancellationToken)
+        {
+            ImportSummaryIds.Add(activityId);
+            return Task.FromResult(new GarminAdapterActivityResult(ImportActivities[activityId], tokenJson));
+        }
 
-        public Task<GarminAdapterFitDownload> DownloadFitAsync(string tokenJson, string activityId, CancellationToken cancellationToken) =>
-            throw new NotSupportedException();
+        public Task<GarminAdapterFitDownload> DownloadFitAsync(string tokenJson, string activityId, CancellationToken cancellationToken)
+        {
+            ImportDownloadIds.Add(activityId);
+            return ImportDownloadFailures.TryGetValue(activityId, out var failure)
+                ? Task.FromException<GarminAdapterFitDownload>(failure)
+                : Task.FromResult(new GarminAdapterFitDownload(
+                    "adapter.fit",
+                    new MemoryStream(ImportDownloads[activityId]),
+                    tokenJson));
+        }
 
         public Task ClearChallengesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
     }

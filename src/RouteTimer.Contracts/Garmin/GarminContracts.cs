@@ -30,3 +30,16 @@ public sealed record GarminActivitySummaryResponse(
 public sealed record GarminActivityPageResponse(
     IReadOnlyList<GarminActivitySummaryResponse> Activities,
     string? NextCursor);
+
+public sealed record GarminImportRequest(IReadOnlyList<string> ActivityIds);
+
+public sealed record GarminImportBatchResponse(
+    IReadOnlyList<GarminImportResultResponse> Activities);
+
+public sealed record GarminImportResultResponse(
+    string ActivityId,
+    string? Name,
+    string Outcome,
+    Guid? UploadId,
+    Guid? JobId,
+    string? ErrorCode);

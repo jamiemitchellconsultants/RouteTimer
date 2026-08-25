@@ -78,8 +78,8 @@ public static class TrainingEndpoints
                 results.Select(result => new TrainingUploadFileResponse(
                     result.FileName,
                     result.Outcome.ToString().ToLowerInvariant(),
-                    result.UploadId,
-                    result.JobId,
+                    result.Outcome == UploadOutcome.Accepted ? result.UploadId : null,
+                    result.Outcome == UploadOutcome.Accepted ? result.JobId : null,
                     result.ErrorCode))
                 .ToList()));
         }

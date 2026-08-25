@@ -224,7 +224,14 @@ public sealed class GarminActivityServiceTests
         IGarminActivityImportRepository imports,
         TrackingTokenProtector? protector = null,
         GarminOperationGate? gate = null) =>
-        new(adapter, connections, imports, protector ?? connections.Protector, gate ?? new GarminOperationGate(), new FixedTimeProvider(Now));
+        new(
+            adapter,
+            connections,
+            imports,
+            protector ?? connections.Protector,
+            gate ?? new GarminOperationGate(),
+            new RouteTimer.Services.Training.TrainingUploadService(new UnusedTrainingUploadRepository(), new FixedTimeProvider(Now)),
+            new FixedTimeProvider(Now));
 
     private static FakeConnectionRepository ConnectedRepository(string tokenJson)
     {
@@ -299,6 +306,9 @@ public sealed class GarminActivityServiceTests
         public int QueryCalls { get; private set; }
         public IReadOnlyList<string> LastActivityIds { get; private set; } = [];
 
+        public Task<GarminActivityImportLink?> GetAsync(string activityId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<IReadOnlySet<string>> GetLinkedIdsAsync(
             IReadOnlyCollection<string> activityIds,
             CancellationToken cancellationToken)
@@ -307,6 +317,16 @@ public sealed class GarminActivityServiceTests
             LastActivityIds = activityIds.ToArray();
             return Task.FromResult(LinkedIds);
         }
+    }
+
+    private sealed class UnusedTrainingUploadRepository : ITrainingUploadRepository
+    {
+        public Task<TrainingUploadAcceptance> AcceptAsync(
+            StoredUpload upload,
+            DateTimeOffset now,
+            GarminActivitySource? garminSource,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 
     private sealed class FakeAdapterClient : IGarminAdapterClient

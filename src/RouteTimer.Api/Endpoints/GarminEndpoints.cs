@@ -14,6 +14,7 @@ public static class GarminEndpoints
         routes.MapPost("/api/garmin/connection/mfa", CompleteMfaAsync);
         routes.MapDelete("/api/garmin/connection", DisconnectAsync);
         routes.MapGet("/api/garmin/activities", GetActivitiesAsync);
+        routes.MapPost("/api/garmin/activities/import", ImportActivitiesAsync);
         return routes;
     }
 
@@ -57,6 +58,30 @@ public static class GarminEndpoints
         }
     }
 
+    private static async Task<IResult> ImportActivitiesAsync(
+        GarminImportRequest request,
+        GarminActivityService activities,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var results = await activities.ImportAsync(request.ActivityIds, cancellationToken);
+            return TypedResults.Accepted(
+                "/api/garmin/activities/import",
+                new GarminImportBatchResponse(results.Select(static result => new GarminImportResultResponse(
+                    result.ActivityId,
+                    result.Name,
+                    result.Outcome,
+                    result.UploadId,
+                    result.JobId,
+                    result.ErrorCode)).ToArray()));
+        }
+        catch (Exception exception) when (IsPublicGarminFailure(exception))
+        {
+            return ToProblem(exception);
+        }
+    }
+
     private static async Task<IResult> ExecuteAsync(Func<Task<GarminConnectionResult>> operation)
     {
         try
@@ -77,6 +102,7 @@ public static class GarminEndpoints
             GarminConnectionRequiredException or
             GarminReconnectRequiredException or
             GarminCursorInvalidException or
+            GarminImportLimitException or
             GarminResponseInvalidException;
 
     private static IResult ToProblem(Exception exception) =>
@@ -88,6 +114,7 @@ public static class GarminEndpoints
             GarminConnectionRequiredException => ConnectionRequired(),
             GarminReconnectRequiredException => ReconnectRequired(),
             GarminCursorInvalidException => CursorInvalid(),
+            GarminImportLimitException => ImportLimit(),
             GarminResponseInvalidException => ResponseInvalid(),
             GarminAdapterException adapterException => adapterException.Error switch
             {
@@ -136,12 +163,17 @@ public static class GarminEndpoints
     private static IResult ConnectionRequired() =>
         ApiProblems.Conflict(
             ErrorCodes.GarminConnectionRequired,
-            "Connect a Garmin account before listing activities.");
+            "Connect a Garmin account before listing or importing activities.");
 
     private static IResult CursorInvalid() =>
         ApiProblems.BadRequest(
             ErrorCodes.GarminCursorInvalid,
             "The Garmin activity cursor is invalid.");
+
+    private static IResult ImportLimit() =>
+        ApiProblems.BadRequest(
+            ErrorCodes.GarminImportLimit,
+            "Select between one and ten distinct Garmin activities.");
 
     private static IResult ResponseInvalid() =>
         ApiProblems.BadGateway(

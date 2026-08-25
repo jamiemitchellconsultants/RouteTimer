@@ -7,9 +7,9 @@ public sealed class TrainingUploadServiceTests
 {
     private static readonly DateTimeOffset UploadNow = new(2026, 8, 25, 15, 0, 0, TimeSpan.Zero);
 
-    // Break caught: duplicate upload acceptance returns stale identifiers from a previous accepted upload.
+    // Break caught: duplicate upload acceptance discards the identifiers needed by Garmin import results.
     [Fact]
-    public async Task Duplicate_upload_returns_duplicate_without_partial_identifiers()
+    public async Task Duplicate_upload_returns_duplicate_with_the_existing_upload_and_job_identifiers()
     {
         var repository = new InMemoryTrainingUploadRepository();
         var service = new TrainingUploadService(repository, new FixedTimeProvider(UploadNow));
@@ -22,10 +22,34 @@ public sealed class TrainingUploadServiceTests
         var result = Assert.Single(duplicate);
         Assert.Equal("second.fit", result.FileName);
         Assert.Equal(UploadOutcome.Duplicate, result.Outcome);
-        Assert.Null(result.UploadId);
-        Assert.Null(result.JobId);
+        Assert.Equal(first[0].UploadId, result.UploadId);
+        Assert.Equal(first[0].JobId, result.JobId);
         Assert.Equal("duplicate-upload", result.ErrorCode);
         Assert.Single(repository.AcceptedUploads);
+    }
+
+    // Break caught: Garmin provenance is dropped before the repository can enforce activity-ID idempotency.
+    [Fact]
+    public async Task Garmin_upload_forwards_source_and_returns_existing_ids_for_activity_id_duplicates()
+    {
+        var repository = new InMemoryTrainingUploadRepository();
+        var service = new TrainingUploadService(repository, new FixedTimeProvider(UploadNow));
+
+        var first = Assert.Single(await service.AcceptAsync(
+            [new TrainingUpload("first.fit", new MemoryStream([1, 2, 3]), new GarminActivitySource("123", "Road ride"))],
+            CancellationToken.None));
+        var duplicate = Assert.Single(await service.AcceptAsync(
+            [new TrainingUpload("renamed.fit", new MemoryStream([4, 5, 6]), new GarminActivitySource("123", "Road ride renamed"))],
+            CancellationToken.None));
+
+        Assert.Equal(UploadOutcome.Accepted, first.Outcome);
+        Assert.Equal(TrainingUploadAcceptanceOutcome.Accepted, first.AcceptanceOutcome);
+        Assert.Equal(UploadOutcome.Duplicate, duplicate.Outcome);
+        Assert.Equal(TrainingUploadAcceptanceOutcome.AlreadyImported, duplicate.AcceptanceOutcome);
+        Assert.Equal(first.UploadId, duplicate.UploadId);
+        Assert.Equal(first.JobId, duplicate.JobId);
+        Assert.Equal("duplicate-upload", duplicate.ErrorCode);
+        Assert.Equal(new GarminActivitySource("123", "Road ride"), Assert.Single(repository.GarminSources));
     }
 
     [Fact]
@@ -89,17 +113,56 @@ public sealed class TrainingUploadServiceTests
     private sealed class InMemoryTrainingUploadRepository : ITrainingUploadRepository
     {
         public List<StoredUpload> AcceptedUploads { get; } = [];
+        public List<GarminActivitySource> GarminSources { get; } = [];
+        private readonly Dictionary<Guid, Guid> jobs = [];
 
-        public Task<TrainingUploadAcceptance> AcceptAsync(StoredUpload upload, DateTimeOffset now, CancellationToken cancellationToken)
+        public Task<TrainingUploadAcceptance> AcceptAsync(
+            StoredUpload upload,
+            DateTimeOffset now,
+            GarminActivitySource? garminSource,
+            CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (AcceptedUploads.Any(existing => existing.Kind == upload.Kind && existing.Sha256.SequenceEqual(upload.Sha256)))
+            if (garminSource is not null)
             {
-                return Task.FromResult(new TrainingUploadAcceptance(false, null, null));
+                var sourceIndex = GarminSources.FindIndex(source => source.ActivityId == garminSource.ActivityId);
+                if (sourceIndex >= 0)
+                {
+                    var existingUpload = AcceptedUploads[sourceIndex];
+                    return Task.FromResult(new TrainingUploadAcceptance(
+                        TrainingUploadAcceptanceOutcome.AlreadyImported,
+                        existingUpload.Id,
+                        jobs[existingUpload.Id]));
+                }
+            }
+
+            var duplicate = AcceptedUploads.FirstOrDefault(
+                existing => existing.Kind == upload.Kind && existing.Sha256.SequenceEqual(upload.Sha256));
+            if (duplicate is not null)
+            {
+                if (garminSource is not null)
+                {
+                    GarminSources.Add(garminSource);
+                }
+
+                return Task.FromResult(new TrainingUploadAcceptance(
+                    TrainingUploadAcceptanceOutcome.DuplicateHash,
+                    duplicate.Id,
+                    jobs[duplicate.Id]));
             }
 
             AcceptedUploads.Add(upload);
-            return Task.FromResult(new TrainingUploadAcceptance(true, upload.Id, Guid.NewGuid()));
+            if (garminSource is not null)
+            {
+                GarminSources.Add(garminSource);
+            }
+
+            var jobId = Guid.NewGuid();
+            jobs.Add(upload.Id, jobId);
+            return Task.FromResult(new TrainingUploadAcceptance(
+                TrainingUploadAcceptanceOutcome.Accepted,
+                upload.Id,
+                jobId));
         }
     }
 

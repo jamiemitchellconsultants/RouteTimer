@@ -4,13 +4,17 @@ using RouteTimer.Services.Persistence;
 namespace RouteTimer.Services.Training;
 
 public enum UploadOutcome { Accepted, Duplicate, Invalid }
-public sealed record TrainingUpload(string FileName, Stream Content);
+public sealed record TrainingUpload(
+    string FileName,
+    Stream Content,
+    GarminActivitySource? GarminSource = null);
 public sealed record TrainingUploadResult(
     string FileName,
     UploadOutcome Outcome,
     Guid? UploadId,
     Guid? JobId,
-    string? ErrorCode);
+    string? ErrorCode,
+    TrainingUploadAcceptanceOutcome? AcceptanceOutcome = null);
 
 public sealed class TrainingUploadService
 {
@@ -50,10 +54,17 @@ public sealed class TrainingUploadService
             var stored = await repository.AcceptAsync(
                 new StoredUpload(uploadId, upload.FileName, "fit", content, hash, now),
                 now,
+                upload.GarminSource,
                 cancellationToken);
-            results.Add(stored.Accepted
-                ? new TrainingUploadResult(upload.FileName, UploadOutcome.Accepted, stored.UploadId, stored.JobId, null)
-                : new TrainingUploadResult(upload.FileName, UploadOutcome.Duplicate, null, null, "duplicate-upload"));
+            results.Add(new TrainingUploadResult(
+                upload.FileName,
+                stored.Outcome == TrainingUploadAcceptanceOutcome.Accepted
+                    ? UploadOutcome.Accepted
+                    : UploadOutcome.Duplicate,
+                stored.UploadId,
+                stored.JobId,
+                stored.Outcome == TrainingUploadAcceptanceOutcome.Accepted ? null : "duplicate-upload",
+                stored.Outcome));
         }
 
         return results;
