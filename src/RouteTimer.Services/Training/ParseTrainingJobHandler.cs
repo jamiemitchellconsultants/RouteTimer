@@ -21,7 +21,8 @@ public sealed class ParseTrainingJobHandler(
     IFitActivityParser parser,
     ITrainingCleaner cleaner,
     ITrainingActivityRepository activities,
-    IJobQueue jobs) : IJobHandler
+    IJobQueue jobs,
+    IJobProgressReporter progress) : IJobHandler
 {
     public JobType Handles => JobType.ParseTraining;
 
@@ -29,6 +30,7 @@ public sealed class ParseTrainingJobHandler(
     {
         ArgumentNullException.ThrowIfNull(job);
 
+        await progress.ReportAsync(job, 10, JobProgressStages.ReadingUpload, cancellationToken);
         var upload = await uploads.GetAsync(job.SubjectId, cancellationToken);
         if (upload is null)
         {
@@ -36,9 +38,13 @@ public sealed class ParseTrainingJobHandler(
         }
 
         using var content = new MemoryStream(upload.Content);
+        await progress.ReportAsync(job, 25, JobProgressStages.DecodingFit, cancellationToken);
         var parsed = await parser.ParseAsync(content, cancellationToken);
+        await progress.ReportAsync(job, 50, JobProgressStages.CleaningActivity, cancellationToken);
         var cleaned = cleaner.Clean(parsed, upload.FileName);
+        await progress.ReportAsync(job, 75, JobProgressStages.SavingActivity, cancellationToken);
         await activities.SaveAsync(job.SubjectId, cleaned, cancellationToken);
+        await progress.ReportAsync(job, 90, JobProgressStages.QueueingModelRebuild, cancellationToken);
         await jobs.EnqueueIfNotPendingAsync(JobType.BuildModel, ModelSubject.Id, cancellationToken);
     }
 }

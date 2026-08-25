@@ -79,6 +79,69 @@ public sealed class TrainingActivityRepository(RouteTimerDbContext context) : IT
         return entities.Select(ToDomain).ToList();
     }
 
+    public async Task<IReadOnlyList<TrainingActivitySummary>> GetSummariesAsync(CancellationToken cancellationToken)
+    {
+        var entities = await context.TrainingActivities
+            .AsNoTracking()
+            .OrderByDescending(activity => activity.CreatedAt)
+            .ToListAsync(cancellationToken);
+        return entities.Select(ToSummary).ToList();
+    }
+
+    public async Task<TrainingActivityDetail?> GetDetailAsync(Guid activityId, CancellationToken cancellationToken)
+    {
+        var entity = await context.TrainingActivities
+            .AsNoTracking()
+            .SingleOrDefaultAsync(activity => activity.Id == activityId, cancellationToken);
+        return entity is null
+            ? null
+            : new TrainingActivityDetail(ToSummary(entity), entity.ExclusionCounts);
+    }
+
+    public async Task<TrainingActivityCounts> GetCountsAsync(CancellationToken cancellationToken)
+    {
+        var eligible = ActivityEligibility.Eligible.ToString();
+        var total = await context.TrainingActivities.CountAsync(cancellationToken);
+        var eligibleCount = await context.TrainingActivities.CountAsync(activity => activity.Eligibility == eligible, cancellationToken);
+        return new TrainingActivityCounts(total, eligibleCount);
+    }
+
+    public async Task<bool> DeleteAsync(Guid activityId, CancellationToken cancellationToken)
+    {
+        await using var transaction = context.Database.IsRelational()
+            ? await context.Database.BeginTransactionAsync(cancellationToken)
+            : null;
+
+        var entity = await context.TrainingActivities
+            .Include(activity => activity.Samples)
+            .SingleOrDefaultAsync(activity => activity.Id == activityId, cancellationToken);
+        if (entity is null)
+        {
+            if (transaction is not null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+            }
+
+            return false;
+        }
+
+        var upload = await context.Uploads.SingleOrDefaultAsync(value => value.Id == entity.UploadId, cancellationToken);
+        context.ActivitySamples.RemoveRange(entity.Samples);
+        context.TrainingActivities.Remove(entity);
+        if (upload is not null)
+        {
+            context.Uploads.Remove(upload);
+        }
+
+        await context.SaveChangesAsync(cancellationToken);
+        if (transaction is not null)
+        {
+            await transaction.CommitAsync(cancellationToken);
+        }
+
+        return true;
+    }
+
     private static CleanedActivity ToDomain(TrainingActivityEntity entity)
     {
         var samples = entity.Samples
@@ -117,5 +180,32 @@ public sealed class TrainingActivityRepository(RouteTimerDbContext context) : IT
             entity.AscentMetres);
 
         return new CleanedActivity(entity.Name, samples, TimeSpan.FromSeconds(entity.MovingDurationSeconds), quality, metadata);
+    }
+
+    private static TrainingActivitySummary ToSummary(TrainingActivityEntity entity)
+    {
+        var startedAt = entity.StartedAt ?? entity.CreatedAt;
+        var endedAt = entity.EndedAt ?? entity.CreatedAt;
+        var metadata = new TrainingActivityMetadata(
+            string.IsNullOrWhiteSpace(entity.SourceFileName) ? entity.Name : entity.SourceFileName,
+            startedAt,
+            endedAt,
+            entity.DeviceManufacturer,
+            entity.DeviceProduct,
+            entity.DistanceMetres,
+            entity.AscentMetres);
+
+        return new TrainingActivitySummary(
+            entity.Id,
+            entity.UploadId,
+            metadata,
+            TimeSpan.FromSeconds(entity.MovingDurationSeconds),
+            Enum.Parse<ActivityEligibility>(entity.Eligibility),
+            entity.PositionCoverage,
+            entity.ElevationCoverage,
+            entity.SpeedCoverage,
+            entity.PowerCoverage,
+            entity.ReasonCodes,
+            entity.CreatedAt);
     }
 }

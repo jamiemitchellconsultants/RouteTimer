@@ -293,6 +293,14 @@ public sealed class BuildModelJobHandlerTests
         public Task<CleanedActivity?> GetAsync(Guid activityId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<IReadOnlyList<CleanedActivity>> GetAllAsync(CancellationToken cancellationToken) => Task.FromResult(Activities);
+
+        public Task<IReadOnlyList<TrainingActivitySummary>> GetSummariesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<TrainingActivityDetail?> GetDetailAsync(Guid activityId, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<TrainingActivityCounts> GetCountsAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<bool> DeleteAsync(Guid activityId, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private sealed class FakeTrainingGeometryEnricher : ITrainingGeometryEnricher

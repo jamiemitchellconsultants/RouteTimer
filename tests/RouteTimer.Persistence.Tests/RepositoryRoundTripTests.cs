@@ -171,6 +171,164 @@ public sealed class RepositoryRoundTripTests
         Assert.Equal(120, storedActivity.AscentMetres);
     }
 
+    // Break caught: summary/detail/count projections load sample payloads indirectly or drop quality metadata needed by API callers.
+    [Fact]
+    public async Task Training_activity_projections_return_newest_first_detail_metadata_and_counts()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new TrainingActivityRepository(context);
+        var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var older = new TrainingActivityEntity
+        {
+            Id = Guid.NewGuid(),
+            UploadId = Guid.NewGuid(),
+            Name = "Older Ride",
+            SourceFileName = "older.fit",
+            StartedAt = start,
+            EndedAt = start.AddMinutes(20),
+            DeviceManufacturer = "Garmin",
+            DeviceProduct = "Edge",
+            DistanceMetres = 10_000,
+            AscentMetres = 120,
+            MovingDurationSeconds = 1_200,
+            Eligibility = ActivityEligibility.Eligible.ToString(),
+            PositionCoverage = 1,
+            ElevationCoverage = .95,
+            SpeedCoverage = .9,
+            PowerCoverage = .85,
+            ExclusionCounts = new Dictionary<string, int>(),
+            ReasonCodes = [],
+            CreatedAt = start.AddHours(1)
+        };
+        var newerId = Guid.NewGuid();
+        var newer = new TrainingActivityEntity
+        {
+            Id = newerId,
+            UploadId = Guid.NewGuid(),
+            Name = "Newer Ride",
+            SourceFileName = "newer.fit",
+            StartedAt = start.AddDays(1),
+            EndedAt = start.AddDays(1).AddMinutes(30),
+            DeviceManufacturer = "Wahoo",
+            DeviceProduct = "Bolt",
+            DistanceMetres = 15_000,
+            AscentMetres = 250,
+            MovingDurationSeconds = 1_800,
+            Eligibility = ActivityEligibility.Ineligible.ToString(),
+            PositionCoverage = .75,
+            ElevationCoverage = .65,
+            SpeedCoverage = .55,
+            PowerCoverage = .45,
+            ExclusionCounts = new Dictionary<string, int> { ["gap"] = 2, ["pause"] = 1 },
+            ReasonCodes = ["position-gap", "low-power-coverage"],
+            CreatedAt = start.AddHours(2),
+            Samples =
+            [
+                new ActivitySampleEntity
+                {
+                    ActivityId = newerId,
+                    Sequence = 0,
+                    Timestamp = start.AddDays(1),
+                    MovingElapsedSeconds = 0,
+                    Latitude = 51,
+                    Longitude = -2,
+                    ElevationMetres = 100,
+                    SpeedMetresPerSecond = 5
+                }
+            ]
+        };
+        context.TrainingActivities.AddRange(older, newer);
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+
+        var summaries = await repository.GetSummariesAsync(CancellationToken.None);
+        var detail = await repository.GetDetailAsync(newer.Id, CancellationToken.None);
+        var counts = await repository.GetCountsAsync(CancellationToken.None);
+
+        Assert.Collection(summaries,
+            summary => Assert.Equal("newer.fit", summary.Metadata.SourceFileName),
+            summary => Assert.Equal("older.fit", summary.Metadata.SourceFileName));
+        Assert.NotNull(detail);
+        Assert.Equal(newer.Id, detail.Summary.Id);
+        Assert.Equal(newer.UploadId, detail.Summary.UploadId);
+        Assert.Equal("newer.fit", detail.Summary.Metadata.SourceFileName);
+        Assert.Equal("Wahoo", detail.Summary.Metadata.DeviceManufacturer);
+        Assert.Equal("Bolt", detail.Summary.Metadata.DeviceProduct);
+        Assert.Equal(15_000, detail.Summary.Metadata.DistanceMetres);
+        Assert.Equal(250, detail.Summary.Metadata.AscentMetres);
+        Assert.Equal(TimeSpan.FromMinutes(30), detail.Summary.MovingDuration);
+        Assert.Equal(ActivityEligibility.Ineligible, detail.Summary.Eligibility);
+        Assert.Equal(.75, detail.Summary.PositionCoverage);
+        Assert.Equal(.65, detail.Summary.ElevationCoverage);
+        Assert.Equal(.55, detail.Summary.SpeedCoverage);
+        Assert.Equal(.45, detail.Summary.PowerCoverage);
+        Assert.Equal(new[] { "position-gap", "low-power-coverage" }, detail.Summary.ReasonCodes);
+        Assert.Equal(new Dictionary<string, int> { ["gap"] = 2, ["pause"] = 1 }, detail.ExclusionCounts);
+        Assert.Equal(new TrainingActivityCounts(2, 1), counts);
+        Assert.Empty(context.ChangeTracker.Entries<ActivitySampleEntity>());
+    }
+
+    // Break caught: deleting an activity leaves retained FIT bytes or activity samples behind, corrupting future rebuild evidence.
+    [Fact]
+    public async Task Delete_training_activity_removes_activity_samples_and_source_upload()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new TrainingActivityRepository(context);
+        var uploadId = Guid.NewGuid();
+        var activityId = Guid.NewGuid();
+        context.Uploads.Add(new StoredUploadEntity
+        {
+            Id = uploadId,
+            Kind = "fit",
+            FileName = "delete-me.fit",
+            Content = [1, 2, 3],
+            Sha256 = Enumerable.Repeat((byte)8, 32).ToArray(),
+            CreatedAt = DateTimeOffset.UtcNow
+        });
+        context.TrainingActivities.Add(new TrainingActivityEntity
+        {
+            Id = activityId,
+            UploadId = uploadId,
+            Name = "Delete Me",
+            SourceFileName = "delete-me.fit",
+            MovingDurationSeconds = 10,
+            Eligibility = ActivityEligibility.Eligible.ToString(),
+            PositionCoverage = 1,
+            ElevationCoverage = 1,
+            SpeedCoverage = 1,
+            PowerCoverage = 1,
+            ExclusionCounts = new Dictionary<string, int>(),
+            ReasonCodes = [],
+            CreatedAt = DateTimeOffset.UtcNow,
+            Samples =
+            [
+                new ActivitySampleEntity
+                {
+                    ActivityId = activityId,
+                    Sequence = 0,
+                    Timestamp = DateTimeOffset.UtcNow,
+                    MovingElapsedSeconds = 0,
+                    Latitude = 51,
+                    Longitude = -2,
+                    ElevationMetres = 100,
+                    SpeedMetresPerSecond = 5
+                }
+            ]
+        });
+        await context.SaveChangesAsync();
+
+        var deleted = await repository.DeleteAsync(activityId, CancellationToken.None);
+        var missing = await repository.DeleteAsync(Guid.NewGuid(), CancellationToken.None);
+
+        Assert.True(deleted);
+        Assert.False(missing);
+        Assert.Empty(await context.TrainingActivities.ToListAsync());
+        Assert.Empty(await context.ActivitySamples.ToListAsync());
+        Assert.Empty(await context.Uploads.ToListAsync());
+    }
+
     [Fact]
     public async Task Get_job_round_trips_the_final_lifecycle_shape()
     {

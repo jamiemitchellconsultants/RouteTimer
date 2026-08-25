@@ -36,6 +36,7 @@ if (builder.Configuration.GetValue("Database:ApplyMigrations", false))
     builder.Services.AddHostedService<DatabaseMigrationService>();
 }
 builder.Services.AddScoped<IStoredUploadRepository, StoredUploadRepository>();
+builder.Services.AddScoped<ITrainingUploadRepository, TrainingUploadRepository>();
 builder.Services.AddScoped<ITrainingActivityRepository, TrainingActivityRepository>();
 builder.Services.AddScoped<IRiderModelRepository, RiderModelRepository>();
 builder.Services.AddScoped<IJobQueue, PostgresJobQueue>();
@@ -44,6 +45,8 @@ builder.Services.AddScoped<IProfileRepository, ProfileRepository>();
 builder.Services.AddScoped<IPredictionRepository, PredictionRepository>();
 builder.Services.AddScoped<IJobRepository, JobRepository>();
 builder.Services.AddScoped<TrainingUploadService>();
+builder.Services.AddScoped<TrainingActivityQueryService>();
+builder.Services.AddScoped<TrainingActivityDeletionService>();
 builder.Services.AddScoped<ProfileService>();
 builder.Services.AddScoped<PredictionSubmissionService>();
 builder.Services.AddScoped<PredictionQueryService>();
@@ -127,13 +130,21 @@ app.MapPost("/api/training/uploads", async (HttpRequest request, TrainingUploadS
         var batch = new List<TrainingUpload>(form.Files.Count);
         foreach (var file in form.Files)
         {
-            await using var content = new MemoryStream();
-            await file.CopyToAsync(content, cancellationToken);
-            batch.Add(new TrainingUpload(file.FileName, content.ToArray()));
+            batch.Add(new TrainingUpload(file.FileName, file.OpenReadStream()));
         }
 
-        var results = await uploads.AcceptAsync(batch, cancellationToken);
-        return Results.Ok(results.Select(result => new TrainingUploadResponse(result.FileName, result.Outcome.ToString().ToLowerInvariant(), result.ErrorCode)));
+        try
+        {
+            var results = await uploads.AcceptAsync(batch, cancellationToken);
+            return Results.Ok(results.Select(result => new TrainingUploadResponse(result.FileName, result.Outcome.ToString().ToLowerInvariant(), result.ErrorCode)));
+        }
+        finally
+        {
+            foreach (var upload in batch)
+            {
+                await upload.Content.DisposeAsync();
+            }
+        }
     })
     .RequireAuthorization();
 app.MapPost("/api/predictions", async (HttpRequest request, PredictionSubmissionService submissions, CancellationToken cancellationToken) =>
