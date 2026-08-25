@@ -45,3 +45,11 @@ def test_facade_loads_and_returns_tokens_without_writing_files(
     assert session.dump_tokens() == '{"di_token":"a","di_refresh_token":"b","di_client_id":"c"}'
     assert fake_garmin_factory.created[0].client.loaded_json is not None
     assert fake_garmin_factory.created[0].client.loaded_path is None
+
+
+def test_token_session_does_not_expose_the_garmin_client(
+    fake_garmin_factory: FakeGarminFactory,
+) -> None:
+    session = GarminFacade(fake_garmin_factory).from_tokens('{"di_token":"a"}')
+
+    assert not hasattr(session, "garmin")
