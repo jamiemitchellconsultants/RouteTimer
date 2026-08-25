@@ -7,6 +7,7 @@ using RouteTimer.Client.Api;
 using RouteTimer.Client.Jobs;
 using RouteTimer.Client.Pages;
 using RouteTimer.Client.Tests.Fakes;
+using RouteTimer.Contracts.Garmin;
 using RouteTimer.Contracts.Jobs;
 using RouteTimer.Contracts.Models;
 using RouteTimer.Contracts.Training;
@@ -23,6 +24,91 @@ public sealed class TrainingPageTests : BunitContext
         Services.AddSingleton<IRouteTimerApiClient>(api);
         Services.AddSingleton<TimeProvider>(time);
         Services.AddScoped<JobPoller>();
+    }
+
+    [Fact]
+    public void Training_shows_the_picker_only_after_garmin_connects_and_keeps_manual_upload_available()
+    {
+        api.OnGetTrainingActivitiesAsync = _ => Task.FromResult<IReadOnlyList<TrainingActivitySummaryResponse>>([]);
+        api.OnGetModelStatusAsync = _ => Task.FromResult(NotReadyModelStatus());
+        api.OnGetGarminConnectionAsync = _ => Task.FromResult(new GarminConnectionResponse("not-connected", null, null, null));
+        api.OnLoginGarminAsync = (_, _) => Task.FromResult(new GarminConnectionResponse("connected", "garmin-user-42", "Sunday Rider", null));
+        api.OnGetGarminActivitiesAsync = (_, _) => Task.FromResult(new GarminActivityPageResponse(
+        [
+            GarminActivity("garmin-ride", "Garmin ride")
+        ], null));
+
+        var cut = Render<Training>();
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.NotNull(cut.Find("[data-testid=garmin-email]"));
+            Assert.Empty(cut.FindAll("[data-testid=garmin-activity-row]"));
+            Assert.NotNull(cut.Find("input[type=file]"));
+            Assert.NotNull(cut.Find("[data-testid=training-upload-empty]"));
+        });
+
+        cut.Find("[data-testid=garmin-email]").Change("rider@example.com");
+        cut.Find("[data-testid=garmin-password]").Change("password-secret");
+        cut.Find("[data-testid=garmin-login]").Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("Sunday Rider", cut.Find("[data-testid=garmin-connected-identity]").TextContent, StringComparison.Ordinal);
+            Assert.Contains("Garmin ride", cut.Find("[data-testid=garmin-activity-row]").TextContent, StringComparison.Ordinal);
+            Assert.NotNull(cut.Find("input[type=file]"));
+            Assert.DoesNotContain("password-secret", cut.Markup, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void Training_refreshes_activities_and_model_after_an_accepted_garmin_job_finishes()
+    {
+        var jobId = Guid.NewGuid();
+        var trainingRequests = 0;
+        var modelRequests = 0;
+        api.OnGetTrainingActivitiesAsync = _ =>
+        {
+            trainingRequests++;
+            return Task.FromResult<IReadOnlyList<TrainingActivitySummaryResponse>>(trainingRequests == 1
+                ? []
+                : [TrainingSummary(fileName: "garmin-import.fit")]);
+        };
+        api.OnGetModelStatusAsync = _ =>
+        {
+            modelRequests++;
+            return Task.FromResult(NotReadyModelStatus());
+        };
+        api.OnGetGarminConnectionAsync = _ => Task.FromResult(new GarminConnectionResponse("connected", "garmin-user-42", "Sunday Rider", null));
+        api.OnGetGarminActivitiesAsync = (_, _) => Task.FromResult(new GarminActivityPageResponse(
+        [
+            GarminActivity("garmin-ride", "Garmin ride")
+        ], null));
+        api.OnImportGarminActivitiesAsync = (_, _) => Task.FromResult(new GarminImportBatchResponse(
+        [
+            new GarminImportResultResponse("garmin-ride", "Garmin ride", "accepted", Guid.NewGuid(), jobId, null)
+        ]));
+        api.Jobs.Enqueue(Job(jobId, "Running", 40, "decoding-fit"));
+        api.Jobs.Enqueue(Job(jobId, "Succeeded", 100, "completed"));
+
+        var cut = Render<Training>();
+
+        cut.WaitForElement("[data-activity-id=garmin-ride] [data-testid=garmin-activity-select]").Change(true);
+        cut.Find("[data-testid=garmin-import-selected]").Click();
+        cut.WaitForAssertion(() => Assert.Single(api.RequestedJobs));
+
+        Assert.Equal(1, trainingRequests);
+        Assert.Equal(1, modelRequests);
+
+        time.Advance(TimeSpan.FromSeconds(2));
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Equal(2, trainingRequests);
+            Assert.Equal(2, modelRequests);
+            Assert.Contains("garmin-import.fit", cut.Find("[data-testid=training-activities-list]").TextContent, StringComparison.Ordinal);
+            Assert.NotNull(cut.Find("input[type=file]"));
+        });
     }
 
     [Fact]
@@ -359,6 +445,17 @@ public sealed class TrainingPageTests : BunitContext
         0.85,
         reasonCodes ?? [],
         createdAt ?? DateTimeOffset.Parse("2026-08-25T08:00:00Z", CultureInfo.InvariantCulture));
+
+    private static GarminActivitySummaryResponse GarminActivity(string id, string name) => new(
+        id,
+        name,
+        DateTimeOffset.Parse("2026-08-25T08:00:00Z", CultureInfo.InvariantCulture),
+        "road-cycling",
+        42123,
+        5021,
+        812,
+        243,
+        false);
 
     private static ModelStatusResponse NotReadyModelStatus() => new(
         false,

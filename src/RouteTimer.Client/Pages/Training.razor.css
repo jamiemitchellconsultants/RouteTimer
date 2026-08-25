@@ -20,6 +20,10 @@
     margin: 0;
 }
 
+.training-panel--garmin {
+    gap: 1.25rem;
+}
+
 .training-message {
     color: #465468;
 }

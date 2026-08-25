@@ -1,0 +1,58 @@
+.garmin-connection,
+.garmin-connection form,
+.garmin-connection__status,
+.garmin-connection__field,
+.garmin-connection__confirmation {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.garmin-connection h2,
+.garmin-connection p {
+    margin: 0;
+}
+
+.garmin-connection input {
+    width: min(100%, 28rem);
+    padding: 0.65rem 0.8rem;
+    border: 1px solid #aebdce;
+    border-radius: 0.65rem;
+}
+
+.garmin-connection__actions,
+.garmin-connected-identity {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.garmin-connection__button {
+    width: fit-content;
+    padding: 0.65rem 1rem;
+    border: none;
+    border-radius: 999px;
+    background: #0b5cad;
+    color: #fff;
+    font-weight: 700;
+}
+
+.garmin-connection__button:disabled {
+    background: #95abc4;
+}
+
+.garmin-connection__button--secondary {
+    background: #dbe7f4;
+    color: #10243f;
+}
+
+.garmin-connection__button--danger {
+    background: #b42318;
+}
+
+.garmin-connection__confirmation {
+    padding: 0.85rem;
+    border: 1px solid #f3c7c3;
+    border-radius: 0.85rem;
+    background: #fff5f4;
+}
