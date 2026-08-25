@@ -16,7 +16,11 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
     public Func<IReadOnlyList<ClientFileUpload>, CancellationToken, Task<TrainingUploadBatchResponse>>? OnUploadTrainingActivitiesAsync { get; set; }
     public Func<Guid, CancellationToken, Task<bool>>? OnDeleteTrainingActivityAsync { get; set; }
     public Func<CancellationToken, Task<ModelStatusResponse>>? OnGetModelStatusAsync { get; set; }
+    public Func<CancellationToken, Task<ModelRebuildResponse>>? OnRebuildModelAsync { get; set; }
     public Func<CancellationToken, Task<IReadOnlyList<PredictionSummaryResponse>>>? OnGetPredictionsAsync { get; set; }
+    public Func<ClientFileUpload, CancellationToken, Task<PredictionSubmissionResponse>>? OnSubmitPredictionAsync { get; set; }
+    public Func<Guid, CancellationToken, Task<PredictionDetailResponse?>>? OnGetPredictionAsync { get; set; }
+    public Func<Guid, CancellationToken, Task<bool>>? OnDeletePredictionAsync { get; set; }
 
     public Queue<JobResponse?> Jobs { get; } = new();
 
@@ -28,7 +32,11 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
     public List<(IReadOnlyList<ClientFileUpload> Files, CancellationToken CancellationToken)> UploadedTrainingActivities { get; } = [];
     public List<(Guid ActivityId, CancellationToken CancellationToken)> DeletedTrainingActivities { get; } = [];
     public List<CancellationToken> RequestedModelStatuses { get; } = [];
+    public List<CancellationToken> RequestedModelRebuilds { get; } = [];
     public List<CancellationToken> RequestedPredictions { get; } = [];
+    public List<(ClientFileUpload File, CancellationToken CancellationToken)> SubmittedPredictions { get; } = [];
+    public List<(Guid PredictionId, CancellationToken CancellationToken)> RequestedPredictionDetails { get; } = [];
+    public List<(Guid PredictionId, CancellationToken CancellationToken)> DeletedPredictions { get; } = [];
 
     public Task<ProfileResponse?> GetProfileAsync(CancellationToken ct)
     {
@@ -86,6 +94,14 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
             : throw new NotSupportedException();
     }
 
+    public Task<ModelRebuildResponse> RebuildModelAsync(CancellationToken ct)
+    {
+        RequestedModelRebuilds.Add(ct);
+        return OnRebuildModelAsync is not null
+            ? OnRebuildModelAsync(ct)
+            : throw new NotSupportedException();
+    }
+
     public Task<IReadOnlyList<PredictionSummaryResponse>> GetPredictionsAsync(CancellationToken ct)
     {
         RequestedPredictions.Add(ct);
@@ -94,9 +110,29 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
             : throw new NotSupportedException();
     }
 
-    public Task<PredictionSubmissionResponse> SubmitPredictionAsync(ClientFileUpload file, CancellationToken ct) => throw new NotSupportedException();
-    public Task<PredictionDetailResponse?> GetPredictionAsync(Guid id, CancellationToken ct) => throw new NotSupportedException();
-    public Task<bool> DeletePredictionAsync(Guid id, CancellationToken ct) => throw new NotSupportedException();
+    public Task<PredictionSubmissionResponse> SubmitPredictionAsync(ClientFileUpload file, CancellationToken ct)
+    {
+        SubmittedPredictions.Add((file, ct));
+        return OnSubmitPredictionAsync is not null
+            ? OnSubmitPredictionAsync(file, ct)
+            : throw new NotSupportedException();
+    }
+
+    public Task<PredictionDetailResponse?> GetPredictionAsync(Guid id, CancellationToken ct)
+    {
+        RequestedPredictionDetails.Add((id, ct));
+        return OnGetPredictionAsync is not null
+            ? OnGetPredictionAsync(id, ct)
+            : throw new NotSupportedException();
+    }
+
+    public Task<bool> DeletePredictionAsync(Guid id, CancellationToken ct)
+    {
+        DeletedPredictions.Add((id, ct));
+        return OnDeletePredictionAsync is not null
+            ? OnDeletePredictionAsync(id, ct)
+            : throw new NotSupportedException();
+    }
 
     public Task<JobResponse?> GetJobAsync(Guid id, CancellationToken ct)
     {

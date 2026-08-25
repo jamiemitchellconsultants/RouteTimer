@@ -20,6 +20,10 @@ public static class RouteTimerFormat
         ? "—"
         : $"{metresPerSecond.Value.ToString("0.0", CultureInfo.CurrentCulture)} m/s";
 
+    public static string SpeedKilometresPerHour(double? metresPerSecond) => metresPerSecond is null
+        ? "—"
+        : $"{(metresPerSecond.Value * 3.6d).ToString("0.0", CultureInfo.CurrentCulture)} km/h";
+
     public static string Power(double? watts) => watts is null
         ? "—"
         : $"{watts.Value.ToString("0", CultureInfo.CurrentCulture)} W";
@@ -31,6 +35,17 @@ public static class RouteTimerFormat
     public static string Percentage(double? value) => value is null
         ? "—"
         : $"{(value.Value * 100d).ToString("0.0", CultureInfo.CurrentCulture)}%";
+
+    public static string DetailedDuration(double? seconds)
+    {
+        if (seconds is null)
+        {
+            return "—";
+        }
+
+        var duration = TimeSpan.FromSeconds(Math.Round(seconds.Value, MidpointRounding.AwayFromZero));
+        return $"{(int)duration.TotalHours}:{duration.Minutes:00}:{duration.Seconds:00}";
+    }
 
     public static string Timestamp(DateTimeOffset? value) => value is null
         ? "—"
