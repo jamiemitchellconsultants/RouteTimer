@@ -30,7 +30,12 @@ public sealed class AuthorizationTests
     }
 
     [Theory]
-    [InlineData("POST", "/api/training/uploads")]
+    [InlineData("GET", "/api/training-activities")]
+    [InlineData("POST", "/api/training-activities")]
+    [InlineData("GET", "/api/training-activities/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")]
+    [InlineData("DELETE", "/api/training-activities/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")]
+    [InlineData("GET", "/api/models/current")]
+    [InlineData("POST", "/api/models/rebuild")]
     [InlineData("POST", "/api/predictions")]
     [InlineData("GET", "/api/predictions")]
     [InlineData("GET", "/api/predictions/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")]
@@ -48,5 +53,27 @@ public sealed class AuthorizationTests
 
         using var response = await client.SendAsync(request);
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("GET", "/api/training-activities")]
+    [InlineData("POST", "/api/training-activities")]
+    [InlineData("GET", "/api/models/current")]
+    [InlineData("POST", "/api/models/rebuild")]
+    public async Task Training_and_model_resources_forbid_authenticated_non_riders(string method, string path)
+    {
+        await using var app = new RouteTimerApiFactory().WithRiderAuthentication();
+        using var client = app.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Test-Role", "non-rider");
+        using var request = new HttpRequestMessage(new HttpMethod(method), path);
+
+        if (method == "POST")
+        {
+            request.Content = new MultipartFormDataContent();
+        }
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 }

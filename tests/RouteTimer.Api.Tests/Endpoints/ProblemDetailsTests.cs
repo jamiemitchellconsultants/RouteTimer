@@ -39,19 +39,14 @@ public sealed class ProblemDetailsTests
     }
 
     [Fact]
-    public async Task Legacy_training_upload_rejects_malformed_multipart_as_problem_details()
+    public async Task Legacy_training_upload_route_is_removed()
     {
         await using var app = new RouteTimerApiFactory().WithRiderAuthentication();
         using var client = app.CreateClient();
-        using var malformed = new ByteArrayContent(Encoding.UTF8.GetBytes("not a multipart body"));
-        malformed.Headers.ContentType = System.Net.Http.Headers.MediaTypeHeaderValue.Parse("multipart/form-data; boundary=expected");
 
-        using var response = await client.PostAsync("/api/training/uploads", malformed);
-        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        using var response = await client.PostAsync("/api/training/uploads", new MultipartFormDataContent());
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal("multipart-required", body.RootElement.GetProperty("code").GetString());
-        Assert.True(body.RootElement.TryGetProperty("detail", out _));
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     [Fact]

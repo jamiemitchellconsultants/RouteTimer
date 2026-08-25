@@ -11,8 +11,38 @@ public static class TrainingEndpoints
 {
     public static IEndpointRouteBuilder MapTrainingEndpoints(this IEndpointRouteBuilder routes)
     {
-        routes.MapPost("/api/training/uploads", UploadTrainingFilesAsync);
+        routes.MapGet("/api/training-activities", GetTrainingActivitiesAsync);
+        routes.MapPost("/api/training-activities", UploadTrainingFilesAsync);
+        routes.MapGet("/api/training-activities/{id:guid}", GetTrainingActivityAsync);
+        routes.MapDelete("/api/training-activities/{id:guid}", DeleteTrainingActivityAsync);
         return routes;
+    }
+
+    private static async Task<IResult> GetTrainingActivitiesAsync(
+        TrainingActivityQueryService activities,
+        CancellationToken cancellationToken)
+    {
+        var summaries = await activities.GetSummariesAsync(cancellationToken);
+        return TypedResults.Ok<IReadOnlyList<TrainingActivitySummaryResponse>>(summaries.Select(ToSummaryResponse).ToList());
+    }
+
+    private static async Task<IResult> GetTrainingActivityAsync(
+        Guid id,
+        TrainingActivityQueryService activities,
+        CancellationToken cancellationToken) =>
+        (await activities.GetAsync(id, cancellationToken)) is { } activity
+            ? TypedResults.Ok(new TrainingActivityDetailResponse(ToSummaryResponse(activity.Summary), activity.ExclusionCounts))
+            : ApiProblems.NotFound(ErrorCodes.ActivityNotFound, "The training activity was not found.");
+
+    private static async Task<IResult> DeleteTrainingActivityAsync(
+        Guid id,
+        TrainingActivityDeletionService activities,
+        CancellationToken cancellationToken)
+    {
+        var deleted = await activities.DeleteAsync(id, cancellationToken);
+        return deleted.Deleted
+            ? TypedResults.NoContent()
+            : ApiProblems.NotFound(ErrorCodes.ActivityNotFound, "The training activity was not found.");
     }
 
     private static async Task<IResult> UploadTrainingFilesAsync(
@@ -44,7 +74,7 @@ public static class TrainingEndpoints
         try
         {
             var results = await uploads.AcceptAsync(batch, cancellationToken);
-            return TypedResults.Ok(new TrainingUploadBatchResponse(
+            return TypedResults.Accepted("/api/training-activities", new TrainingUploadBatchResponse(
                 results.Select(result => new TrainingUploadFileResponse(
                     result.FileName,
                     result.Outcome.ToString().ToLowerInvariant(),
@@ -91,4 +121,23 @@ public static class TrainingEndpoints
             throw;
         }
     }
+
+    private static TrainingActivitySummaryResponse ToSummaryResponse(RouteTimer.Services.Persistence.TrainingActivitySummary summary) => new(
+        summary.Id,
+        summary.UploadId,
+        summary.Metadata.SourceFileName,
+        summary.Metadata.StartedAt,
+        summary.Metadata.EndedAt,
+        summary.Metadata.DeviceManufacturer,
+        summary.Metadata.DeviceProduct,
+        summary.Metadata.DistanceMetres,
+        summary.Metadata.AscentMetres,
+        summary.MovingDuration.TotalSeconds,
+        summary.Eligibility.ToString(),
+        summary.PositionCoverage,
+        summary.ElevationCoverage,
+        summary.SpeedCoverage,
+        summary.PowerCoverage,
+        summary.ReasonCodes,
+        summary.CreatedAt);
 }
