@@ -12,7 +12,7 @@ using RouteTimer.Persistence;
 namespace RouteTimer.Persistence.Migrations
 {
     [DbContext(typeof(RouteTimerDbContext))]
-    [Migration("20260825135034_AddLocalCredential")]
+    [Migration("20260825140036_AddLocalCredential")]
     partial class AddLocalCredential
     {
         /// <inheritdoc />
@@ -154,10 +154,7 @@ namespace RouteTimer.Persistence.Migrations
             modelBuilder.Entity("RouteTimer.Persistence.Entities.LocalCredentialEntity", b =>
                 {
                     b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -172,7 +169,10 @@ namespace RouteTimer.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("local_credential", (string)null);
+                    b.ToTable("local_credential", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_local_credential_singleton", "\"Id\" = 1");
+                        });
                 });
 
             modelBuilder.Entity("RouteTimer.Persistence.Entities.PowerBandEntity", b =>

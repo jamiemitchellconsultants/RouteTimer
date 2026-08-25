@@ -128,14 +128,48 @@ public sealed class PostgresMigrationTests
         await context.Database.MigrateAsync();
 
         await using var command = context.Database.GetDbConnection().CreateCommand();
-        command.CommandText = "SELECT array_agg(to_regclass(table_name)::text ORDER BY table_name) FROM (VALUES ('predictions'), ('rider_profile'), ('stored_uploads'), ('training_activities'), ('activity_samples'), ('rider_models'), ('power_bands'), ('rider_model_descent_limits')) AS expected_tables(table_name)";
+        command.CommandText = "SELECT array_agg(to_regclass(table_name)::text ORDER BY table_name) FROM (VALUES ('predictions'), ('rider_profile'), ('stored_uploads'), ('training_activities'), ('activity_samples'), ('rider_models'), ('power_bands'), ('rider_model_descent_limits'), ('local_credential')) AS expected_tables(table_name)";
         await context.Database.OpenConnectionAsync();
         var table = await command.ExecuteScalarAsync();
 
-        Assert.Equal(new[] { "activity_samples", "power_bands", "predictions", "rider_model_descent_limits", "rider_models", "rider_profile", "stored_uploads", "training_activities" }, (string[]?)table);
+        Assert.Equal(new[] { "activity_samples", "local_credential", "power_bands", "predictions", "rider_model_descent_limits", "rider_models", "rider_profile", "stored_uploads", "training_activities" }, (string[]?)table);
 
         var applied = await context.Database.GetAppliedMigrationsAsync();
         Assert.Contains("20260824200000_AddSequentialSimulationModel", applied);
+    }
+
+    // Break caught: EF InMemory ignores HasMaxLength/IsRequired and the singleton check constraint, so nothing
+    // exercises the schema-level defence against a second local_credential row without a real Postgres run.
+    [Fact]
+    public async Task Local_credential_repository_round_trips_and_rejects_a_second_row_through_PostgreSQL()
+    {
+        await using var database = new PostgreSqlBuilder("postgres:16-alpine").Build();
+        await database.StartAsync();
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseNpgsql(database.GetConnectionString()).Options;
+        await using (var migrationContext = new RouteTimerDbContext(options))
+        {
+            await migrationContext.Database.MigrateAsync();
+        }
+
+        await using (var saveContext = new RouteTimerDbContext(options))
+        {
+            var repository = new LocalCredentialRepository(saveContext);
+            await repository.SetAsync("first-hash", CancellationToken.None);
+            await repository.SetAsync("second-hash", CancellationToken.None);
+        }
+
+        await using (var loadContext = new RouteTimerDbContext(options))
+        {
+            var repository = new LocalCredentialRepository(loadContext);
+            Assert.Equal("second-hash", await repository.GetAsync(CancellationToken.None));
+            Assert.Equal(1, await loadContext.LocalCredentials.CountAsync());
+        }
+
+        await using var insertContext = new RouteTimerDbContext(options);
+        await Assert.ThrowsAnyAsync<Exception>(() => insertContext.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO local_credential ("Id", "PasswordHash", "CreatedAt", "UpdatedAt")
+            VALUES (2, 'third-hash', NOW(), NOW());
+            """));
     }
 
     // Break caught: upgrading a pre-step-8 database loses model data, omits fallback cells, or leaves old samples without deterministic curvature.
