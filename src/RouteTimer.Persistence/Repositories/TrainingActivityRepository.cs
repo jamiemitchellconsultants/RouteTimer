@@ -98,6 +98,17 @@ public sealed class TrainingActivityRepository(RouteTimerDbContext context) : IT
             entity.ExclusionCounts,
             entity.ReasonCodes);
 
-        return new CleanedActivity(entity.Name, samples, TimeSpan.FromSeconds(entity.MovingDurationSeconds), quality);
+        var startedAt = samples.FirstOrDefault()?.Timestamp ?? entity.CreatedAt;
+        var endedAt = samples.LastOrDefault()?.Timestamp ?? entity.CreatedAt;
+        var metadata = new TrainingActivityMetadata(
+            entity.Name,
+            startedAt,
+            endedAt,
+            null,
+            null,
+            null,
+            null);
+
+        return new CleanedActivity(entity.Name, samples, TimeSpan.FromSeconds(entity.MovingDurationSeconds), quality, metadata);
     }
 }

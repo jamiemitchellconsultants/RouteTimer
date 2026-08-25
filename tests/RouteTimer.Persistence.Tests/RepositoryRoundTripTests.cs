@@ -132,7 +132,7 @@ public sealed class RepositoryRoundTripTests
             PowerCoverage: 0.66,
             ExclusionCounts: new Dictionary<string, int> { ["gap"] = 1, ["pause"] = 2 },
             ReasonCodes: ["low-power-coverage", "elevation-gap"]);
-        var activity = new CleanedActivity("Morning Ride", samples, TimeSpan.FromSeconds(10), quality);
+        var activity = new CleanedActivity("Morning Ride", samples, TimeSpan.FromSeconds(10), quality, Metadata("morning-ride.fit", start, start.AddSeconds(10), "Garmin", "Edge", 10_000, 120));
 
         var activityId = await repository.SaveAsync(uploadId, activity, CancellationToken.None);
         var loaded = await repository.GetAsync(activityId, CancellationToken.None);
@@ -150,6 +150,13 @@ public sealed class RepositoryRoundTripTests
         Assert.Equal(0.66, loaded.Quality.PowerCoverage);
         Assert.Equal(new Dictionary<string, int> { ["gap"] = 1, ["pause"] = 2 }, loaded.Quality.ExclusionCounts);
         Assert.Equal(new[] { "low-power-coverage", "elevation-gap" }, loaded.Quality.ReasonCodes);
+        Assert.Equal("Morning Ride", loaded.Metadata.SourceFileName);
+        Assert.Equal(start, loaded.Metadata.StartedAt);
+        Assert.Equal(start.AddSeconds(10), loaded.Metadata.EndedAt);
+        Assert.Null(loaded.Metadata.DeviceManufacturer);
+        Assert.Null(loaded.Metadata.DeviceProduct);
+        Assert.Null(loaded.Metadata.DistanceMetres);
+        Assert.Null(loaded.Metadata.AscentMetres);
         Assert.Null(missing);
 
         var storedActivity = await context.TrainingActivities.SingleAsync();
@@ -179,7 +186,8 @@ public sealed class RepositoryRoundTripTests
             "Curving Descent",
             [sample],
             TimeSpan.FromSeconds(1),
-            new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []));
+            new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []),
+            Metadata("curving-descent.fit", start, start));
 
         var id = await repository.SaveAsync(Guid.NewGuid(), activity, CancellationToken.None);
         var loaded = await repository.GetAsync(id, CancellationToken.None);
@@ -205,8 +213,8 @@ public sealed class RepositoryRoundTripTests
             140,
             85,
             true)).ToArray();
-        var parsed = new ParsedFitActivity("Raw elevations", ActivitySport.Cycling, start, raw, TimeSpan.FromSeconds(30), 150);
-        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed);
+        var parsed = new ParsedFitActivity("Raw elevations", ActivitySport.Cycling, start, start.AddSeconds(30), "Garmin", "Edge", raw, TimeSpan.FromSeconds(30), 150, 40);
+        var cleaned = new TrainingCleaner(RouteProcessingOptions.Default).Clean(parsed, "raw-elevations.fit");
 
         var id = await repository.SaveAsync(Guid.NewGuid(), cleaned, CancellationToken.None);
         var loaded = await repository.GetAsync(id, CancellationToken.None);
@@ -225,9 +233,11 @@ public sealed class RepositoryRoundTripTests
         var eligibleSamples = new[] { new CleanRideSample(start, TimeSpan.Zero, new GeoPoint(51.1, -2.1, 100), 5.0, 180, 140, 85, false, 0.5) };
         var ineligibleSamples = new[] { new CleanRideSample(start, TimeSpan.Zero, new GeoPoint(51.1, -2.1, 100), 5.0, null, null, null, false, 0.5) };
         var eligible = new CleanedActivity("Eligible Ride", eligibleSamples, TimeSpan.FromMinutes(20),
-            new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []));
+            new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []),
+            Metadata("eligible-ride.fit", start, start));
         var ineligible = new CleanedActivity("Ineligible Ride", ineligibleSamples, TimeSpan.FromMinutes(5),
-            new ActivityQuality(ActivityEligibility.Ineligible, 0.1, 0.1, 0.1, 0, new Dictionary<string, int> { ["gap"] = 3 }, ["low-coverage"]));
+            new ActivityQuality(ActivityEligibility.Ineligible, 0.1, 0.1, 0.1, 0, new Dictionary<string, int> { ["gap"] = 3 }, ["low-coverage"]),
+            Metadata("ineligible-ride.fit", start, start));
 
         await repository.SaveAsync(Guid.NewGuid(), eligible, CancellationToken.None);
         await repository.SaveAsync(Guid.NewGuid(), ineligible, CancellationToken.None);
@@ -473,4 +483,21 @@ public sealed class RepositoryRoundTripTests
         cell.ActivityCount = activityCount;
         cell.Confidence = confidence;
     }
+
+    private static TrainingActivityMetadata Metadata(
+        string sourceFileName,
+        DateTimeOffset startedAt,
+        DateTimeOffset endedAt,
+        string? deviceManufacturer = null,
+        string? deviceProduct = null,
+        double? distanceMetres = null,
+        double? ascentMetres = null) =>
+        new(
+            sourceFileName,
+            startedAt,
+            endedAt,
+            deviceManufacturer,
+            deviceProduct,
+            distanceMetres,
+            ascentMetres);
 }

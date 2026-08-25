@@ -39,7 +39,7 @@ public sealed class ParseTrainingJobHandler(
 
         using var content = new MemoryStream(upload.Content);
         var parsed = await parser.ParseAsync(content, cancellationToken);
-        var cleaned = cleaner.Clean(parsed);
+        var cleaned = cleaner.Clean(parsed, upload.FileName);
         await activities.SaveAsync(job.SubjectId, cleaned, cancellationToken);
         await jobs.EnqueueIfNotPendingAsync(JobType.BuildModel, ModelSubject.Id, cancellationToken);
     }

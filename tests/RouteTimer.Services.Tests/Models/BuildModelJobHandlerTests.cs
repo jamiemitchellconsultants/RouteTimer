@@ -225,7 +225,7 @@ public sealed class BuildModelJobHandlerTests
     {
         var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
         var samples = new[] { new CleanRideSample(start, TimeSpan.Zero, new GeoPoint(51, -2, 100), 7, 200, null, null, false, 0) };
-        return new CleanedActivity(name, samples, TimeSpan.FromMinutes(20), new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []));
+        return new CleanedActivity(name, samples, TimeSpan.FromMinutes(20), new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []), ActivityFixtures.Metadata($"{name}.fit", start, start));
     }
 
     private static CleanedActivity IneligibleActivity() =>
@@ -242,7 +242,7 @@ public sealed class BuildModelJobHandlerTests
         var quality = eligibility == ActivityEligibility.Eligible
             ? new ActivityQuality(eligibility, 1, 1, 1, 1, new Dictionary<string, int>(), [])
             : new ActivityQuality(eligibility, .1, .1, .1, 0, new Dictionary<string, int> { ["gap"] = 1 }, ["too-short"]);
-        return new CleanedActivity(name, samples, TimeSpan.FromMinutes(20), quality);
+        return new CleanedActivity(name, samples, TimeSpan.FromMinutes(20), quality, ActivityFixtures.Metadata($"{name}.fit", start, start.AddMinutes(20)));
     }
 
     private static DescentLimitModel LearnedDescentModel() => new(

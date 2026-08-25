@@ -3,6 +3,7 @@ using RouteTimer.Domain.Physics;
 using RouteTimer.Domain.Profile;
 using RouteTimer.Domain.Routes;
 using RouteTimer.Services.Physics;
+using RouteTimer.Services.Tests.Activities;
 
 namespace RouteTimer.Services.Tests.Physics;
 
@@ -262,7 +263,8 @@ internal static class PhysicsFixtures
             name,
             samples,
             TimeSpan.FromSeconds(intervalCount * 10),
-            new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []));
+            new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []),
+            ActivityFixtures.Metadata($"{name}.fit", Epoch.AddDays(activityIndex), samples[^1].Timestamp));
     }
 
     private static IntervalValues SyntheticInterval(

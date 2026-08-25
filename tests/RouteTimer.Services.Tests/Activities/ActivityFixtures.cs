@@ -10,6 +10,23 @@ internal static class ActivityFixtures
 
     public static ParsedFitActivity WithPowerCoverage(double powerCoverage) => Build(powerCoverage, includePauseAndGap: false);
 
+    public static TrainingActivityMetadata Metadata(
+        string sourceFileName,
+        DateTimeOffset startedAt,
+        DateTimeOffset? endedAt = null,
+        string? deviceManufacturer = null,
+        string? deviceProduct = null,
+        double? distanceMetres = null,
+        double? ascentMetres = null) =>
+        new(
+            sourceFileName,
+            startedAt,
+            endedAt ?? startedAt,
+            deviceManufacturer,
+            deviceProduct,
+            distanceMetres,
+            ascentMetres);
+
     public static ParsedFitActivity EligibleRideWithGap(TimeSpan gap)
     {
         var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
@@ -21,7 +38,7 @@ internal static class ActivityFixtures
             Sample(start, 10 + gap.TotalSeconds)
         };
 
-        return new ParsedFitActivity("Gap", ActivitySport.Cycling, start, samples, TimeSpan.FromMinutes(12), 5000);
+        return new ParsedFitActivity("Gap", ActivitySport.Cycling, start, start.AddSeconds(10 + gap.TotalSeconds), null, null, samples, TimeSpan.FromMinutes(12), 5000, null);
     }
 
     public static ParsedFitActivity RideWithFilteredGapBoundary()
@@ -35,7 +52,7 @@ internal static class ActivityFixtures
             Sample(start, 21)
         };
 
-        return new ParsedFitActivity("Filtered gap", ActivitySport.Cycling, start, samples, TimeSpan.FromMinutes(12), 5000);
+        return new ParsedFitActivity("Filtered gap", ActivitySport.Cycling, start, start.AddSeconds(21), null, null, samples, TimeSpan.FromMinutes(12), 5000, null);
     }
 
     public static CleanedActivity CleanedTwoSectionsWithSharpBoundary()
@@ -47,7 +64,7 @@ internal static class ActivityFixtures
             CleanSample(start, 5, 1, false),
             CleanSample(start, 20, 100, true)
         };
-        return new CleanedActivity("Sections", samples, TimeSpan.FromSeconds(5), EligibleQuality());
+        return new CleanedActivity("Sections", samples, TimeSpan.FromSeconds(5), EligibleQuality(), Metadata("sections.fit", start, start.AddSeconds(20)));
     }
 
     public static CleanedActivity CleanedFrom(IReadOnlyList<GeoPoint> points)
@@ -55,7 +72,7 @@ internal static class ActivityFixtures
         var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
         var samples = points.Select((point, index) => new CleanRideSample(
             start.AddSeconds(index * 5), TimeSpan.FromSeconds(index * 5), point, 7, 200, 140, 85, false)).ToList();
-        return new CleanedActivity("Geometry", samples, TimeSpan.FromSeconds((points.Count - 1) * 5), EligibleQuality());
+        return new CleanedActivity("Geometry", samples, TimeSpan.FromSeconds((points.Count - 1) * 5), EligibleQuality(), Metadata("geometry.fit", start, start.AddSeconds((points.Count - 1) * 5)));
     }
 
     public static IReadOnlyList<GeoPoint> NonlinearElevationPoints() =>
@@ -74,7 +91,7 @@ internal static class ActivityFixtures
         var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
         var samples = NonlinearElevationPoints().Select((point, index) => new RawRideSample(
             start.AddSeconds(index * 5), point, 7, 200, 140, 85, true)).ToArray();
-        return new ParsedFitActivity("Nonlinear elevation", ActivitySport.Cycling, start, samples, TimeSpan.FromSeconds(30), 150);
+        return new ParsedFitActivity("Nonlinear elevation", ActivitySport.Cycling, start, start.AddSeconds(30), null, null, samples, TimeSpan.FromSeconds(30), 150, null);
     }
 
     private static ParsedFitActivity Build(double powerCoverage, bool includePauseAndGap)
@@ -95,7 +112,7 @@ internal static class ActivityFixtures
                 !isPaused);
         }).ToList();
 
-        return new ParsedFitActivity("Training", ActivitySport.Cycling, start, samples, TimeSpan.FromMinutes(12), 5_000);
+        return new ParsedFitActivity("Training", ActivitySport.Cycling, start, samples[^1].Timestamp, null, null, samples, TimeSpan.FromMinutes(12), 5_000, null);
     }
 
     private static RawRideSample Sample(DateTimeOffset start, double seconds) => new(

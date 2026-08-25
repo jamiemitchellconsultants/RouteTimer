@@ -68,13 +68,23 @@ public sealed class FitActivityParser : IFitActivityParser
             }
 
             var startedAt = ToDateTimeOffset(session.GetStartTime());
+            var endedAt = ResolveEndedAt(session, samples);
+            if (endedAt < startedAt)
+            {
+                throw new ActivityInputException("invalid-session-time", "The FIT activity session end precedes its start.");
+            }
+
             return Task.FromResult(new ParsedFitActivity(
                 "Unnamed activity",
                 ActivitySport.Cycling,
                 startedAt,
+                endedAt,
+                fileId.GetManufacturer().ToString(),
+                NormalizeText(fileId.GetProductNameAsString()) ?? fileId.GetProduct()?.ToString(),
                 samples,
                 TimeSpan.FromSeconds(session.GetTotalTimerTime() ?? 0),
-                session.GetTotalDistance()));
+                session.GetTotalDistance(),
+                session.GetTotalAscent()));
         }
         catch (ActivityInputException)
         {
@@ -104,6 +114,21 @@ public sealed class FitActivityParser : IFitActivityParser
             record.GetCadence(),
             timerRunning);
     }
+
+    private static DateTimeOffset ResolveEndedAt(SessionMesg session, IReadOnlyList<RawRideSample> samples)
+    {
+        var sessionTimestamp = session.GetTimestamp();
+        if (sessionTimestamp is not null && sessionTimestamp.GetTimeStamp() != 0)
+        {
+            return ToDateTimeOffset(sessionTimestamp);
+        }
+
+        return samples.MaxBy(sample => sample.Timestamp)?.Timestamp
+            ?? throw new ActivityInputException("invalid-session-time", "The FIT activity session end could not be resolved.");
+    }
+
+    private static string? NormalizeText(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static DateTimeOffset ToDateTimeOffset(Dynastream.Fit.DateTime? timestamp)
     {

@@ -3,6 +3,7 @@ using RouteTimer.Domain.Jobs;
 using RouteTimer.Services.Activities;
 using RouteTimer.Services.Jobs;
 using RouteTimer.Services.Persistence;
+using RouteTimer.Services.Tests.Activities;
 using RouteTimer.Services.Training;
 using RouteTimer.Services.Validation;
 
@@ -14,15 +15,20 @@ public sealed class ParseTrainingJobHandlerTests
         "Morning Ride",
         ActivitySport.Cycling,
         DateTimeOffset.UtcNow,
+        DateTimeOffset.UtcNow.AddMinutes(30),
+        "Garmin",
+        "Edge",
         [],
         TimeSpan.FromMinutes(30),
-        10_000);
+        10_000,
+        250);
 
     private static readonly CleanedActivity SampleCleaned = new(
         "Morning Ride",
         [],
         TimeSpan.FromMinutes(25),
-        new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []));
+        new ActivityQuality(ActivityEligibility.Eligible, 1, 1, 1, 1, new Dictionary<string, int>(), []),
+        ActivityFixtures.Metadata("ride.fit", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddMinutes(25), "Garmin", "Edge", 10_000, 250));
 
     [Fact]
     public async Task Handle_parses_cleans_and_saves_the_upload_referenced_by_the_job()
@@ -39,6 +45,7 @@ public sealed class ParseTrainingJobHandlerTests
         await handler.HandleAsync(job, CancellationToken.None);
 
         Assert.Same(SampleParsed, cleaner.ReceivedActivity);
+        Assert.Equal("ride.fit", cleaner.ReceivedSourceFileName);
         Assert.Equal(uploadId, activities.SavedUploadId);
         Assert.Same(SampleCleaned, activities.SavedActivity);
     }
@@ -118,10 +125,12 @@ public sealed class ParseTrainingJobHandlerTests
     {
         public CleanedActivity? Result { get; init; }
         public ParsedFitActivity? ReceivedActivity { get; private set; }
+        public string? ReceivedSourceFileName { get; private set; }
 
-        public CleanedActivity Clean(ParsedFitActivity activity)
+        public CleanedActivity Clean(ParsedFitActivity activity, string sourceFileName)
         {
             ReceivedActivity = activity;
+            ReceivedSourceFileName = sourceFileName;
             return Result!;
         }
     }
