@@ -1,19 +1,12 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Net.Http.Headers;
-using System.Security.Claims;
 using System.Text;
-using System.Text.Encodings.Web;
 using System.Text.Json;
-using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using RouteTimer.Contracts.Predictions;
 using RouteTimer.Domain.Models;
 using RouteTimer.Domain.Physics;
@@ -33,7 +26,7 @@ public sealed class PredictionEndpointTests
     [InlineData("/api/jobs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")]
     public async Task Prediction_and_job_resources_require_authentication(string path)
     {
-        await using var app = new WebApplicationFactory<Program>();
+        await using var app = new RouteTimerApiFactory();
         using var client = app.CreateClient();
 
         using var response = await client.GetAsync(path);
@@ -249,20 +242,8 @@ public sealed class PredictionEndpointTests
         return form;
     }
 
-    private static WebApplicationFactory<Program> CreateRiderApp(Action<IServiceCollection>? configure = null)
-    {
-        var databaseName = Guid.NewGuid().ToString();
-        return new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
-        builder.ConfigureTestServices(services =>
-        {
-            services.RemoveAll<DbContextOptions<RouteTimerDbContext>>();
-            services.RemoveAll<IDbContextOptionsConfiguration<RouteTimerDbContext>>();
-            services.AddDbContext<RouteTimerDbContext>(options => options.UseInMemoryDatabase(databaseName));
-            services.RemoveAll<Microsoft.Extensions.Hosting.IHostedService>();
-            services.AddAuthentication("test").AddScheme<AuthenticationSchemeOptions, RiderAuthenticationHandler>("test", _ => { });
-            configure?.Invoke(services);
-        }));
-    }
+    private static RouteTimerApiFactory CreateRiderApp(Action<IServiceCollection>? configure = null)
+        => new RouteTimerApiFactory().WithRiderAuthentication(configure);
 
     private static async Task SeedProfileAndModelAsync(IServiceProvider services)
     {
@@ -305,18 +286,6 @@ public sealed class PredictionEndpointTests
         job.WorkerId = null;
         await context.SaveChangesAsync();
     }
-
-    private sealed class RiderAuthenticationHandler(IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder)
-        : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
-    {
-        protected override Task<AuthenticateResult> HandleAuthenticateAsync()
-        {
-            var claims = new List<Claim> { new(ClaimTypes.Name, "rider") };
-            if (Request.Headers["X-Test-Role"] != "non-rider") claims.Add(new Claim(ClaimTypes.Role, "rider"));
-            return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(new ClaimsPrincipal(new ClaimsIdentity(claims, Scheme.Name)), Scheme.Name)));
-        }
-    }
-
     private sealed class ThrowingPredictionRepository : IPredictionRepository
     {
         public Task<QueuedPredictionSubmission> CreateQueuedAsync(QueuedPredictionCreation creation, CancellationToken cancellationToken) =>

@@ -5,8 +5,13 @@ public sealed record JobResponse(
     string Type,
     Guid SubjectId,
     string State,
+    int ProgressPercent,
+    string ProgressStage,
     int AttemptCount,
     DateTimeOffset CreatedAt,
+    DateTimeOffset? StartedAt,
+    DateTimeOffset UpdatedAt,
+    DateTimeOffset? CompletedAt,
     DateTimeOffset? LeaseExpiresAt,
     string? DiagnosticCode,
     string? DiagnosticMessage);
