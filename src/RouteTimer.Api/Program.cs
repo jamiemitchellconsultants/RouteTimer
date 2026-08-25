@@ -48,6 +48,8 @@ builder.Services.AddScoped<TrainingUploadService>();
 builder.Services.AddScoped<TrainingActivityQueryService>();
 builder.Services.AddScoped<TrainingActivityDeletionService>();
 builder.Services.AddScoped<ProfileService>();
+builder.Services.AddScoped<ModelStatusService>();
+builder.Services.AddScoped<ModelRebuildService>();
 builder.Services.AddScoped<PredictionSubmissionService>();
 builder.Services.AddScoped<PredictionQueryService>();
 builder.Services.AddSingleton<IGpxRouteParser, GpxRouteParser>();

@@ -9,7 +9,21 @@ public sealed class JobRepository(RouteTimerDbContext context) : IJobRepository
     public async Task<AnalysisJob?> GetAsync(Guid jobId, CancellationToken cancellationToken)
     {
         var job = await context.Jobs.AsNoTracking().SingleOrDefaultAsync(entity => entity.Id == jobId, cancellationToken);
-        return job is null ? null : new AnalysisJob(
+        return job is null ? null : ToDomain(job);
+    }
+
+    public async Task<AnalysisJob?> GetLatestAsync(JobType type, Guid subjectId, CancellationToken cancellationToken)
+    {
+        var job = await context.Jobs.AsNoTracking()
+            .Where(entity => entity.Type == type.ToString() && entity.SubjectId == subjectId)
+            .OrderByDescending(entity => entity.CreatedAt)
+            .ThenByDescending(entity => entity.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+        return job is null ? null : ToDomain(job);
+    }
+
+    private static AnalysisJob ToDomain(RouteTimer.Persistence.Entities.AnalysisJobEntity job) =>
+        new(
             job.Id,
             Enum.Parse<JobType>(job.Type),
             job.SubjectId,
@@ -25,5 +39,4 @@ public sealed class JobRepository(RouteTimerDbContext context) : IJobRepository
             job.LeaseExpiresAt,
             job.DiagnosticCode,
             job.DiagnosticMessage);
-    }
 }

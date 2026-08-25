@@ -6,6 +6,7 @@ using RouteTimer.Domain.Models;
 using RouteTimer.Domain.Physics;
 using RouteTimer.Domain.Profile;
 using RouteTimer.Persistence;
+using RouteTimer.Persistence.Entities;
 using RouteTimer.Persistence.Jobs;
 using RouteTimer.Persistence.Repositories;
 using RouteTimer.Services.Persistence;
@@ -573,6 +574,30 @@ public sealed class PostgresJobQueueTests
     }
 
     [Fact]
+    public async Task JobRepository_GetLatestAsync_returns_the_newest_job_for_type_and_subject()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using var context = CreateContext(database);
+        await context.Database.MigrateAsync();
+        var subjectId = ModelSubject.Id;
+        var expectedId = Guid.NewGuid();
+        context.Jobs.AddRange(
+            JobEntity(Guid.NewGuid(), JobType.BuildModel, subjectId, JobState.Succeeded, QueueNow),
+            JobEntity(Guid.NewGuid(), JobType.ParseTraining, subjectId, JobState.Failed, QueueNowPlusThree),
+            JobEntity(Guid.NewGuid(), JobType.BuildModel, Guid.NewGuid(), JobState.Failed, QueueNowPlusThree),
+            JobEntity(expectedId, JobType.BuildModel, subjectId, JobState.Failed, QueueNowPlusTwo));
+        await context.SaveChangesAsync();
+
+        var latest = await new JobRepository(context).GetLatestAsync(JobType.BuildModel, subjectId, CancellationToken.None);
+
+        Assert.NotNull(latest);
+        Assert.Equal(expectedId, latest!.Id);
+        Assert.Equal(JobType.BuildModel, latest.Type);
+        Assert.Equal(subjectId, latest.SubjectId);
+        Assert.Equal(QueueNowPlusTwo, latest.CreatedAt);
+    }
+
+    [Fact]
     public async Task Expired_running_job_can_be_reclaimed_without_losing_started_time_or_progress()
     {
         await using var database = await StartDatabaseAsync();
@@ -825,6 +850,24 @@ public sealed class PostgresJobQueueTests
         new RiderProfile(75, 10),
         PredictionAssumptions.RoadCalmDryMovingOnly,
         DateTimeOffset.UtcNow);
+
+    private static AnalysisJobEntity JobEntity(Guid id, JobType type, Guid subjectId, JobState state, DateTimeOffset createdAt) => new()
+    {
+        Id = id,
+        Type = type.ToString(),
+        SubjectId = subjectId,
+        State = state.ToString(),
+        ProgressPercent = state == JobState.Succeeded ? 100 : 0,
+        ProgressStage = state switch
+        {
+            JobState.Succeeded => "completed",
+            JobState.Failed => "failed",
+            _ => "queued"
+        },
+        CreatedAt = createdAt,
+        UpdatedAt = createdAt,
+        CompletedAt = state is JobState.Succeeded or JobState.Failed ? createdAt : null
+    };
 
     private static async Task<RiderModelSnapshot> SaveModelAsync(RouteTimerDbContext context)
     {
