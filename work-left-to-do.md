@@ -27,3 +27,24 @@ Use the approved spec and plan as the authority:
 
 - `docs/superpowers/specs/2026-08-24-route-timer-design.md`
 - `docs/superpowers/plans/2026-08-24-route-timer.md`
+
+## Step 9 execution status (2026-08-25)
+
+The approved Step 9 API/UI plan has been implemented in the isolated `codex/step-9` worktree through Task 14. The implementation includes durable presentation metadata and job lifecycle/progress, safe prediction deletion/publication races, final API contracts and endpoint modules, typed client/polling/shared components, dashboard/profile/training/prediction UI, and local route visualization/vendor assets.
+
+Verification completed:
+
+- API: 66 passed.
+- Domain: 15 passed.
+- Persistence: 143 passed.
+- Services: 270 passed.
+- Route visualization npm tests: 5 passed.
+- Client build: passed with zero warnings and zero errors.
+- EndToEnd: no discovered tests.
+
+Known remaining verification failures:
+
+- Two visualization bUnit tests do not yet observe the expected synchronized selection/disposal interop calls.
+- The training upload bUnit workflow test does not yet observe its expected post-upload activity/model refresh.
+
+The worktree is clean at the current committed head. Deployment/browser acceptance and the undiscovered EndToEnd suite remain outside this execution environment.
