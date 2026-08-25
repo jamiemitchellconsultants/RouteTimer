@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using RouteTimer.Client.Api;
+using RouteTimer.Contracts.Garmin;
 using RouteTimer.Contracts.Jobs;
 using RouteTimer.Contracts.Models;
 using RouteTimer.Contracts.Predictions;
@@ -294,6 +295,137 @@ public sealed class RouteTimerApiClientTests
 
         Assert.Equal(expected, found);
         Assert.Null(missing);
+    }
+
+    [Fact]
+    public async Task GetGarminConnectionAsync_gets_the_connection_status()
+    {
+        var expected = new GarminConnectionResponse("connected", "garmin-user-1", "Rider", null);
+        var client = CreateApiClient((request, _) =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Equal("/api/garmin/connection", request.RequestUri!.PathAndQuery);
+            return Task.FromResult(JsonResponse(expected));
+        });
+
+        var result = await client.GetGarminConnectionAsync(CancellationToken.None);
+
+        AssertJsonEquivalent(expected, result);
+    }
+
+    [Fact]
+    public async Task LoginGarminAsync_posts_credentials_as_json_body_without_query_values()
+    {
+        var login = new GarminLoginRequest("rider@example.test", "garmin-password");
+        var expected = new GarminConnectionResponse("mfa-required", null, null, "challenge-1");
+        var client = CreateApiClient(async (request, cancellationToken) =>
+        {
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal("/api/garmin/connection/login", request.RequestUri!.PathAndQuery);
+            Assert.Empty(request.RequestUri.Query);
+            Assert.Equal("application/json", request.Content!.Headers.ContentType!.MediaType);
+            Assert.Equal(login, await request.Content.ReadFromJsonAsync<GarminLoginRequest>(cancellationToken));
+
+            return JsonResponse(expected);
+        });
+
+        var result = await client.LoginGarminAsync(login, CancellationToken.None);
+
+        AssertJsonEquivalent(expected, result);
+    }
+
+    [Fact]
+    public async Task CompleteGarminMfaAsync_posts_mfa_values_as_json_body_without_query_values()
+    {
+        var mfa = new GarminMfaRequest("challenge-1", "123456");
+        var expected = new GarminConnectionResponse("connected", "garmin-user-1", "Rider", null);
+        var client = CreateApiClient(async (request, cancellationToken) =>
+        {
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal("/api/garmin/connection/mfa", request.RequestUri!.PathAndQuery);
+            Assert.Empty(request.RequestUri.Query);
+            Assert.Equal("application/json", request.Content!.Headers.ContentType!.MediaType);
+            Assert.Equal(mfa, await request.Content.ReadFromJsonAsync<GarminMfaRequest>(cancellationToken));
+
+            return JsonResponse(expected);
+        });
+
+        var result = await client.CompleteGarminMfaAsync(mfa, CancellationToken.None);
+
+        AssertJsonEquivalent(expected, result);
+    }
+
+    [Fact]
+    public async Task DisconnectGarminAsync_deletes_the_connection()
+    {
+        var client = CreateApiClient((request, _) =>
+        {
+            Assert.Equal(HttpMethod.Delete, request.Method);
+            Assert.Equal("/api/garmin/connection", request.RequestUri!.PathAndQuery);
+            Assert.Null(request.Content);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NoContent));
+        });
+
+        await client.DisconnectGarminAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task GetGarminActivitiesAsync_omits_cursor_when_it_is_null()
+    {
+        var expected = new GarminActivityPageResponse([], null);
+        var client = CreateApiClient((request, _) =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Equal("/api/garmin/activities", request.RequestUri!.PathAndQuery);
+            return Task.FromResult(JsonResponse(expected));
+        });
+
+        var result = await client.GetGarminActivitiesAsync(null, CancellationToken.None);
+
+        AssertJsonEquivalent(expected, result);
+    }
+
+    [Fact]
+    public async Task GetGarminActivitiesAsync_encodes_the_opaque_cursor()
+    {
+        var expected = new GarminActivityPageResponse([], null);
+        var client = CreateApiClient((request, _) =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Equal("/api/garmin/activities?cursor=NTA%2B%2F%3D%3F", request.RequestUri!.PathAndQuery);
+            return Task.FromResult(JsonResponse(expected));
+        });
+
+        var result = await client.GetGarminActivitiesAsync("NTA+/=?", CancellationToken.None);
+
+        AssertJsonEquivalent(expected, result);
+    }
+
+    [Fact]
+    public async Task ImportGarminActivitiesAsync_posts_ordered_ids_as_json_body_without_query_values()
+    {
+        var import = new GarminImportRequest(["activity-1", "activity 2"]);
+        var expected = new GarminImportBatchResponse(
+        [
+            new GarminImportResultResponse("activity-1", "Morning Ride", "accepted", Guid.NewGuid(), Guid.NewGuid(), null),
+            new GarminImportResultResponse("activity 2", "Gravel Ride", "duplicate", Guid.NewGuid(), Guid.NewGuid(), null)
+        ]);
+        var client = CreateApiClient(async (request, cancellationToken) =>
+        {
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal("/api/garmin/activities/import", request.RequestUri!.PathAndQuery);
+            Assert.Empty(request.RequestUri.Query);
+            Assert.Equal("application/json", request.Content!.Headers.ContentType!.MediaType);
+            var payload = await request.Content.ReadFromJsonAsync<GarminImportRequest>(cancellationToken);
+            Assert.NotNull(payload);
+            Assert.Equal(["activity-1", "activity 2"], payload.ActivityIds);
+
+            return JsonResponse(expected, HttpStatusCode.Accepted);
+        });
+
+        var result = await client.ImportGarminActivitiesAsync(import, CancellationToken.None);
+
+        AssertJsonEquivalent(expected, result);
     }
 
     [Fact]

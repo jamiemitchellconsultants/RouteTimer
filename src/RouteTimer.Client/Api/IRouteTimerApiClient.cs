@@ -1,3 +1,4 @@
+using RouteTimer.Contracts.Garmin;
 using RouteTimer.Contracts.Jobs;
 using RouteTimer.Contracts.Models;
 using RouteTimer.Contracts.Predictions;
@@ -21,4 +22,10 @@ public interface IRouteTimerApiClient
     Task<PredictionDetailResponse?> GetPredictionAsync(Guid id, CancellationToken ct);
     Task<bool> DeletePredictionAsync(Guid id, CancellationToken ct);
     Task<JobResponse?> GetJobAsync(Guid id, CancellationToken ct);
+    Task<GarminConnectionResponse> GetGarminConnectionAsync(CancellationToken ct);
+    Task<GarminConnectionResponse> LoginGarminAsync(GarminLoginRequest request, CancellationToken ct);
+    Task<GarminConnectionResponse> CompleteGarminMfaAsync(GarminMfaRequest request, CancellationToken ct);
+    Task DisconnectGarminAsync(CancellationToken ct);
+    Task<GarminActivityPageResponse> GetGarminActivitiesAsync(string? cursor, CancellationToken ct);
+    Task<GarminImportBatchResponse> ImportGarminActivitiesAsync(GarminImportRequest request, CancellationToken ct);
 }

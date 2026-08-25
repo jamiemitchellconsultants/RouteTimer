@@ -1,4 +1,5 @@
 using RouteTimer.Client.Api;
+using RouteTimer.Contracts.Garmin;
 using RouteTimer.Contracts.Jobs;
 using RouteTimer.Contracts.Models;
 using RouteTimer.Contracts.Predictions;
@@ -21,6 +22,12 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
     public Func<ClientFileUpload, CancellationToken, Task<PredictionSubmissionResponse>>? OnSubmitPredictionAsync { get; set; }
     public Func<Guid, CancellationToken, Task<PredictionDetailResponse?>>? OnGetPredictionAsync { get; set; }
     public Func<Guid, CancellationToken, Task<bool>>? OnDeletePredictionAsync { get; set; }
+    public Func<CancellationToken, Task<GarminConnectionResponse>>? OnGetGarminConnectionAsync { get; set; }
+    public Func<GarminLoginRequest, CancellationToken, Task<GarminConnectionResponse>>? OnLoginGarminAsync { get; set; }
+    public Func<GarminMfaRequest, CancellationToken, Task<GarminConnectionResponse>>? OnCompleteGarminMfaAsync { get; set; }
+    public Func<CancellationToken, Task>? OnDisconnectGarminAsync { get; set; }
+    public Func<string?, CancellationToken, Task<GarminActivityPageResponse>>? OnGetGarminActivitiesAsync { get; set; }
+    public Func<GarminImportRequest, CancellationToken, Task<GarminImportBatchResponse>>? OnImportGarminActivitiesAsync { get; set; }
 
     public Queue<JobResponse?> Jobs { get; } = new();
 
@@ -37,6 +44,12 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
     public List<(ClientFileUpload File, CancellationToken CancellationToken)> SubmittedPredictions { get; } = [];
     public List<(Guid PredictionId, CancellationToken CancellationToken)> RequestedPredictionDetails { get; } = [];
     public List<(Guid PredictionId, CancellationToken CancellationToken)> DeletedPredictions { get; } = [];
+    public List<CancellationToken> RequestedGarminConnections { get; } = [];
+    public List<(GarminLoginRequest Request, CancellationToken CancellationToken)> GarminLoginRequests { get; } = [];
+    public List<(GarminMfaRequest Request, CancellationToken CancellationToken)> GarminMfaRequests { get; } = [];
+    public List<CancellationToken> DisconnectedGarminConnections { get; } = [];
+    public List<(string? Cursor, CancellationToken CancellationToken)> RequestedGarminActivities { get; } = [];
+    public List<(GarminImportRequest Request, CancellationToken CancellationToken)> GarminImportRequests { get; } = [];
 
     public Task<ProfileResponse?> GetProfileAsync(CancellationToken ct)
     {
@@ -145,4 +158,55 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
 
         return Task.FromResult(Jobs.Dequeue());
     }
+
+    public Task<GarminConnectionResponse> GetGarminConnectionAsync(CancellationToken ct)
+    {
+        RequestedGarminConnections.Add(ct);
+        return OnGetGarminConnectionAsync is not null
+            ? OnGetGarminConnectionAsync(ct)
+            : Task.FromResult(NotConnected());
+    }
+
+    public Task<GarminConnectionResponse> LoginGarminAsync(GarminLoginRequest request, CancellationToken ct)
+    {
+        GarminLoginRequests.Add((request, ct));
+        return OnLoginGarminAsync is not null
+            ? OnLoginGarminAsync(request, ct)
+            : Task.FromResult(NotConnected());
+    }
+
+    public Task<GarminConnectionResponse> CompleteGarminMfaAsync(GarminMfaRequest request, CancellationToken ct)
+    {
+        GarminMfaRequests.Add((request, ct));
+        return OnCompleteGarminMfaAsync is not null
+            ? OnCompleteGarminMfaAsync(request, ct)
+            : Task.FromResult(NotConnected());
+    }
+
+    public Task DisconnectGarminAsync(CancellationToken ct)
+    {
+        DisconnectedGarminConnections.Add(ct);
+        return OnDisconnectGarminAsync is not null
+            ? OnDisconnectGarminAsync(ct)
+            : Task.CompletedTask;
+    }
+
+    public Task<GarminActivityPageResponse> GetGarminActivitiesAsync(string? cursor, CancellationToken ct)
+    {
+        RequestedGarminActivities.Add((cursor, ct));
+        return OnGetGarminActivitiesAsync is not null
+            ? OnGetGarminActivitiesAsync(cursor, ct)
+            : Task.FromResult(new GarminActivityPageResponse([], null));
+    }
+
+    public Task<GarminImportBatchResponse> ImportGarminActivitiesAsync(GarminImportRequest request, CancellationToken ct)
+    {
+        GarminImportRequests.Add((request, ct));
+        return OnImportGarminActivitiesAsync is not null
+            ? OnImportGarminActivitiesAsync(request, ct)
+            : Task.FromResult(new GarminImportBatchResponse([]));
+    }
+
+    private static GarminConnectionResponse NotConnected() =>
+        new("not-connected", null, null, null);
 }
