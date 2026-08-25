@@ -12,11 +12,14 @@ public sealed class JobRepository(RouteTimerDbContext context) : IJobRepository
         return job is null ? null : ToDomain(job);
     }
 
+    // The ordering is part of the latest-job contract: newest CreatedAt, then newest UpdatedAt,
+    // then the greatest Id to make exact timestamp ties deterministic.
     public async Task<AnalysisJob?> GetLatestAsync(JobType type, Guid subjectId, CancellationToken cancellationToken)
     {
         var job = await context.Jobs.AsNoTracking()
             .Where(entity => entity.Type == type.ToString() && entity.SubjectId == subjectId)
             .OrderByDescending(entity => entity.CreatedAt)
+            .ThenByDescending(entity => entity.UpdatedAt)
             .ThenByDescending(entity => entity.Id)
             .FirstOrDefaultAsync(cancellationToken);
         return job is null ? null : ToDomain(job);

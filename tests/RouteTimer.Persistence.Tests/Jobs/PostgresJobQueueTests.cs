@@ -598,6 +598,31 @@ public sealed class PostgresJobQueueTests
     }
 
     [Fact]
+    public async Task JobRepository_GetLatestAsync_prefers_updated_at_when_build_jobs_share_created_at()
+    {
+        await using var database = await StartDatabaseAsync();
+        await using var context = CreateContext(database);
+        await context.Database.MigrateAsync();
+        var subjectId = ModelSubject.Id;
+        var expectedId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+        var otherId = Guid.Parse("00000000-0000-0000-0000-000000000002");
+        var createdAt = QueueNow;
+        var expected = JobEntity(expectedId, JobType.BuildModel, subjectId, JobState.Failed, createdAt);
+        expected.UpdatedAt = QueueNowPlusTwo;
+        var other = JobEntity(otherId, JobType.BuildModel, subjectId, JobState.Running, createdAt);
+        other.UpdatedAt = QueueNowPlusOne;
+        context.Jobs.AddRange(expected, other);
+        await context.SaveChangesAsync();
+
+        var latest = await new JobRepository(context).GetLatestAsync(JobType.BuildModel, subjectId, CancellationToken.None);
+
+        Assert.NotNull(latest);
+        Assert.Equal(expectedId, latest!.Id);
+        Assert.Equal(JobState.Failed, latest.State);
+        Assert.Equal(QueueNowPlusTwo, latest.UpdatedAt);
+    }
+
+    [Fact]
     public async Task Expired_running_job_can_be_reclaimed_without_losing_started_time_or_progress()
     {
         await using var database = await StartDatabaseAsync();
