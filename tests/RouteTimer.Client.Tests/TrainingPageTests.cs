@@ -64,7 +64,7 @@ public sealed class TrainingPageTests : BunitContext
     }
 
     [Fact]
-    public async Task Training_upload_renders_per_file_outcomes_polls_accepted_jobs_and_refreshes_activities_and_model()
+    public void Training_upload_renders_per_file_outcomes_polls_accepted_jobs_and_refreshes_activities_and_model()
     {
         var acceptedJobId = Guid.NewGuid();
         var rebuildJobId = Guid.NewGuid();
@@ -129,8 +129,22 @@ public sealed class TrainingPageTests : BunitContext
             Assert.Contains("invalid-fit-upload", outcomes, StringComparison.Ordinal);
         });
 
+        // The upload poller has issued its first poll and is now parked on the 2s timer.
+        cut.WaitForAssertion(() => Assert.Single(api.RequestedJobs));
+
         time.Advance(TimeSpan.FromSeconds(2));
-        await Task.Yield();
+
+        // The succeeded upload job has refreshed activities and model status, and the
+        // rebuild poller it started has issued its own first poll and parked on its timer.
+        // FakeTimeProvider only fires timers that already exist, so this wait must happen
+        // before the next advance.
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Equal(2, api.RequestedTrainingActivities.Count);
+            Assert.Equal(2, api.RequestedModelStatuses.Count);
+            Assert.Equal(3, api.RequestedJobs.Count);
+        });
+
         time.Advance(TimeSpan.FromSeconds(2));
 
         cut.WaitForAssertion(() =>
@@ -210,7 +224,7 @@ public sealed class TrainingPageTests : BunitContext
     }
 
     [Fact]
-    public async Task Training_uses_inline_delete_confirmation_allows_cancel_and_refreshes_after_confirmed_delete()
+    public void Training_uses_inline_delete_confirmation_allows_cancel_and_refreshes_after_confirmed_delete()
     {
         var firstId = Guid.NewGuid();
         var secondId = Guid.NewGuid();
@@ -288,8 +302,12 @@ public sealed class TrainingPageTests : BunitContext
             Assert.Contains("Building power model", cut.Markup, StringComparison.Ordinal);
         });
 
+        // The rebuild poller must have issued its first poll and parked on its timer
+        // before the fake clock is advanced, otherwise the timer is registered too late
+        // to ever fire.
+        cut.WaitForAssertion(() => Assert.Single(api.RequestedJobs));
+
         time.Advance(TimeSpan.FromSeconds(2));
-        await Task.Yield();
 
         cut.WaitForAssertion(() =>
         {
