@@ -21,11 +21,13 @@ public sealed class RouteTimerApiFactory(
     IReadOnlyDictionary<string, string>? settings = null)
     : WebApplicationFactory<Program>
 {
+    internal const string DefaultKeycloakAuthority = "https://keycloak.test.invalid/realms/routetimer";
+
     private static readonly IReadOnlyDictionary<string, string> DefaultSettings =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
             // Keycloak mode refuses to start without an authority, so the default mode needs one.
-            ["Keycloak:Authority"] = "https://keycloak.test.invalid/realms/routetimer"
+            ["Keycloak:Authority"] = DefaultKeycloakAuthority
         };
 
     private readonly string databaseName = Guid.NewGuid().ToString();

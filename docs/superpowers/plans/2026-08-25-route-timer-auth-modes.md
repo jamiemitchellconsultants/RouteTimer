@@ -918,7 +918,7 @@ public sealed class AuthConfigEndpointTests
         Assert.False(config.SetupRequired);
         Assert.Equal("routetimer-web", config.ClientId);
         Assert.Equal("authentication/login-callback", config.RedirectUri);
-        Assert.Equal("/", config.PostLogoutRedirectUri);
+        Assert.Equal("authentication/logout-callback", config.PostLogoutRedirectUri);
     }
 
     [Fact]
@@ -1017,7 +1017,14 @@ public sealed record AuthConfigResponse(
     string? Authority,
     string? ClientId,
     string? RedirectUri,
-    string? PostLogoutRedirectUri);
+    string? PostLogoutRedirectUri)
+{
+    /// <summary>The <see cref="Mode"/> value for a local, passphrase-authenticated deployment.</summary>
+    public const string LocalMode = "Local";
+
+    /// <summary>The <see cref="Mode"/> value for a deployment authenticated against Keycloak.</summary>
+    public const string KeycloakMode = "Keycloak";
+}
 
 /// <param name="Authenticated">Whether the caller currently holds a valid session.</param>
 public sealed record AuthSessionResponse(bool Authenticated);
@@ -1062,7 +1069,7 @@ public static class AuthEndpoints
         {
             var setupRequired = await credentials.IsSetupRequiredAsync(cancellationToken);
             return TypedResults.Ok(new AuthConfigResponse(
-                nameof(AuthMode.Local),
+                AuthConfigResponse.LocalMode,
                 setupRequired,
                 Authority: null,
                 ClientId: null,
@@ -1071,17 +1078,36 @@ public static class AuthEndpoints
         }
 
         return TypedResults.Ok(new AuthConfigResponse(
-            nameof(AuthMode.Keycloak),
+            AuthConfigResponse.KeycloakMode,
             SetupRequired: false,
             Authority: configuration["Keycloak:Authority"],
             ClientId: "routetimer-web",
             RedirectUri: "authentication/login-callback",
-            PostLogoutRedirectUri: "/"));
+            // Not "/": ASP.NET Core decides whether to resolve this with
+            // Uri.TryCreate(value, UriKind.Absolute), which returns true for "/" on Linux and
+            // macOS because it parses as the file:/// URI. The value would reach Keycloak
+            // unresolved, fail redirect validation, and dead-end sign-out -- with behaviour that
+            // flips on a Windows host.
+            PostLogoutRedirectUri: "authentication/logout-callback"));
     }
 }
 ```
 
-- [ ] **Step 5: Register the service and endpoints**
+- [ ] **Step 5: Require an authority in Keycloak mode**
+
+A null authority leaves the bearer handler with no configuration manager, so the deployment starts,
+reports healthy, and silently rejects every token. Inside the `if (authMode == AuthMode.Keycloak)`
+block added in Task 1, read `Keycloak:Authority` into a local, throw an `InvalidOperationException`
+naming the setting when it is missing or blank, and assign that local to `options.Authority`. This
+extends Task 1's reasoning: validating the mode but not the setting the mode requires is half a
+guarantee.
+
+Add `Keycloak_mode_refuses_to_start_without_an_authority` to `AuthModeTests`. Because the test
+factory defaults to Keycloak mode, it must now supply an authority — add a `WithSetting(string key,
+string? value)` builder to `RouteTimerApiFactory` carrying a default `Keycloak:Authority`, where
+passing null unsets it. `HealthEndpointTests.KeycloakModeApplicationFactory` needs the setting too.
+
+- [ ] **Step 6: Register the service and endpoints**
 
 In `src/RouteTimer.Api/Program.cs`, alongside the other scoped registrations, add:
 
@@ -1102,16 +1128,39 @@ Then, alongside the other `Map*Endpoints()` calls after `var app = builder.Build
 app.MapAuthEndpoints(authMode);
 ```
 
-- [ ] **Step 6: Run test to verify it passes**
+- [ ] **Step 7: Cover the paths the four tests miss**
 
-Run: `dotnet test tests/RouteTimer.Api.Tests/RouteTimer.Api.Tests.csproj -p:UseSharedCompilation=false --filter "FullyQualifiedName~AuthConfigEndpointTests"`
+Add to `AuthConfigEndpointTests`:
 
-Expected: PASS, 4 tests.
+- Assert in the Keycloak-mode test that the configured authority round-trips, and in the Local-mode
+  test that **all four** Keycloak fields are null. Asserting `Authority` alone is vacuous unless the
+  test environment actually configures one — configure it via `WithSetting`, or the single assertion
+  guarding cross-mode leakage cannot fail.
+- `Session_reports_anonymous_in_local_mode_where_no_scheme_is_registered` — local mode registers no
+  authentication scheme until Task 5, so this is the path most likely to throw.
+- `Session_reports_an_authenticated_caller` via `WithRiderAuthentication`. Without it, inverting the
+  `IsAuthenticated` predicate fails no test at all.
+- `Config_and_session_are_not_cacheable`, asserting the header value rather than its presence.
 
-- [ ] **Step 7: Commit**
+Both routes must set `Cache-Control: no-store`. A cached `setupRequired: true` surviving first-run
+setup, or a cached session verdict, would both be baffling failures.
+
+- [ ] **Step 8: Run tests to verify they pass**
+
+Run: `dotnet test tests/RouteTimer.Api.Tests/RouteTimer.Api.Tests.csproj -p:UseSharedCompilation=false`
+
+Expected: PASS, 102 total.
+
+- [ ] **Step 9: Register the logout callback in the realm template**
+
+`deploy/keycloak/routetimer-realm.json` lists only the login callback in `redirectUris`, so no
+post-logout value would validate. Add `https://ROUTETIMER_HOSTNAME/authentication/logout-callback`
+alongside it, keeping the existing placeholder convention the deployment script substitutes.
+
+- [ ] **Step 10: Commit**
 
 ```bash
-git add src/RouteTimer.Contracts/Auth src/RouteTimer.Api/Endpoints/AuthEndpoints.cs src/RouteTimer.Api/Program.cs tests/RouteTimer.Api.Tests/Auth/AuthConfigEndpointTests.cs
+git add src/RouteTimer.Contracts/Auth src/RouteTimer.Api tests/RouteTimer.Api.Tests deploy/keycloak/routetimer-realm.json
 git commit -m "feat: serve authentication configuration at runtime"
 ```
 
@@ -1890,9 +1939,7 @@ namespace RouteTimer.Client.Auth;
 /// </summary>
 public sealed class ClientAuthConfig(AuthConfigResponse response)
 {
-    public const string LocalMode = "Local";
-
-    public bool IsLocal => string.Equals(response.Mode, LocalMode, StringComparison.OrdinalIgnoreCase);
+    public bool IsLocal => string.Equals(response.Mode, AuthConfigResponse.LocalMode, StringComparison.OrdinalIgnoreCase);
 
     public bool SetupRequired => response.SetupRequired;
 
@@ -1986,7 +2033,7 @@ var authConfig = await bootstrapClient.GetFromJsonAsync<AuthConfigResponse>("api
     ?? throw new InvalidOperationException("The API did not return an authentication configuration.");
 builder.Services.AddSingleton(new ClientAuthConfig(authConfig));
 
-if (string.Equals(authConfig.Mode, ClientAuthConfig.LocalMode, StringComparison.OrdinalIgnoreCase))
+if (string.Equals(authConfig.Mode, AuthConfigResponse.LocalMode, StringComparison.OrdinalIgnoreCase))
 {
     // The browser attaches the session cookie to same-origin requests on its own, so there is no
     // bearer handler in this mode.

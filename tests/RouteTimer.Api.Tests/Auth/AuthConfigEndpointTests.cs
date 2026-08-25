@@ -9,7 +9,7 @@ namespace RouteTimer.Api.Tests.Auth;
 
 public sealed class AuthConfigEndpointTests
 {
-    private const string KeycloakAuthority = "https://keycloak.test.invalid/realms/routetimer";
+    private const string KeycloakAuthority = RouteTimerApiFactory.DefaultKeycloakAuthority;
 
     [Fact]
     public async Task Config_is_anonymous_and_reports_keycloak_settings_in_keycloak_mode()
@@ -120,8 +120,8 @@ public sealed class AuthConfigEndpointTests
         using var config = await client.GetAsync("/api/auth/config", CancellationToken.None);
         using var session = await client.GetAsync("/api/auth/session", CancellationToken.None);
 
-        Assert.Equal("no-store", Assert.Single(config.Headers.CacheControl!.ToString().Split(", ")));
-        Assert.Equal("no-store", Assert.Single(session.Headers.CacheControl!.ToString().Split(", ")));
+        Assert.Equal("no-store", config.Headers.CacheControl?.ToString());
+        Assert.Equal("no-store", session.Headers.CacheControl?.ToString());
     }
 
     internal sealed class FakeLocalCredentialRepository(string? initialHash) : ILocalCredentialRepository

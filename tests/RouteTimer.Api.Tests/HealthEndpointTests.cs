@@ -62,7 +62,7 @@ public sealed class HealthEndpointTests
         {
             builder.UseSetting(RouteTimer.Api.Auth.AuthModeResolver.ConfigurationKey, "Keycloak");
             // Keycloak mode refuses to start without an authority.
-            builder.UseSetting("Keycloak:Authority", "https://keycloak.test.invalid/realms/routetimer");
+            builder.UseSetting("Keycloak:Authority", RouteTimerApiFactory.DefaultKeycloakAuthority);
         }
     }
 
