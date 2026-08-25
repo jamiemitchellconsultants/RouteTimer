@@ -23,10 +23,15 @@ public static class AuthModeResolver
     {
         ArgumentNullException.ThrowIfNull(configuration);
 
-        var configured = configuration[ConfigurationKey];
-        if (Enum.TryParse<AuthMode>(configured, ignoreCase: true, out var mode) && Enum.IsDefined(mode))
+        var configured = configuration[ConfigurationKey]?.Trim();
+        if (string.Equals(configured, nameof(AuthMode.Local), StringComparison.OrdinalIgnoreCase))
         {
-            return mode;
+            return AuthMode.Local;
+        }
+
+        if (string.Equals(configured, nameof(AuthMode.Keycloak), StringComparison.OrdinalIgnoreCase))
+        {
+            return AuthMode.Keycloak;
         }
 
         throw new InvalidOperationException(
