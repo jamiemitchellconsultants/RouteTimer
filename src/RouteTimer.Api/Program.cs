@@ -54,6 +54,7 @@ builder.Services.AddScoped<ModelRebuildService>();
 builder.Services.AddScoped<PredictionSubmissionService>();
 builder.Services.AddScoped<PredictionQueryService>();
 builder.Services.AddScoped<PredictionDeletionService>();
+builder.Services.AddScoped<GarminConnectionService>();
 var encodedGarminKey = builder.Configuration["Garmin:TokenEncryptionKey"]
     ?? throw new InvalidOperationException("Garmin:TokenEncryptionKey is required.");
 byte[] garminKey;
@@ -148,6 +149,7 @@ app.MapTrainingEndpoints();
 app.MapModelsEndpoints();
 app.MapPredictionEndpoints();
 app.MapJobEndpoints();
+app.MapGarminEndpoints();
 
 app.Run();
 

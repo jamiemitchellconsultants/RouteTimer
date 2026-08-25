@@ -18,4 +18,15 @@ public static class ErrorCodes
     public const string GpxTooLarge = "gpx-too-large";
     public const string PredictionNotFound = "prediction-not-found";
     public const string JobNotFound = "job-not-found";
+    public const string GarminCredentialsRejected = "garmin-credentials-rejected";
+    public const string GarminMfaInvalid = "garmin-mfa-invalid";
+    public const string GarminChallengeExpired = "garmin-challenge-expired";
+    public const string GarminConnectionRequired = "garmin-connection-required";
+    public const string GarminReconnectRequired = "garmin-reconnect-required";
+    public const string GarminRateLimited = "garmin-rate-limited";
+    public const string GarminUnavailable = "garmin-unavailable";
+    public const string GarminAdapterUnavailable = "garmin-adapter-unavailable";
+    public const string GarminResponseInvalid = "garmin-response-invalid";
+    public const string GarminCursorInvalid = "garmin-cursor-invalid";
+    public const string GarminImportLimit = "garmin-import-limit";
 }

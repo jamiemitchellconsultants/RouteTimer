@@ -41,6 +41,10 @@ public sealed class AuthorizationTests
     [InlineData("GET", "/api/predictions/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")]
     [InlineData("DELETE", "/api/predictions/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")]
     [InlineData("GET", "/api/jobs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")]
+    [InlineData("GET", "/api/garmin/connection")]
+    [InlineData("POST", "/api/garmin/connection/login")]
+    [InlineData("POST", "/api/garmin/connection/mfa")]
+    [InlineData("DELETE", "/api/garmin/connection")]
     public async Task Api_resources_require_authentication(string method, string path)
     {
         await using var app = new RouteTimerApiFactory();
@@ -61,7 +65,11 @@ public sealed class AuthorizationTests
     [InlineData("POST", "/api/training-activities")]
     [InlineData("GET", "/api/models/current")]
     [InlineData("POST", "/api/models/rebuild")]
-    public async Task Training_and_model_resources_forbid_authenticated_non_riders(string method, string path)
+    [InlineData("GET", "/api/garmin/connection")]
+    [InlineData("POST", "/api/garmin/connection/login")]
+    [InlineData("POST", "/api/garmin/connection/mfa")]
+    [InlineData("DELETE", "/api/garmin/connection")]
+    public async Task Rider_resources_forbid_authenticated_non_riders(string method, string path)
     {
         await using var app = new RouteTimerApiFactory().WithRiderAuthentication();
         using var client = app.CreateClient();
