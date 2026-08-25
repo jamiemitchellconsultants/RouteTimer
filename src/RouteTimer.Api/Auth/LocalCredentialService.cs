@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Logging;
 using RouteTimer.Services.Persistence;
 
 namespace RouteTimer.Api.Auth;
@@ -15,7 +16,7 @@ public enum LocalCredentialSetupResult
 /// which is available from the ASP.NET Core shared framework and carries its own versioned format,
 /// so no hashing scheme is written here.
 /// </summary>
-public sealed class LocalCredentialService(ILocalCredentialRepository credentials)
+public sealed class LocalCredentialService(ILocalCredentialRepository credentials, ILogger<LocalCredentialService> logger)
 {
     /// <summary>
     /// Long enough to resist casual guessing, short enough that a rider will actually use a
@@ -49,15 +50,39 @@ public sealed class LocalCredentialService(ILocalCredentialRepository credential
     public async Task<bool> VerifyAsync(string passphrase, CancellationToken cancellationToken)
     {
         var storedHash = await credentials.GetAsync(cancellationToken);
+        // Returns early without hashing when no credential exists. This leaks first-run state by
+        // timing, which is not a secret: /api/auth/config publishes setupRequired to anonymous
+        // callers by design. The comparison that must be constant-time -- correct versus incorrect
+        // passphrase -- is, inside the framework's verifier.
         if (storedHash is null || string.IsNullOrEmpty(passphrase))
         {
             return false;
         }
 
-        var outcome = Hasher.VerifyHashedPassword(HashSubject, storedHash, passphrase);
+        PasswordVerificationResult outcome;
+        try
+        {
+            outcome = Hasher.VerifyHashedPassword(HashSubject, storedHash, passphrase);
+        }
+        catch (FormatException)
+        {
+            // The stored value is not a hash this hasher wrote -- most likely a hand-edited row.
+            // Treat it as no usable credential rather than a server error; recovery is deleting the row.
+            return false;
+        }
+
         if (outcome == PasswordVerificationResult.SuccessRehashNeeded)
         {
-            await credentials.SetAsync(Hasher.HashPassword(HashSubject, passphrase), cancellationToken);
+            try
+            {
+                await credentials.SetAsync(Hasher.HashPassword(HashSubject, passphrase), cancellationToken);
+            }
+            catch (Exception exception)
+            {
+                // The passphrase is correct. Failing to upgrade the stored hash must not deny the login.
+                logger.LogWarning(exception, "Could not upgrade the stored passphrase hash; the existing hash remains valid.");
+            }
+
             return true;
         }
 
