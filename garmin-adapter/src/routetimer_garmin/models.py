@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
@@ -19,4 +19,10 @@ class AdapterActivity:
 class AdapterActivityPage:
     activities: list[AdapterActivity]
     next_offset: int | None
-    token_json: str
+    token_json: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class AdapterActivityBatch:
+    activities: list[AdapterActivity]
+    source_count: int

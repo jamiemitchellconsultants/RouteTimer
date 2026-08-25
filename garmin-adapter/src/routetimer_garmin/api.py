@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from base64 import urlsafe_b64encode
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Request, Response
@@ -11,7 +12,14 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from routetimer_garmin.challenges import ChallengeStore
 from routetimer_garmin.errors import AdapterError
 from routetimer_garmin.facade import GarminFacade
-from routetimer_garmin.service import GarminService, LoginResult, SessionResult
+from routetimer_garmin.models import AdapterActivity, AdapterActivityPage
+from routetimer_garmin.service import (
+    ActivitySummaryResult,
+    FitDownloadResult,
+    GarminService,
+    LoginResult,
+    SessionResult,
+)
 
 
 for logger_name in ("garminconnect", "garminconnect.client"):
@@ -40,8 +48,12 @@ class MfaRequest(_SecretRequest):
         return [("challenge_id", self.challenge_id)]
 
 
-class ValidateRequest(_SecretRequest):
+class TokenRequest(_SecretRequest):
     token: SecretStr
+
+
+class ActivityPageRequest(TokenRequest):
+    offset: int = Field(default=0, ge=0, strict=True)
 
 
 class LoginResponse(BaseModel):
@@ -77,6 +89,61 @@ class SessionResponse(BaseModel):
             tokenJson=result.token_json,
             garminUserId=result.garmin_user_id,
             displayName=result.display_name,
+        )
+
+
+class ActivityResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    activity_id: str = Field(alias="activityId")
+    name: str
+    started_at: str = Field(alias="startedAt")
+    activity_type: str = Field(alias="activityType")
+    distance_metres: float | None = Field(alias="distanceMetres")
+    duration_seconds: float | None = Field(alias="durationSeconds")
+    ascent_metres: float | None = Field(alias="ascentMetres")
+    average_power_watts: float | None = Field(alias="averagePowerWatts")
+
+    @classmethod
+    def from_activity(cls, activity: AdapterActivity) -> ActivityResponse:
+        return cls(
+            activityId=activity.activity_id,
+            name=activity.name,
+            startedAt=activity.started_at.isoformat().replace("+00:00", "Z"),
+            activityType=activity.activity_type,
+            distanceMetres=activity.distance_metres,
+            durationSeconds=activity.duration_seconds,
+            ascentMetres=activity.ascent_metres,
+            averagePowerWatts=activity.average_power_watts,
+        )
+
+
+class ActivityPageResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    activities: list[ActivityResponse]
+    next_offset: int | None = Field(alias="nextOffset")
+    token_json: str = Field(alias="tokenJson", repr=False)
+
+    @classmethod
+    def from_result(cls, result: AdapterActivityPage) -> ActivityPageResponse:
+        return cls(
+            activities=[ActivityResponse.from_activity(item) for item in result.activities],
+            nextOffset=result.next_offset,
+            tokenJson=result.token_json,
+        )
+
+
+class ActivitySummaryResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    activity: ActivityResponse
+    token_json: str = Field(alias="tokenJson", repr=False)
+
+    @classmethod
+    def from_result(cls, result: ActivitySummaryResult) -> ActivitySummaryResponse:
+        return cls(
+            activity=ActivityResponse.from_activity(result.activity), tokenJson=result.token_json
         )
 
 
@@ -125,11 +192,52 @@ async def complete_mfa(
 
 @app.post("/v1/auth/validate", response_model=SessionResponse, response_model_exclude_none=True)
 async def validate(
-    request: ValidateRequest,
+    request: TokenRequest,
     service: Annotated[GarminService, Depends(get_service)],
 ) -> SessionResponse:
     result = await service.validate(request.token.get_secret_value())
     return SessionResponse.from_result(result)
+
+
+@app.post("/v1/activities/page", response_model=ActivityPageResponse)
+async def activities(
+    request: ActivityPageRequest,
+    service: Annotated[GarminService, Depends(get_service)],
+) -> ActivityPageResponse:
+    result = await service.activities(request.token.get_secret_value(), request.offset)
+    return ActivityPageResponse.from_result(result)
+
+
+@app.post("/v1/activities/{activity_id}/summary", response_model=ActivitySummaryResponse)
+async def activity_summary(
+    activity_id: str,
+    request: TokenRequest,
+    service: Annotated[GarminService, Depends(get_service)],
+) -> ActivitySummaryResponse:
+    result = await service.activity_summary(request.token.get_secret_value(), activity_id)
+    return ActivitySummaryResponse.from_result(result)
+
+
+@app.post("/v1/activities/{activity_id}/fit")
+async def download_fit(
+    activity_id: str,
+    request: TokenRequest,
+    service: Annotated[GarminService, Depends(get_service)],
+) -> Response:
+    result: FitDownloadResult = await service.download_fit(
+        request.token.get_secret_value(), activity_id
+    )
+    encoded_token = (
+        urlsafe_b64encode(result.token_json.encode("utf-8")).rstrip(b"=").decode("ascii")
+    )
+    return Response(
+        content=result.content,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{result.file_name}"',
+            "X-RouteTimer-Garmin-Token": encoded_token,
+        },
+    )
 
 
 @app.delete("/v1/auth/challenges", status_code=204)

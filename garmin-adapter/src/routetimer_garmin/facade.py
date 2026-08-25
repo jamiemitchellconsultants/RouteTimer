@@ -12,7 +12,7 @@ from garminconnect.exceptions import (
 )
 
 from routetimer_garmin.errors import AdapterError
-from routetimer_garmin.models import AdapterActivity
+from routetimer_garmin.models import AdapterActivity, AdapterActivityBatch
 
 
 TYPE_MAP: Final = {
@@ -92,6 +92,50 @@ class TokenSession:
             return CompletedLogin(user_id, display_name, self.dump_tokens())
         except Exception as error:
             raise _translate_error(error, "authentication") from None
+
+    def list_activities(self, offset: int, limit: int) -> AdapterActivityBatch:
+        try:
+            raw_activities = self._garmin.get_activities(offset, limit)
+        except Exception as error:
+            raise _translate_error(error, "authentication") from None
+        if not isinstance(raw_activities, list):
+            raise AdapterError("response-invalid", 502)
+        try:
+            if not all(isinstance(raw_activity, Mapping) for raw_activity in raw_activities):
+                raise AdapterError("response-invalid", 502)
+            activities = [
+                activity
+                for raw_activity in raw_activities
+                if (activity := _map_activity(raw_activity)) is not None
+            ]
+        except AdapterError:
+            raise
+        except Exception:
+            raise AdapterError("response-invalid", 502) from None
+        return AdapterActivityBatch(activities, len(raw_activities))
+
+    def get_activity(self, activity_id: str) -> AdapterActivity | None:
+        try:
+            raw_activity = self._garmin.get_activity(activity_id)
+        except Exception as error:
+            raise _translate_error(error, "authentication") from None
+        if not isinstance(raw_activity, Mapping):
+            raise AdapterError("response-invalid", 502)
+        try:
+            return _map_activity(raw_activity)
+        except Exception:
+            raise AdapterError("response-invalid", 502) from None
+
+    def download_original(self, activity_id: str) -> bytes:
+        try:
+            content = self._garmin.download_activity(
+                activity_id, Garmin.ActivityDownloadFormat.ORIGINAL
+            )
+        except Exception as error:
+            raise _translate_error(error, "authentication") from None
+        if not isinstance(content, bytes):
+            raise AdapterError("response-invalid", 502)
+        return content
 
 
 def _completed_login(garmin: Garmin, authentication_code: str) -> CompletedLogin:
