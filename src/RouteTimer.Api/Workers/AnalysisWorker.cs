@@ -73,6 +73,10 @@ public sealed class AnalysisWorker(IServiceScopeFactory scopeFactory, TimeProvid
             {
                 LogIfNoLongerOwned(await jobs.FailAsync(job.Id, workerId, permanent: true, exception.Code, exception.Message, timeProvider.GetUtcNow(), stoppingToken), job.Id);
             }
+            catch (OperationCanceledException) when (!stoppingToken.IsCancellationRequested)
+            {
+                logger.LogInformation("Job {JobId} stopped because this worker no longer owned it.", job.Id);
+            }
             catch (Exception exception)
             {
                 // Full detail (including stack trace) goes to the log only - the stored diagnostic must stay

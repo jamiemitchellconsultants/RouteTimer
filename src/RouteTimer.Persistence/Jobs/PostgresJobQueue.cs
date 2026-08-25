@@ -26,6 +26,17 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
     {
         cancellationToken.ThrowIfCancellationRequested();
 
+        var queued = JobState.Queued.ToString();
+        var existingQueued = await context.Jobs
+            .Where(job => job.Type == type.ToString() && job.SubjectId == subjectId && job.State == queued)
+            .OrderBy(job => job.CreatedAt)
+            .Select(job => (Guid?)job.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (existingQueued.HasValue)
+        {
+            return existingQueued.Value;
+        }
+
         var attempt = await TryInsertQueuedJobAsync(type, subjectId, cancellationToken);
         if (attempt.HasValue)
         {
@@ -136,6 +147,77 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
         return rows > 0;
     }
 
+    public async Task<bool> ReportProgressAsync(Guid jobId, string workerId, int progressPercent, string stage, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
+        JobProgressReporter.ValidateProgress(progressPercent, stage);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var running = JobState.Running.ToString();
+        var rows = await context.Jobs
+            .Where(entity =>
+                entity.Id == jobId &&
+                entity.State == running &&
+                entity.WorkerId == workerId &&
+                entity.ProgressPercent <= progressPercent)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(entity => entity.ProgressPercent, progressPercent)
+                    .SetProperty(entity => entity.ProgressStage, stage)
+                    .SetProperty(entity => entity.UpdatedAt, now),
+                cancellationToken);
+
+        if (rows > 0)
+        {
+            SynchronizeTrackedProgress(jobId, progressPercent, stage, now);
+        }
+
+        return rows > 0;
+    }
+
+    public async Task<bool> CancelAsync(Guid jobId, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        await using var transaction = context.Database.IsRelational()
+            ? await context.Database.BeginTransactionAsync(cancellationToken)
+            : null;
+
+        var queued = JobState.Queued.ToString();
+        var running = JobState.Running.ToString();
+        var job = await context.Jobs.SingleOrDefaultAsync(
+            entity => entity.Id == jobId && (entity.State == queued || entity.State == running),
+            cancellationToken);
+        if (job is null)
+        {
+            return false;
+        }
+
+        job.State = JobState.Cancelled.ToString();
+        job.ProgressStage = JobProgressStages.Cancelled;
+        job.UpdatedAt = now;
+        job.CompletedAt = now;
+        job.WorkerId = null;
+        job.LeaseExpiresAt = null;
+        job.DiagnosticCode = null;
+        job.DiagnosticMessage = null;
+
+        if (job.Type == JobType.PredictRoute.ToString())
+        {
+            var prediction = await context.Predictions.SingleOrDefaultAsync(entity => entity.Id == job.SubjectId, cancellationToken);
+            if (prediction is not null)
+            {
+                prediction.State = PredictionState.Cancelled.ToString();
+                prediction.Warnings = ["prediction-cancelled"];
+                prediction.CompletedAt = now;
+            }
+        }
+
+        await context.SaveChangesAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        return true;
+    }
+
     public async Task<bool> CompleteAsync(Guid jobId, string workerId, DateTimeOffset now, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
@@ -148,11 +230,13 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
                 setters => setters
                     .SetProperty(entity => entity.State, JobState.Succeeded.ToString())
                     .SetProperty(entity => entity.ProgressPercent, 100)
-                    .SetProperty(entity => entity.ProgressStage, "completed")
+                    .SetProperty(entity => entity.ProgressStage, JobProgressStages.Completed)
                     .SetProperty(entity => entity.UpdatedAt, now)
                     .SetProperty(entity => entity.CompletedAt, now)
                     .SetProperty(entity => entity.WorkerId, (string?)null)
-                    .SetProperty(entity => entity.LeaseExpiresAt, (DateTimeOffset?)null),
+                    .SetProperty(entity => entity.LeaseExpiresAt, (DateTimeOffset?)null)
+                    .SetProperty(entity => entity.DiagnosticCode, (string?)null)
+                    .SetProperty(entity => entity.DiagnosticMessage, (string?)null),
                 cancellationToken);
         return rows > 0;
     }
@@ -188,7 +272,7 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
         if (permanent || job.AttemptCount >= MaxAttempts)
         {
             job.State = JobState.Failed.ToString();
-            job.ProgressStage = "failed";
+            job.ProgressStage = JobProgressStages.Failed;
             job.WorkerId = null;
             job.LeaseExpiresAt = null;
             job.CompletedAt = now;
@@ -207,8 +291,7 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
         else
         {
             job.State = JobState.Queued.ToString();
-            job.ProgressPercent = 0;
-            job.ProgressStage = "queued";
+            job.ProgressStage = JobProgressStages.Queued;
             job.WorkerId = null;
             job.LeaseExpiresAt = null;
             job.CompletedAt = null;
@@ -249,4 +332,22 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
             job.LeaseExpiresAt,
             job.DiagnosticCode,
             job.DiagnosticMessage);
+
+    private void SynchronizeTrackedProgress(Guid jobId, int progressPercent, string stage, DateTimeOffset now)
+    {
+        var tracked = context.ChangeTracker
+            .Entries<AnalysisJobEntity>()
+            .FirstOrDefault(entry => entry.Entity.Id == jobId);
+        if (tracked is null)
+        {
+            return;
+        }
+
+        tracked.Entity.ProgressPercent = progressPercent;
+        tracked.Entity.ProgressStage = stage;
+        tracked.Entity.UpdatedAt = now;
+        tracked.Property(entity => entity.ProgressPercent).OriginalValue = progressPercent;
+        tracked.Property(entity => entity.ProgressStage).OriginalValue = stage;
+        tracked.Property(entity => entity.UpdatedAt).OriginalValue = now;
+    }
 }

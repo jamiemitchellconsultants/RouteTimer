@@ -215,6 +215,21 @@ public sealed class AnalysisWorkerTests
         Assert.Contains(jobTwo.Id, jobQueue.Completed);
     }
 
+    [Fact]
+    public async Task Treats_operation_canceled_from_lost_job_ownership_as_expected_cancellation()
+    {
+        var job = MakeJob(JobType.PredictRoute);
+        var jobQueue = new FakeJobQueue();
+        jobQueue.EnqueueClaim(job);
+        var handler = new FakeJobHandler(JobType.PredictRoute, new OperationCanceledException("lost ownership"));
+        var worker = CreateWorker(jobQueue, handler);
+
+        await worker.ProcessIterationAsync(CancellationToken.None);
+
+        Assert.Empty(jobQueue.Completed);
+        Assert.Empty(jobQueue.Failed);
+    }
+
     private static AnalysisJob MakeJob(JobType type) =>
         RunningJob(type, Guid.NewGuid(), "worker-1", DateTimeOffset.UtcNow.AddMinutes(5));
 
@@ -299,6 +314,10 @@ public sealed class AnalysisWorkerTests
                 OnRenew?.Invoke();
             }
         }
+
+        public Task<bool> ReportProgressAsync(Guid jobId, string workerId, int progressPercent, string stage, DateTimeOffset now, CancellationToken cancellationToken) => Task.FromResult(true);
+
+        public Task<bool> CancelAsync(Guid jobId, DateTimeOffset now, CancellationToken cancellationToken) => Task.FromResult(true);
 
         public Task<bool> CompleteAsync(Guid jobId, string workerId, DateTimeOffset now, CancellationToken cancellationToken)
         {

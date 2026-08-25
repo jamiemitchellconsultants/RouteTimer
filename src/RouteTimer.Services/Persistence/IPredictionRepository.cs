@@ -4,7 +4,7 @@ using RouteTimer.Domain.Profile;
 
 namespace RouteTimer.Services.Persistence;
 
-public enum PredictionState { Queued, Succeeded, Failed }
+public enum PredictionState { Queued, Succeeded, Failed, Cancelled }
 
 public sealed record PredictionAssumptions(string Surface, string Wind, string Weather, bool MovingOnly)
 {
