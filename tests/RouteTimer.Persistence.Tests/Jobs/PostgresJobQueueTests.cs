@@ -454,19 +454,20 @@ public sealed class PostgresJobQueueTests
 
     /// <summary>
     /// Reproduces, deterministically, the narrow race the code guards against: a racing insert fails
-    /// with a unique-index conflict against a job that is still Queued/Running at that exact instant,
-    /// but that job is claimed and completed (by a different connection) before the fallback lookup for
-    /// "who won" runs - so that lookup finds nothing. EnqueueIfNotPendingAsync must retry its insert in
-    /// that case rather than letting an InvalidOperationException from an empty sequence escape (which
-    /// would otherwise surface as a spurious failure of an unrelated, already-successful caller, e.g.
+    /// with a unique-index conflict against a job that is still Queued at that exact instant, but that
+    /// queued row becomes terminal (by a different connection) before the fallback lookup for "who won"
+    /// runs - so that lookup finds nothing. EnqueueIfNotPendingAsync must retry its insert in that case
+    /// rather than letting an InvalidOperationException from an empty sequence escape (which would
+    /// otherwise surface as a spurious failure of an unrelated, already-successful caller, e.g.
     /// ParseTrainingJobHandler after it already saved a parsed activity).
     ///
     /// Postgres only checks the unique constraint against rows committed at insert time, so genuinely
-    /// reproducing "conflict, then the row disappears before the next statement" requires the completion
-    /// to happen inside the single await gap between the racing insert's failure and its own fallback
-    /// SELECT - not just "at some point during the test". A SaveChangesInterceptor gives us that precise
-    /// hook: EF Core invokes SaveChangesFailedAsync synchronously, while still inside the failing
-    /// SaveChangesAsync call, before the exception is handed back to our code's catch block.
+    /// reproducing "conflict, then the row leaves Queued before the next statement" requires the
+    /// terminal transition to happen inside the single await gap between the racing insert's failure and
+    /// its own fallback SELECT - not just "at some point during the test". A SaveChangesInterceptor
+    /// gives us that precise hook: EF Core invokes SaveChangesFailedAsync synchronously, while still
+    /// inside the failing SaveChangesAsync call, before the exception is handed back to our code's catch
+    /// block.
     /// </summary>
     [Fact]
     public async Task EnqueueIfNotPendingAsync_retries_once_when_the_conflicting_job_becomes_terminal_before_the_fallback_lookup_runs()
@@ -481,13 +482,20 @@ public sealed class PostgresJobQueueTests
         await using var completerContext = CreateContext(database);
         var completerQueue = new PostgresJobQueue(completerContext);
         var conflictingId = await completerQueue.EnqueueAsync(JobType.BuildModel, subjectId, CancellationToken.None);
-        await completerQueue.ClaimAsync("worker-a", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5), CancellationToken.None);
 
         // Fires from inside the racing context's own failing SaveChangesAsync call - i.e. strictly
-        // between its failed insert and its fallback SELECT - and completes the conflicting job there,
-        // via a wholly separate connection, so the fallback SELECT is guaranteed to find nothing active.
+        // between its failed insert and its fallback SELECT - and moves the conflicting queued job to a
+        // terminal state there, via a wholly separate connection, so the fallback SELECT is guaranteed
+        // to find nothing still queued.
         var interceptor = new CompleteJobOnSaveFailureInterceptor(
-            () => completerQueue.CompleteAsync(conflictingId, "worker-a", CancellationToken.None));
+            () => completerContext.Jobs
+                .Where(job => job.Id == conflictingId)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(job => job.State, JobState.Succeeded.ToString())
+                    .SetProperty(job => job.ProgressPercent, 100)
+                    .SetProperty(job => job.ProgressStage, "completed")
+                    .SetProperty(job => job.UpdatedAt, DateTimeOffset.UtcNow)
+                    .SetProperty(job => job.CompletedAt, DateTimeOffset.UtcNow)));
         var racingOptions = new DbContextOptionsBuilder<RouteTimerDbContext>()
             .UseNpgsql(database.GetConnectionString())
             .AddInterceptors(interceptor)

@@ -248,6 +248,83 @@ public sealed class PostgresMigrationTests
         Assert.Contains("legacy-predictions-not-supported", exception.ToString());
     }
 
+    // Break caught: the Step 9 presentation-data migration must backfill legacy activity/job rows and replace the active-job partial index without losing queue semantics.
+    [Fact]
+    public async Task Presentation_data_migration_backfills_legacy_rows_and_splits_the_active_job_index()
+    {
+        await using var database = new PostgreSqlBuilder("postgres:16-alpine").Build();
+        await database.StartAsync();
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseNpgsql(database.GetConnectionString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync("20260824200000_AddSequentialSimulationModel");
+
+        var uploadId = Guid.NewGuid();
+        var activityId = Guid.NewGuid();
+        var jobId = Guid.NewGuid();
+        var subjectId = Guid.NewGuid();
+        var createdAt = new DateTimeOffset(2026, 8, 24, 20, 15, 0, TimeSpan.Zero);
+        await context.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO stored_uploads ("Id", "Kind", "FileName", "Content", "Sha256", "CreatedAt")
+            VALUES ({uploadId}, 'fit', 'legacy-ride.fit', decode('01020304', 'hex'), decode('00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff', 'hex'), {createdAt});
+
+            INSERT INTO training_activities
+                ("Id", "UploadId", "Name", "MovingDurationSeconds", "Eligibility", "PositionCoverage", "ElevationCoverage",
+                 "SpeedCoverage", "PowerCoverage", "ExclusionCounts", "ReasonCodes", "CreatedAt")
+            VALUES
+                ({activityId}, {uploadId}, 'Legacy ride', 60, 'Eligible', 1, 1, 1, 1, jsonb_build_object(), jsonb_build_array(), {createdAt});
+
+            INSERT INTO activity_samples
+                ("ActivityId", "Sequence", "Timestamp", "MovingElapsedSeconds", "Latitude", "Longitude", "ElevationMetres",
+                 "SpeedMetresPerSecond", "PowerWatts", "HeartRate", "Cadence", "CrossesDiscontinuity", "Gradient", "CurvaturePerMetre")
+            VALUES
+                ({activityId}, 0, {createdAt}, 0, 51, -2, 100, 10, 180, 140, 85, FALSE, 0, 0),
+                ({activityId}, 1, {createdAt.AddMinutes(1)}, 60, 51.0001, -2.0001, 102, 11, 182, 141, 86, FALSE, .01, .001);
+
+            INSERT INTO analysis_jobs
+                ("Id", "Type", "SubjectId", "State", "AttemptCount", "WorkerId", "LeaseExpiresAt", "CreatedAt", "DiagnosticCode", "DiagnosticMessage")
+            VALUES
+                ({jobId}, 'BuildModel', {subjectId}, 'Queued', 0, NULL, NULL, {createdAt}, NULL, NULL);
+            """);
+
+        await migrator.MigrateAsync();
+        context.ChangeTracker.Clear();
+
+        var activity = await new TrainingActivityRepository(context).GetAsync(activityId, CancellationToken.None);
+        var job = await new JobRepository(context).GetAsync(jobId, CancellationToken.None);
+
+        Assert.NotNull(activity);
+        Assert.Equal("legacy-ride.fit", activity!.Metadata.SourceFileName);
+        Assert.Equal(createdAt, activity.Metadata.StartedAt);
+        Assert.Equal(createdAt.AddMinutes(1), activity.Metadata.EndedAt);
+        Assert.Null(activity.Metadata.DeviceManufacturer);
+        Assert.Null(activity.Metadata.DeviceProduct);
+        Assert.Null(activity.Metadata.DistanceMetres);
+        Assert.Null(activity.Metadata.AscentMetres);
+
+        Assert.NotNull(job);
+        Assert.Equal(0, job!.ProgressPercent);
+        Assert.Equal("queued", job.ProgressStage);
+        Assert.Equal(createdAt, job.CreatedAt);
+        Assert.Null(job.StartedAt);
+        Assert.Equal(job.CreatedAt, job.UpdatedAt);
+        Assert.Null(job.CompletedAt);
+
+        Assert.Equal(
+            new[] { "IX_analysis_jobs_queued_type_subject", "IX_analysis_jobs_running_type_subject" },
+            await context.Database.SqlQueryRaw<string>(
+                """
+                SELECT indexname AS "Value"
+                FROM pg_indexes
+                WHERE schemaname = 'public'
+                  AND tablename = 'analysis_jobs'
+                  AND indexname IN ('IX_analysis_jobs_queued_type_subject', 'IX_analysis_jobs_running_type_subject')
+                ORDER BY indexname
+                """).ToListAsync());
+        Assert.Null(await ScalarAsync<string?>(context, "SELECT to_regclass('\"IX_analysis_jobs_active_type_subject\"')::text"));
+        Assert.Equal(1L, await ScalarAsync<long>(context, "SELECT COUNT(*) FROM pg_constraint WHERE conname = 'CK_analysis_jobs_progress'"));
+    }
+
     private static async Task<T> ScalarAsync<T>(RouteTimerDbContext context, string sql)
     {
         await using var command = context.Database.GetDbConnection().CreateCommand();

@@ -18,6 +18,13 @@ public sealed class TrainingActivityRepository(RouteTimerDbContext context) : IT
             Id = id,
             UploadId = uploadId,
             Name = activity.Name,
+            SourceFileName = activity.Metadata.SourceFileName,
+            StartedAt = activity.Metadata.StartedAt,
+            EndedAt = activity.Metadata.EndedAt,
+            DeviceManufacturer = activity.Metadata.DeviceManufacturer,
+            DeviceProduct = activity.Metadata.DeviceProduct,
+            DistanceMetres = activity.Metadata.DistanceMetres,
+            AscentMetres = activity.Metadata.AscentMetres,
             MovingDurationSeconds = activity.MovingDuration.TotalSeconds,
             Eligibility = activity.Quality.Eligibility.ToString(),
             PositionCoverage = activity.Quality.PositionCoverage,
@@ -98,16 +105,16 @@ public sealed class TrainingActivityRepository(RouteTimerDbContext context) : IT
             entity.ExclusionCounts,
             entity.ReasonCodes);
 
-        var startedAt = samples.FirstOrDefault()?.Timestamp ?? entity.CreatedAt;
-        var endedAt = samples.LastOrDefault()?.Timestamp ?? entity.CreatedAt;
+        var startedAt = entity.StartedAt ?? samples.FirstOrDefault()?.Timestamp ?? entity.CreatedAt;
+        var endedAt = entity.EndedAt ?? samples.LastOrDefault()?.Timestamp ?? entity.CreatedAt;
         var metadata = new TrainingActivityMetadata(
-            entity.Name,
+            string.IsNullOrWhiteSpace(entity.SourceFileName) ? entity.Name : entity.SourceFileName,
             startedAt,
             endedAt,
-            null,
-            null,
-            null,
-            null);
+            entity.DeviceManufacturer,
+            entity.DeviceProduct,
+            entity.DistanceMetres,
+            entity.AscentMetres);
 
         return new CleanedActivity(entity.Name, samples, TimeSpan.FromSeconds(entity.MovingDurationSeconds), quality, metadata);
     }

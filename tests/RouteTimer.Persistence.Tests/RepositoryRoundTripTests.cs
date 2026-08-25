@@ -4,6 +4,7 @@ using RouteTimer.Persistence.Entities;
 using RouteTimer.Persistence.Repositories;
 using RouteTimer.Services.Persistence;
 using RouteTimer.Domain.Activities;
+using RouteTimer.Domain.Jobs;
 using RouteTimer.Domain.Models;
 using RouteTimer.Domain.Physics;
 using RouteTimer.Domain.Profile;
@@ -150,17 +151,77 @@ public sealed class RepositoryRoundTripTests
         Assert.Equal(0.66, loaded.Quality.PowerCoverage);
         Assert.Equal(new Dictionary<string, int> { ["gap"] = 1, ["pause"] = 2 }, loaded.Quality.ExclusionCounts);
         Assert.Equal(new[] { "low-power-coverage", "elevation-gap" }, loaded.Quality.ReasonCodes);
-        Assert.Equal("Morning Ride", loaded.Metadata.SourceFileName);
+        Assert.Equal("morning-ride.fit", loaded.Metadata.SourceFileName);
         Assert.Equal(start, loaded.Metadata.StartedAt);
         Assert.Equal(start.AddSeconds(10), loaded.Metadata.EndedAt);
-        Assert.Null(loaded.Metadata.DeviceManufacturer);
-        Assert.Null(loaded.Metadata.DeviceProduct);
-        Assert.Null(loaded.Metadata.DistanceMetres);
-        Assert.Null(loaded.Metadata.AscentMetres);
+        Assert.Equal("Garmin", loaded.Metadata.DeviceManufacturer);
+        Assert.Equal("Edge", loaded.Metadata.DeviceProduct);
+        Assert.Equal(10_000, loaded.Metadata.DistanceMetres);
+        Assert.Equal(120, loaded.Metadata.AscentMetres);
         Assert.Null(missing);
 
         var storedActivity = await context.TrainingActivities.SingleAsync();
         Assert.Equal(uploadId, storedActivity.UploadId);
+        Assert.Equal("morning-ride.fit", storedActivity.SourceFileName);
+        Assert.Equal(start, storedActivity.StartedAt);
+        Assert.Equal(start.AddSeconds(10), storedActivity.EndedAt);
+        Assert.Equal("Garmin", storedActivity.DeviceManufacturer);
+        Assert.Equal("Edge", storedActivity.DeviceProduct);
+        Assert.Equal(10_000, storedActivity.DistanceMetres);
+        Assert.Equal(120, storedActivity.AscentMetres);
+    }
+
+    [Fact]
+    public async Task Get_job_round_trips_the_final_lifecycle_shape()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        var repository = new JobRepository(context);
+        var createdAt = new DateTimeOffset(2026, 8, 25, 9, 0, 0, TimeSpan.Zero);
+        var startedAt = createdAt.AddMinutes(2);
+        var updatedAt = createdAt.AddMinutes(7);
+        var completedAt = createdAt.AddMinutes(11);
+        var entity = new AnalysisJobEntity
+        {
+            Id = Guid.NewGuid(),
+            Type = JobType.PredictRoute.ToString(),
+            SubjectId = Guid.NewGuid(),
+            State = JobState.Cancelled.ToString(),
+            ProgressPercent = 55,
+            ProgressStage = "routing",
+            AttemptCount = 2,
+            CreatedAt = createdAt,
+            StartedAt = startedAt,
+            UpdatedAt = updatedAt,
+            CompletedAt = completedAt,
+            WorkerId = "worker-9",
+            LeaseExpiresAt = createdAt.AddMinutes(10),
+            DiagnosticCode = "cancelled",
+            DiagnosticMessage = "Cancelled by operator."
+        };
+        context.Jobs.Add(entity);
+        await context.SaveChangesAsync();
+
+        var loaded = await repository.GetAsync(entity.Id, CancellationToken.None);
+
+        Assert.Equal(
+            new AnalysisJob(
+                entity.Id,
+                JobType.PredictRoute,
+                entity.SubjectId,
+                JobState.Cancelled,
+                55,
+                "routing",
+                2,
+                createdAt,
+                startedAt,
+                updatedAt,
+                completedAt,
+                "worker-9",
+                createdAt.AddMinutes(10),
+                "cancelled",
+                "Cancelled by operator."),
+            loaded);
     }
 
     // Break caught: persistence drops enriched training curvature, so later descent learning sees every sample as straight.

@@ -216,7 +216,26 @@ public sealed class AnalysisWorkerTests
     }
 
     private static AnalysisJob MakeJob(JobType type) =>
-        new(Guid.NewGuid(), type, Guid.NewGuid(), JobState.Running, 1, "worker-1", DateTimeOffset.UtcNow.AddMinutes(5), DateTimeOffset.UtcNow);
+        RunningJob(type, Guid.NewGuid(), "worker-1", DateTimeOffset.UtcNow.AddMinutes(5));
+
+    private static AnalysisJob RunningJob(JobType type, Guid subjectId, string workerId, DateTimeOffset? leaseExpiresAt)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new AnalysisJob(
+            Guid.NewGuid(),
+            type,
+            subjectId,
+            JobState.Running,
+            0,
+            "running",
+            1,
+            now,
+            now,
+            now,
+            null,
+            workerId,
+            leaseExpiresAt);
+    }
 
     private static AnalysisWorker CreateWorker(IJobQueue jobQueue, params IJobHandler[] handlers) =>
         CreateWorker(jobQueue, new FakeTimeProvider(), handlers);

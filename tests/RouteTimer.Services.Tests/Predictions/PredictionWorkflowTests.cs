@@ -123,7 +123,7 @@ public sealed class PredictionWorkflowTests
         };
         var predictor = new CapturingPredictor();
         var handler = new PredictionJobHandler(predictions, models, new GpxRouteParser(), new RouteProcessor(RouteProcessingOptions.Default), predictor);
-        var job = new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 1, "worker", DateTimeOffset.UtcNow.AddMinutes(1), DateTimeOffset.UtcNow);
+        var job = RunningJob(predictionId, leaseExpiresAt: DateTimeOffset.UtcNow.AddMinutes(1));
 
         await handler.HandleAsync(job, CancellationToken.None);
 
@@ -145,7 +145,7 @@ public sealed class PredictionWorkflowTests
                 new StoredUpload(Guid.NewGuid(), "route.gpx", "gpx", GpxBytes(), new byte[32], DateTimeOffset.UtcNow), model.Id, new RiderProfile(75, 10))
         };
         var handler = new PredictionJobHandler(predictions, models, new GpxRouteParser(), new RouteProcessor(RouteProcessingOptions.Default), new NegativePredictor());
-        var job = new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 1, "worker", DateTimeOffset.UtcNow.AddMinutes(1), DateTimeOffset.UtcNow);
+        var job = RunningJob(predictionId, leaseExpiresAt: DateTimeOffset.UtcNow.AddMinutes(1));
 
         var exception = await Assert.ThrowsAsync<PredictionJobException>(() => handler.HandleAsync(job, CancellationToken.None));
 
@@ -170,7 +170,7 @@ public sealed class PredictionWorkflowTests
         var handler = new PredictionJobHandler(predictions, models, new GpxRouteParser(), new RouteProcessor(RouteProcessingOptions.Default), new CapturingPredictor());
 
         var exception = await Assert.ThrowsAsync<PredictionJobException>(() => handler.HandleAsync(
-            new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 1, "worker", null, DateTimeOffset.UtcNow), CancellationToken.None));
+            RunningJob(predictionId), CancellationToken.None));
 
         Assert.Equal("invalid-rider-model", exception.Code);
         Assert.Null(predictions.Published);
@@ -194,7 +194,7 @@ public sealed class PredictionWorkflowTests
             new CapturingPredictor());
 
         var actual = await Assert.ThrowsAsync<InvalidOperationException>(() => handler.HandleAsync(
-            new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 1, "worker", null, DateTimeOffset.UtcNow), CancellationToken.None));
+            RunningJob(predictionId), CancellationToken.None));
 
         Assert.Same(expected, actual);
         Assert.Null(predictions.Published);
@@ -218,7 +218,7 @@ public sealed class PredictionWorkflowTests
         };
         var handler = new PredictionJobHandler(predictions, models, new GpxRouteParser(), new RouteProcessor(RouteProcessingOptions.Default), new CapturingPredictor());
 
-        await handler.HandleAsync(new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 1, "worker", DateTimeOffset.UtcNow.AddMinutes(1), DateTimeOffset.UtcNow), CancellationToken.None);
+        await handler.HandleAsync(RunningJob(predictionId, leaseExpiresAt: DateTimeOffset.UtcNow.AddMinutes(1)), CancellationToken.None);
 
         Assert.Equal(expectedConfidence, predictions.Published!.Confidence);
         Assert.Contains(expectedWarning, predictions.Published.Warnings);
@@ -245,7 +245,7 @@ public sealed class PredictionWorkflowTests
         var handler = new PredictionJobHandler(predictions, new FixedModelRepository(null) { ById = { [model.Id] = model } }, new GpxRouteParser(),
             new RouteProcessor(RouteProcessingOptions.Default), new WarningPredictor(predictorWarnings));
 
-        await handler.HandleAsync(new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 1, "worker", null, DateTimeOffset.UtcNow), CancellationToken.None);
+        await handler.HandleAsync(RunningJob(predictionId), CancellationToken.None);
 
         Assert.Equal(
             ["power-model-extrapolation", "conservative-descent-limits", "uncalibrated-coefficients", "model-validation-failed"],
@@ -267,7 +267,7 @@ public sealed class PredictionWorkflowTests
             new RouteProcessor(RouteProcessingOptions.Default), new CalculationFailurePredictor());
 
         var exception = await Assert.ThrowsAsync<PredictionJobException>(() => handler.HandleAsync(
-            new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 1, "worker", null, DateTimeOffset.UtcNow), CancellationToken.None));
+            RunningJob(predictionId), CancellationToken.None));
 
         Assert.Equal("invalid-prediction-result", exception.Code);
         Assert.Null(predictions.Published);
@@ -298,7 +298,7 @@ public sealed class PredictionWorkflowTests
             new RouteProcessor(RouteProcessingOptions.Default), new MalformedStructurePredictor(kind));
 
         var exception = await Assert.ThrowsAsync<PredictionJobException>(() => handler.HandleAsync(
-            new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 1, "worker", null, DateTimeOffset.UtcNow), CancellationToken.None));
+            RunningJob(predictionId), CancellationToken.None));
 
         Assert.Equal("invalid-prediction-result", exception.Code);
         Assert.Null(predictions.Published);
@@ -322,7 +322,7 @@ public sealed class PredictionWorkflowTests
             new RouteProcessor(RouteProcessingOptions.Default), new InvalidResultPredictor(kind));
 
         var exception = await Assert.ThrowsAsync<PredictionJobException>(() => handler.HandleAsync(
-            new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 1, "worker", DateTimeOffset.UtcNow.AddMinutes(1), DateTimeOffset.UtcNow), CancellationToken.None));
+            RunningJob(predictionId, leaseExpiresAt: DateTimeOffset.UtcNow.AddMinutes(1)), CancellationToken.None));
 
         Assert.Equal(expectedCode, exception.Code);
         Assert.Null(predictions.Failure);
@@ -342,7 +342,7 @@ public sealed class PredictionWorkflowTests
         var handler = new PredictionJobHandler(predictions, new FixedModelRepository(null) { ById = { [model.Id] = model } }, new GpxRouteParser(),
             new RouteProcessor(RouteProcessingOptions.Default), new UnequalDurationPredictor());
 
-        await handler.HandleAsync(new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 1, "worker", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow), CancellationToken.None);
+        await handler.HandleAsync(RunningJob(predictionId, leaseExpiresAt: DateTimeOffset.UtcNow), CancellationToken.None);
 
         Assert.Equal(166.66666666666666, predictions.Published!.AveragePowerWatts, 10);
     }
@@ -359,9 +359,9 @@ public sealed class PredictionWorkflowTests
         };
         var handler = new PredictionJobHandler(predictions, new FixedModelRepository(null) { ById = { [model.Id] = model } }, new GpxRouteParser(), new RouteProcessor(RouteProcessingOptions.Default), new ThrowingPredictor());
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => handler.HandleAsync(new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 2, "worker", null, DateTimeOffset.UtcNow), CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => handler.HandleAsync(RunningJob(predictionId, attemptCount: 2), CancellationToken.None));
         Assert.Null(predictions.Failure);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => handler.HandleAsync(new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 3, "worker", null, DateTimeOffset.UtcNow), CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => handler.HandleAsync(RunningJob(predictionId, attemptCount: 3), CancellationToken.None));
         Assert.Null(predictions.Failure);
     }
 
@@ -385,13 +385,36 @@ public sealed class PredictionWorkflowTests
             new RouteProcessor(RouteProcessingOptions.Default), predictor);
 
         var actual = await Assert.ThrowsAsync<OverflowException>(() => handler.HandleAsync(
-            new AnalysisJob(Guid.NewGuid(), JobType.PredictRoute, predictionId, JobState.Running, 1, "worker", null, DateTimeOffset.UtcNow), CancellationToken.None));
+            RunningJob(predictionId), CancellationToken.None));
 
         Assert.Same(overflow, actual);
         Assert.Null(predictions.Published);
     }
 
     private static PredictionUpload Upload() => new("route.gpx", new MemoryStream(GpxBytes()));
+
+    private static AnalysisJob RunningJob(
+        Guid predictionId,
+        int attemptCount = 1,
+        string workerId = "worker",
+        DateTimeOffset? leaseExpiresAt = null)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new AnalysisJob(
+            Guid.NewGuid(),
+            JobType.PredictRoute,
+            predictionId,
+            JobState.Running,
+            0,
+            "running",
+            attemptCount,
+            now,
+            now,
+            now,
+            null,
+            workerId,
+            leaseExpiresAt);
+    }
 
     private static byte[] GpxBytes() => """
         <gpx version="1.1"><trk><trkseg>

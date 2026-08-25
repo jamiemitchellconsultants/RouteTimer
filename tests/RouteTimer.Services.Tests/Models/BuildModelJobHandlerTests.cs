@@ -216,7 +216,26 @@ public sealed class BuildModelJobHandlerTests
             models ?? new FakeRiderModelRepository());
 
     private static AnalysisJob MakeJob() =>
-        new(Guid.NewGuid(), JobType.BuildModel, ModelSubject.Id, JobState.Running, 1, "worker-1", DateTimeOffset.UtcNow.AddMinutes(5), DateTimeOffset.UtcNow);
+        RunningJob(JobType.BuildModel, ModelSubject.Id, "worker-1", DateTimeOffset.UtcNow.AddMinutes(5));
+
+    private static AnalysisJob RunningJob(JobType type, Guid subjectId, string workerId, DateTimeOffset? leaseExpiresAt)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new AnalysisJob(
+            Guid.NewGuid(),
+            type,
+            subjectId,
+            JobState.Running,
+            0,
+            "running",
+            1,
+            now,
+            now,
+            now,
+            null,
+            workerId,
+            leaseExpiresAt);
+    }
 
     private static IReadOnlyList<CleanedActivity> ThreeEligibleActivities() =>
         [EligibleActivity("one"), EligibleActivity("two"), EligibleActivity("three")];

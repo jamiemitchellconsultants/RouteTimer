@@ -68,7 +68,10 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
             Type = "PredictRoute",
             SubjectId = prediction.Id,
             State = "Queued",
-            CreatedAt = creation.CreatedAt
+            ProgressPercent = 0,
+            ProgressStage = "queued",
+            CreatedAt = creation.CreatedAt,
+            UpdatedAt = creation.CreatedAt
         };
         context.Predictions.Add(prediction);
         context.Jobs.Add(job);

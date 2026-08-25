@@ -16,7 +16,8 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
     {
         cancellationToken.ThrowIfCancellationRequested();
         var id = Guid.NewGuid();
-        context.Jobs.Add(new AnalysisJobEntity { Id = id, Type = type.ToString(), SubjectId = subjectId, State = JobState.Queued.ToString(), CreatedAt = DateTimeOffset.UtcNow });
+        var createdAt = DateTimeOffset.UtcNow;
+        context.Jobs.Add(CreateQueuedJob(id, type, subjectId, createdAt));
         await context.SaveChangesAsync(cancellationToken);
         return id;
     }
@@ -25,33 +26,33 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var attempt = await TryInsertActiveJobAsync(type, subjectId, cancellationToken);
+        var attempt = await TryInsertQueuedJobAsync(type, subjectId, cancellationToken);
         if (attempt.HasValue)
         {
             return attempt.Value;
         }
 
-        // The row that won the original race left the Queued/Running set (e.g. claimed and completed)
-        // in the narrow window between our failed insert and the fallback lookup above, so that lookup
-        // found nothing. The conflict that blocked us no longer exists, so retry the insert once more -
-        // it should now succeed cleanly. A second conflict here is left to propagate unhandled; this
-        // isn't a scenario that warrants unbounded retries.
+        // The queued row that won the original race left the queued set (e.g. it was claimed or
+        // completed) in the narrow window between our failed insert and the fallback lookup above, so
+        // that lookup found nothing. The conflict that blocked us no longer exists, so retry the insert
+        // once more - it should now succeed cleanly. A second conflict here is left to propagate
+        // unhandled; this isn't a scenario that warrants unbounded retries.
         var id = Guid.NewGuid();
-        context.Jobs.Add(new AnalysisJobEntity { Id = id, Type = type.ToString(), SubjectId = subjectId, State = JobState.Queued.ToString(), CreatedAt = DateTimeOffset.UtcNow });
+        context.Jobs.Add(CreateQueuedJob(id, type, subjectId, DateTimeOffset.UtcNow));
         await context.SaveChangesAsync(cancellationToken);
         return id;
     }
 
     /// <summary>
     /// Attempts a single insert of a new Queued job. On success, returns its id. On a unique-index
-    /// conflict (another caller already has an active job for this (type, subjectId)), looks up that
-    /// job and returns its id - unless it has already left the Queued/Running set by the time the
+    /// conflict (another caller already has a queued job for this (type, subjectId)), looks up that
+    /// queued row and returns its id - unless it has already left the queued state by the time the
     /// lookup runs, in which case this returns null so the caller can retry the insert.
     /// </summary>
-    private async Task<Guid?> TryInsertActiveJobAsync(JobType type, Guid subjectId, CancellationToken cancellationToken)
+    private async Task<Guid?> TryInsertQueuedJobAsync(JobType type, Guid subjectId, CancellationToken cancellationToken)
     {
         var id = Guid.NewGuid();
-        var entity = new AnalysisJobEntity { Id = id, Type = type.ToString(), SubjectId = subjectId, State = JobState.Queued.ToString(), CreatedAt = DateTimeOffset.UtcNow };
+        var entity = CreateQueuedJob(id, type, subjectId, DateTimeOffset.UtcNow);
         context.Jobs.Add(entity);
 
         try
@@ -61,15 +62,14 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
         }
         catch (DbUpdateException exception) when (exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
         {
-            // A concurrent caller won the race to insert the active (Type, SubjectId) row that the
+            // A concurrent caller won the race to insert the queued (Type, SubjectId) row that the
             // partial unique index guards. Detach our failed entity so it doesn't linger in the change
-            // tracker, then look up whichever job actually won and return its id instead.
+            // tracker, then look up whichever queued job actually won and return its id instead.
             context.Entry(entity).State = EntityState.Detached;
 
             var queued = JobState.Queued.ToString();
-            var running = JobState.Running.ToString();
             var existing = await context.Jobs
-                .Where(job => job.Type == entity.Type && job.SubjectId == subjectId && (job.State == queued || job.State == running))
+                .Where(job => job.Type == entity.Type && job.SubjectId == subjectId && job.State == queued)
                 .OrderBy(job => job.CreatedAt)
                 .FirstOrDefaultAsync(cancellationToken);
             return existing?.Id;
@@ -107,9 +107,13 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
         var candidateId = candidateIds[0];
         var job = await context.Jobs.SingleAsync(entity => entity.Id == candidateId, cancellationToken);
         job.State = JobState.Running.ToString();
+        job.ProgressStage = "running";
         job.WorkerId = workerId;
         job.LeaseExpiresAt = now.Add(leaseDuration);
         job.AttemptCount++;
+        job.StartedAt ??= now;
+        job.UpdatedAt = now;
+        job.CompletedAt = null;
         await context.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
@@ -124,7 +128,11 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
         var running = JobState.Running.ToString();
         var rows = await context.Jobs
             .Where(entity => entity.Id == jobId && entity.State == running && entity.WorkerId == workerId)
-            .ExecuteUpdateAsync(setters => setters.SetProperty(entity => entity.LeaseExpiresAt, now.Add(leaseDuration)), cancellationToken);
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(entity => entity.LeaseExpiresAt, now.Add(leaseDuration))
+                    .SetProperty(entity => entity.UpdatedAt, now),
+                cancellationToken);
         return rows > 0;
     }
 
@@ -134,10 +142,19 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
         cancellationToken.ThrowIfCancellationRequested();
 
         var running = JobState.Running.ToString();
+        var completedAt = DateTimeOffset.UtcNow;
         var rows = await context.Jobs
             .Where(entity => entity.Id == jobId && entity.State == running && entity.WorkerId == workerId)
-            .ExecuteUpdateAsync(setters => setters.SetProperty(entity => entity.State, JobState.Succeeded.ToString())
-                .SetProperty(entity => entity.WorkerId, (string?)null).SetProperty(entity => entity.LeaseExpiresAt, (DateTimeOffset?)null), cancellationToken);
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(entity => entity.State, JobState.Succeeded.ToString())
+                    .SetProperty(entity => entity.ProgressPercent, 100)
+                    .SetProperty(entity => entity.ProgressStage, "completed")
+                    .SetProperty(entity => entity.UpdatedAt, completedAt)
+                    .SetProperty(entity => entity.CompletedAt, completedAt)
+                    .SetProperty(entity => entity.WorkerId, (string?)null)
+                    .SetProperty(entity => entity.LeaseExpiresAt, (DateTimeOffset?)null),
+                cancellationToken);
         return rows > 0;
     }
 
@@ -165,14 +182,18 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
             return false;
         }
 
+        var updatedAt = DateTimeOffset.UtcNow;
         job.DiagnosticCode = diagnosticCode;
         job.DiagnosticMessage = diagnosticMessage;
+        job.UpdatedAt = updatedAt;
 
         if (permanent || job.AttemptCount >= MaxAttempts)
         {
             job.State = JobState.Failed.ToString();
+            job.ProgressStage = "failed";
             job.WorkerId = null;
             job.LeaseExpiresAt = null;
+            job.CompletedAt = updatedAt;
 
             if (job.Type == JobType.PredictRoute.ToString())
             {
@@ -188,8 +209,11 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
         else
         {
             job.State = JobState.Queued.ToString();
+            job.ProgressPercent = 0;
+            job.ProgressStage = "queued";
             job.WorkerId = null;
             job.LeaseExpiresAt = null;
+            job.CompletedAt = null;
         }
 
         await context.SaveChangesAsync(cancellationToken);
@@ -197,6 +221,34 @@ public sealed class PostgresJobQueue(RouteTimerDbContext context) : IJobQueue
         return true;
     }
 
+    private static AnalysisJobEntity CreateQueuedJob(Guid id, JobType type, Guid subjectId, DateTimeOffset createdAt) =>
+        new()
+        {
+            Id = id,
+            Type = type.ToString(),
+            SubjectId = subjectId,
+            State = JobState.Queued.ToString(),
+            ProgressPercent = 0,
+            ProgressStage = "queued",
+            CreatedAt = createdAt,
+            UpdatedAt = createdAt
+        };
+
     private static AnalysisJob ToDomain(AnalysisJobEntity job) =>
-        new(job.Id, Enum.Parse<JobType>(job.Type), job.SubjectId, Enum.Parse<JobState>(job.State), job.AttemptCount, job.WorkerId, job.LeaseExpiresAt, job.CreatedAt, job.DiagnosticCode, job.DiagnosticMessage);
+        new(
+            job.Id,
+            Enum.Parse<JobType>(job.Type),
+            job.SubjectId,
+            Enum.Parse<JobState>(job.State),
+            job.ProgressPercent,
+            job.ProgressStage,
+            job.AttemptCount,
+            job.CreatedAt,
+            job.StartedAt,
+            job.UpdatedAt,
+            job.CompletedAt,
+            job.WorkerId,
+            job.LeaseExpiresAt,
+            job.DiagnosticCode,
+            job.DiagnosticMessage);
 }

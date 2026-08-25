@@ -44,7 +44,7 @@ public sealed class ParseTrainingJobHandlerTests
         var activities = new FakeTrainingActivityRepository();
         var jobs = new FakeJobQueue();
         var handler = new ParseTrainingJobHandler(uploads, parser, cleaner, activities, jobs);
-        var job = new AnalysisJob(Guid.NewGuid(), JobType.ParseTraining, uploadId, JobState.Running, 1, "worker-1", DateTimeOffset.UtcNow.AddMinutes(5), DateTimeOffset.UtcNow);
+        var job = RunningJob(uploadId);
 
         await handler.HandleAsync(job, CancellationToken.None);
 
@@ -64,7 +64,7 @@ public sealed class ParseTrainingJobHandlerTests
         var activities = new FakeTrainingActivityRepository();
         var jobs = new FakeJobQueue();
         var handler = new ParseTrainingJobHandler(uploads, parser, cleaner, activities, jobs);
-        var job = new AnalysisJob(Guid.NewGuid(), JobType.ParseTraining, uploadId, JobState.Running, 1, "worker-1", DateTimeOffset.UtcNow.AddMinutes(5), DateTimeOffset.UtcNow);
+        var job = RunningJob(uploadId);
 
         await handler.HandleAsync(job, CancellationToken.None);
 
@@ -78,7 +78,7 @@ public sealed class ParseTrainingJobHandlerTests
     {
         var uploads = new FakeStoredUploadRepository { Upload = null };
         var handler = new ParseTrainingJobHandler(uploads, new FakeFitActivityParser(), new FakeTrainingCleaner(), new FakeTrainingActivityRepository(), new FakeJobQueue());
-        var job = new AnalysisJob(Guid.NewGuid(), JobType.ParseTraining, Guid.NewGuid(), JobState.Running, 1, "worker-1", DateTimeOffset.UtcNow.AddMinutes(5), DateTimeOffset.UtcNow);
+        var job = RunningJob(Guid.NewGuid());
 
         var exception = await Assert.ThrowsAsync<ActivityInputException>(() => handler.HandleAsync(job, CancellationToken.None));
 
@@ -92,7 +92,7 @@ public sealed class ParseTrainingJobHandlerTests
         var uploads = new FakeStoredUploadRepository { Upload = new StoredUpload(uploadId, "ride.fit", "fit", [1, 2, 3], [], DateTimeOffset.UtcNow) };
         var parser = new FakeFitActivityParser { ThrownException = new ActivityInputException("corrupt-fit", "The FIT file is corrupt.") };
         var handler = new ParseTrainingJobHandler(uploads, parser, new FakeTrainingCleaner(), new FakeTrainingActivityRepository(), new FakeJobQueue());
-        var job = new AnalysisJob(Guid.NewGuid(), JobType.ParseTraining, uploadId, JobState.Running, 1, "worker-1", DateTimeOffset.UtcNow.AddMinutes(5), DateTimeOffset.UtcNow);
+        var job = RunningJob(uploadId);
 
         var exception = await Assert.ThrowsAsync<ActivityInputException>(() => handler.HandleAsync(job, CancellationToken.None));
 
@@ -175,5 +175,24 @@ public sealed class ParseTrainingJobHandlerTests
         public Task<bool> CompleteAsync(Guid jobId, string workerId, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<bool> FailAsync(Guid jobId, string workerId, bool permanent, string? diagnosticCode, string? diagnosticMessage, CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+
+    private static AnalysisJob RunningJob(Guid uploadId)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new AnalysisJob(
+            Guid.NewGuid(),
+            JobType.ParseTraining,
+            uploadId,
+            JobState.Running,
+            0,
+            "running",
+            1,
+            now,
+            now,
+            now,
+            null,
+            "worker-1",
+            now.AddMinutes(5));
     }
 }
