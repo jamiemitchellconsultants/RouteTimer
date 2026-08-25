@@ -94,6 +94,7 @@ public interface IPredictionRepository
     Task<QueuedPredictionSubmission> CreateQueuedAsync(QueuedPredictionCreation creation, CancellationToken cancellationToken);
     Task<PredictionForProcessing?> GetForProcessingAsync(Guid predictionId, CancellationToken cancellationToken);
     Task<bool> TryPublishAsync(Guid predictionId, Guid jobId, string workerId, PredictionPublication publication, CancellationToken cancellationToken);
+    Task<bool> DeleteAsync(Guid predictionId, DateTimeOffset now, CancellationToken cancellationToken);
     Task FailAsync(Guid predictionId, string code, string message, CancellationToken cancellationToken);
     Task<IReadOnlyList<PredictionSummary>> GetSummariesAsync(CancellationToken cancellationToken);
     Task<PredictionDetail?> GetAsync(Guid predictionId, CancellationToken cancellationToken);

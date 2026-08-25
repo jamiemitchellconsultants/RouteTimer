@@ -52,6 +52,7 @@ builder.Services.AddScoped<ModelStatusService>();
 builder.Services.AddScoped<ModelRebuildService>();
 builder.Services.AddScoped<PredictionSubmissionService>();
 builder.Services.AddScoped<PredictionQueryService>();
+builder.Services.AddScoped<PredictionDeletionService>();
 builder.Services.AddSingleton<IGpxRouteParser, GpxRouteParser>();
 builder.Services.AddSingleton<IRouteProcessor>(_ => new RouteProcessor(RouteProcessingOptions.Default));
 builder.Services.AddSingleton(TimeProvider.System);

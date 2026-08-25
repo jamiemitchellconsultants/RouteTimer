@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
+using RouteTimer.Domain.Jobs;
 using RouteTimer.Domain.Models;
 using RouteTimer.Domain.Profile;
 using RouteTimer.Persistence.Entities;
+using RouteTimer.Services.Jobs;
 using RouteTimer.Services.Persistence;
 
 namespace RouteTimer.Persistence.Repositories;
@@ -126,8 +128,27 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
             return false;
         }
 
-        var prediction = await context.Predictions.Include(entity => entity.Segments).SingleOrDefaultAsync(entity => entity.Id == predictionId, cancellationToken)
-            ?? throw new InvalidOperationException("Prediction does not exist.");
+        if (context.Database.IsRelational())
+        {
+            var matchingPrediction = await context.Database.SqlQuery<Guid>(
+                $"""
+                SELECT "Id" AS "Value" FROM predictions
+                WHERE "Id" = {predictionId}
+                FOR UPDATE
+                """).ToListAsync(cancellationToken);
+            if (matchingPrediction.Count == 0)
+            {
+                if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
+                return false;
+            }
+        }
+
+        var prediction = await context.Predictions.Include(entity => entity.Segments).SingleOrDefaultAsync(entity => entity.Id == predictionId, cancellationToken);
+        if (prediction is null)
+        {
+            if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
+            return false;
+        }
         prediction.Segments.Clear();
         foreach (var segment in publication.Segments)
         {
@@ -160,6 +181,79 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
         prediction.State = PredictionState.Succeeded.ToString();
         prediction.CompletedAt = DateTimeOffset.UtcNow;
         await context.SaveChangesAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        return true;
+    }
+
+    public async Task<bool> DeleteAsync(Guid predictionId, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await using var transaction = context.Database.IsRelational()
+            ? await context.Database.BeginTransactionAsync(cancellationToken)
+            : null;
+
+        // Lock all matching jobs before reading or deleting the prediction. This serializes
+        // cancellation/deletion with a worker's owner-guarded publication transaction.
+        var jobIds = context.Database.IsRelational()
+            ? await context.Database.SqlQuery<Guid>($"""
+                SELECT "Id" AS "Value" FROM analysis_jobs
+                WHERE "SubjectId" = {predictionId} AND "Type" = {JobType.PredictRoute.ToString()}
+                  AND "State" IN ({JobState.Queued.ToString()}, {JobState.Running.ToString()})
+                FOR UPDATE
+                """).ToListAsync(cancellationToken)
+            : await context.Jobs
+                .Where(entity => entity.SubjectId == predictionId && entity.Type == JobType.PredictRoute.ToString() &&
+                    (entity.State == JobState.Queued.ToString() || entity.State == JobState.Running.ToString()))
+                .Select(entity => entity.Id)
+                .ToListAsync(cancellationToken);
+
+        if (context.Database.IsRelational())
+        {
+            var matchingPrediction = await context.Database.SqlQuery<Guid>(
+                $"""
+                SELECT "Id" AS "Value" FROM predictions
+                WHERE "Id" = {predictionId}
+                FOR UPDATE
+                """).ToListAsync(cancellationToken);
+            if (matchingPrediction.Count == 0)
+            {
+                if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
+                return false;
+            }
+        }
+
+        var prediction = await context.Predictions.SingleOrDefaultAsync(entity => entity.Id == predictionId, cancellationToken);
+        if (prediction is null)
+        {
+            if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
+            return false;
+        }
+
+        var uploadId = prediction.UploadId;
+        var jobs = await context.Jobs.Where(entity => jobIds.Contains(entity.Id)).ToListAsync(cancellationToken);
+        foreach (var job in jobs)
+        {
+            job.State = JobState.Cancelled.ToString();
+            job.ProgressStage = JobProgressStages.Cancelled;
+            job.UpdatedAt = now;
+            job.CompletedAt = now;
+            job.WorkerId = null;
+            job.LeaseExpiresAt = null;
+            job.DiagnosticCode = null;
+            job.DiagnosticMessage = null;
+        }
+
+        context.Predictions.Remove(prediction);
+        await context.SaveChangesAsync(cancellationToken);
+
+        var stillReferenced = await context.Predictions.AnyAsync(entity => entity.UploadId == uploadId, cancellationToken);
+        if (!stillReferenced)
+        {
+            var upload = await context.Uploads.SingleOrDefaultAsync(entity => entity.Id == uploadId, cancellationToken);
+            if (upload is not null) context.Uploads.Remove(upload);
+            await context.SaveChangesAsync(cancellationToken);
+        }
+
         if (transaction is not null) await transaction.CommitAsync(cancellationToken);
         return true;
     }
