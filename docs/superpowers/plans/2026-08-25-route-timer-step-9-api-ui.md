@@ -1,6 +1,6 @@
 # RouteTimer Step 9 API and UI Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Complete, verify, and commit each task before starting the next task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Expose the completed RouteTimer training, model, job, and prediction workflows through a stable authenticated API and a complete Blazor UI with locally bundled synchronized route visualization.
 
@@ -25,7 +25,7 @@
 - Pin Leaflet to `1.9.4` and Chart.js to `4.5.1`; runtime client assets must contain no CDN dependency.
 - Keep `wwwroot/vendor/`, `node_modules/`, and extracted `RouteTimerExamples/` untracked. Commit `package.json`, `package-lock.json`, build scripts, source JS, and source CSS.
 - Use `Examples.zip` only for manual/full acceptance smoke checks. Extract with `unzip -q Examples.zip`; never commit extracted personal FIT/GPX files.
-- Follow TDD: focused RED test, minimal GREEN implementation, focused verification, full solution verification, then commit. Never combine tasks into one commit.
+- Follow TDD: focused RED test, minimal GREEN implementation, focused verification, full solution verification, then commit. Never combine tasks into one commit or carry uncommitted changes into the next task.
 - Run .NET tests with `-p:UseSharedCompilation=false -m:1 /nodeReuse:false -tl:off -v:minimal` to prevent shared compiler/test-host interference.
 - If an interface must change from this plan, stop and adjudicate the producer and every consumer before editing; record the ruling and cost in the execution ledger.
 
@@ -93,9 +93,11 @@ git diff --check
 
 Expected: 410 discovered tests pass; EndToEnd reports no discovered tests; diff check is silent.
 
-## Mandatory Per-Task Gate
+## Mandatory Per-Task Commit Gate
 
-After every task's focused GREEN command and before every Task 1–14 commit, run:
+Every task must end in a task-scoped commit. Tasks 1–14 each produce the commit named in that task. Task 15 may produce separate review-fix commits when findings exist, followed by its required documentation commit. Do not begin Task N+1 until Task N is committed and the worktree is clean.
+
+After every task's focused GREEN command and before its commit, run:
 
 ```bash
 dotnet test RouteTimer.slnx --no-restore -p:UseSharedCompilation=false -m:1 /nodeReuse:false -tl:off -v:minimal
@@ -104,6 +106,15 @@ git status --short
 ```
 
 Expected: all discovered tests pass, diff check is silent, and status contains only that task's declared files. Do not commit when unrelated files are present.
+
+After the task's documented `git add` and `git commit` commands, run:
+
+```bash
+git status --short
+git log -1 --oneline
+```
+
+Expected: status is empty and the latest commit is the task commit just created. Record its hash in the execution ledger, then and only then proceed to the next task. Never defer, squash together, or batch commits from multiple tasks during plan execution.
 
 ---
 
