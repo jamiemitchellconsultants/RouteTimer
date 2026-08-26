@@ -2797,11 +2797,20 @@ and add `Auth__Mode` to that service's `environment` block, above the existing `
 
 - [ ] **Step 3: Update the deploy README**
 
-In `deploy/README.md`, replace step 1 with:
+In `deploy/README.md`, replace steps 1 and 2 with:
 
 ```markdown
-1. Set `ROUTETIMER_DB_PASSWORD`, `KEYCLOAK_AUTHORITY` (for example `https://auth.example.com/realms/routetimer`), and `ROUTETIMER_HOSTNAME` in the deployment environment. `Auth__Mode` is set to `Keycloak` by the Compose file and must not be removed: the application refuses to start without an explicit authentication mode. None of these is a build argument any more — the image is built once and configured at run time.
+1. Set `ROUTETIMER_DB_PASSWORD` and `KEYCLOAK_AUTHORITY` (for example `https://auth.example.com/realms/routetimer`) in the deployment environment. `Auth__Mode` is set to `Keycloak` by the Compose file and must not be removed: the application refuses to start without an explicit authentication mode. Neither is a build argument any more — the image is built once and configured at run time.
+2. Replace `ROUTETIMER_HOSTNAME` in `keycloak/routetimer-realm.json` with the deployment's real hostname, then import the file into the existing Keycloak instance. Assign the realm `rider` role to the rider account. This Compose project does not read `ROUTETIMER_HOSTNAME` itself — it is only a placeholder in the realm file and in `caddy/routetimer.caddy`, substituted by hand here and set in the shared ingress's own environment for step 4.
 ```
+
+**Amendment after review:** the first draft of this step listed `ROUTETIMER_HOSTNAME` alongside the
+two variables Compose actually reads with a `:?` fail-fast guard, implying the same. It never was
+one — `docker-compose.yml` has no reference to it at all, before or after this task. The variable
+is only a placeholder the operator substitutes by hand into the realm JSON and sets in the shared
+ingress's own environment. Telling the operator to "set it in the deployment environment" let steps
+1-3 all succeed with it unset; the mistake only surfaced at step 4, when Caddy validation failed on
+an empty site address. The corrected steps above say where it actually applies.
 
 - [ ] **Step 4: Verify the image builds without the arguments**
 
@@ -2839,3 +2848,26 @@ git commit -m "refactor: configure authentication at run time rather than build 
 ## Plan Complete
 
 At this point one image runs in either mode, selected by `Auth__Mode`, and readiness waits for migrations. Plan B covers the Compose projects, run scripts, CI publishing, backup and restore scripts, runbook and deployment documentation, and public-repository preparation.
+
+### Two things Plan B must account for, found while closing out Task 10
+
+**Local mode's session cookie will not survive container replacement without a persisted key
+ring.** The cookie is a data-protected ticket with a 30-day sliding expiry, and nothing in this
+plan calls `AddDataProtection`/`PersistKeysTo*`. Confirmed against the built image: it runs as
+root with `HOME=/root` and no volume behind `/root/.aspnet/DataProtection-Keys`, so the key ring
+lives only in the container's writable layer. `docker restart` preserves it; anything that
+*recreates* the container does not -- an image upgrade, `down && up`, and specifically the local
+run script's own `up -d --pull always` from section 6.3. Every rider gets silently signed out on
+each update. Keycloak mode is unaffected (bearer tokens don't touch data protection), which is why
+nothing in Tasks 1-9 surfaced this. Plan B's local Compose file needs a volume mounted at
+`/root/.aspnet/DataProtection-Keys` (or `PersistKeysToDbContext<RouteTimerDbContext>()`, keeping
+the key ring in the same database everything else already persists to).
+
+**`appsettings.Development.json` ships a default into an image whose entire premise is having
+none.** It sets `"Auth": { "Mode": "Local" }`, and it is in the published image today -- confirmed.
+`AuthModeResolver`'s documented reason for existing is that there is deliberately no default;
+setting `ASPNETCORE_ENVIRONMENT=Development` on a running deployment -- a plausible move by someone
+debugging it -- quietly reintroduces one. Not reachable through either Compose file, since an
+explicit `Auth__Mode` environment variable outranks the JSON file in the default configuration
+provider order. Exclude this file from publish, or move the development default into
+`launchSettings.json` as `Auth__Mode` instead, so nothing resembling a default ships in the image.
