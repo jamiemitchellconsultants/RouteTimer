@@ -21,6 +21,7 @@
 | `src/RouteTimer.Api/Auth/AuthMode.cs` | The two-value enum and the configuration resolver that fails fast |
 | `src/RouteTimer.Api/Auth/LocalCredentialService.cs` | Hash, verify, and set-once semantics for the local passphrase |
 | `src/RouteTimer.Api/Auth/LocalAuthenticationDefaults.cs` | Cookie scheme name and cookie configuration constants |
+| `src/RouteTimer.Api/Auth/LoginAttemptTracker.cs` | Outcome-driven sign-in lockout, counting only wrong guesses |
 | `src/RouteTimer.Api/Endpoints/AuthEndpoints.cs` | `/api/auth/config`, `/api/auth/session`, `/api/auth/setup`, `/api/auth/login`, `/api/auth/logout` |
 | `src/RouteTimer.Api/Health/MigrationsReadyHealthCheck.cs` | Reports unhealthy until migrations have completed |
 | `src/RouteTimer.Api/Health/MigrationState.cs` | Singleton flag the migration service sets and the health check reads |

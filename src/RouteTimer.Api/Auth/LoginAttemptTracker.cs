@@ -11,6 +11,11 @@ namespace RouteTimer.Api.Auth;
 /// setup exhaust the budget and lock a rider out of their own first genuine sign-in, which is the
 /// specific failure this type exists to prevent. Only a wrong guess against a real credential is
 /// recorded here; a probe before setup, or against a corrupt row, is not.
+///
+/// This does not make first sign-in unconditionally safe: the coarse flood guard on the endpoint
+/// still counts every request, so a sustained burst before setup can delay a genuine sign-in until
+/// its window rolls over. That is a minute's wait rather than a wrong answer, and it is the price
+/// of protecting the hashing work from an unauthenticated caller.
 /// </remarks>
 public sealed class LoginAttemptTracker(TimeProvider timeProvider)
 {
@@ -28,6 +33,18 @@ public sealed class LoginAttemptTracker(TimeProvider timeProvider)
     private readonly Lock gate = new();
     private int failures;
     private DateTimeOffset windowStart = DateTimeOffset.MinValue;
+
+    /// <summary>
+    /// Serialises check-verify-record. Without it, requests in flight all read the counter before
+    /// any of them writes -- verification takes tens of milliseconds -- so concurrent guessing gets
+    /// several times the documented budget through and the number above becomes untrue. There is
+    /// one rider, so serialising sign-in costs nothing worth having.
+    /// </summary>
+    private readonly SemaphoreSlim attemptGate = new(1, 1);
+
+    public Task WaitForTurnAsync(CancellationToken cancellationToken) => attemptGate.WaitAsync(cancellationToken);
+
+    public void ReleaseTurn() => attemptGate.Release();
 
     /// <summary>Whether sign-in is currently locked out, and for how much longer.</summary>
     public bool IsLockedOut(out TimeSpan retryAfter)

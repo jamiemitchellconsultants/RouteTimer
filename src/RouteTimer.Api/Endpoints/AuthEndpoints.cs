@@ -133,6 +133,26 @@ public static class AuthEndpoints
     {
         context.Response.Headers.CacheControl = "no-store";
 
+        // Held across verification so the check and the record cannot interleave. See the gate's
+        // remarks: without it, concurrent guesses all read the counter before any of them writes.
+        await attempts.WaitForTurnAsync(cancellationToken);
+        try
+        {
+            return await AttemptLoginAsync(request, credentials, attempts, context, cancellationToken);
+        }
+        finally
+        {
+            attempts.ReleaseTurn();
+        }
+    }
+
+    private static async Task<IResult> AttemptLoginAsync(
+        LocalLoginRequest request,
+        LocalCredentialService credentials,
+        LoginAttemptTracker attempts,
+        HttpContext context,
+        CancellationToken cancellationToken)
+    {
         if (attempts.IsLockedOut(out var retryAfter))
         {
             context.Response.Headers.RetryAfter =

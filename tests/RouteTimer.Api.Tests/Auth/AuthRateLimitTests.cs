@@ -189,6 +189,21 @@ public sealed class AuthRateLimitTests
         Assert.Equal(HttpStatusCode.TooManyRequests, logout.StatusCode);
     }
 
+    [Fact]
+    public async Task Keycloak_mode_is_not_rate_limited_here_because_the_ingress_owns_that()
+    {
+        // Collapsing the mode branch to a single value previously left the whole suite green, which
+        // is how a partition that did not partition survived review. This pins the branch itself.
+        await using var app = new RouteTimerApiFactory().WithAuthMode("Keycloak");
+        using var client = app.CreateClient();
+
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            using var response = await client.GetAsync("/api/auth/config", CancellationToken.None);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+    }
+
     private static RouteTimerApiFactory LocalApp(string? initialHash) =>
         new RouteTimerApiFactory()
             .WithAuthMode("Local")

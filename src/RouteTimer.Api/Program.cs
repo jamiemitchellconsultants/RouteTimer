@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Threading.RateLimiting;
-using RouteTimer.Contracts.Errors;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -8,6 +7,7 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
 using RouteTimer.Api;
 using RouteTimer.Api.Auth;
+using RouteTimer.Contracts.Errors;
 using RouteTimer.Api.Endpoints;
 using RouteTimer.Api.Security;
 using RouteTimer.Api.Workers;
@@ -189,42 +189,35 @@ builder.Services.AddRateLimiter(options =>
             .ExecuteAsync(context.HttpContext);
     };
 
-    // A flood guard on the PBKDF2 work, not the lockout. Lockout is outcome-driven inside the login
-    // handler, because middleware consumes its permit before the endpoint runs and so cannot tell a
-    // wrong guess from a probe made before any credential exists.
-    options.AddPolicy(AuthEndpoints.LoginRateLimitPolicy, context =>
-        RateLimitPartition.GetFixedWindowLimiter(
-            AuthRateLimitPartition(context, authMode),
-            _ => new FixedWindowRateLimiterOptions
+    // Both policies limit Local mode only, and deliberately with a single global bucket: one rider,
+    // one machine, so a global limit is the intended semantics rather than an accident.
+    //
+    // Keycloak mode gets no limiter here at all. It is the shared public deployment behind the
+    // Caddy ingress, where every request arrives from the proxy's own address -- so any partition
+    // this process can compute is either that one shared address (a global bucket, letting one
+    // browser's page loads lock out every other user) or an X-Forwarded-For value the caller
+    // chooses. Neither is rate limiting. The ingress is the only layer that knows who the client
+    // is, so per-client limiting for that deployment belongs there.
+    options.AddPolicy(AuthEndpoints.LoginRateLimitPolicy, _ =>
+        authMode == AuthMode.Local
+            ? RateLimitPartition.GetFixedWindowLimiter("auth-login", _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = 30,
                 Window = TimeSpan.FromMinutes(1),
                 QueueLimit = 0
-            }));
+            })
+            : RateLimitPartition.GetNoLimiter<string>("ingress-owns-this"));
 
-    // Generous: a real client calls these about once per page load, so the ceiling only has to stop
-    // a loop. /api/auth/config reads the database on every anonymous call, so it must not be
-    // unbounded.
-    options.AddPolicy(AuthEndpoints.AuthRateLimitPolicy, context =>
-        RateLimitPartition.GetFixedWindowLimiter(
-            AuthRateLimitPartition(context, authMode),
-            _ => new FixedWindowRateLimiterOptions
+    options.AddPolicy(AuthEndpoints.AuthRateLimitPolicy, _ =>
+        authMode == AuthMode.Local
+            ? RateLimitPartition.GetFixedWindowLimiter("auth-general", _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = 120,
                 Window = TimeSpan.FromMinutes(1),
                 QueueLimit = 0
-            }));
+            })
+            : RateLimitPartition.GetNoLimiter<string>("ingress-owns-this"));
 });
-
-// Local mode is one rider on one machine, so a single global bucket is the intended semantics --
-// and deliberately not the remote address, which is identical for every loopback request and
-// becomes caller-controllable the moment a proxy sets X-Forwarded-For. Keycloak mode is the shared
-// public deployment, where a global bucket would let one browser's page loads lock out everyone
-// else, so partition per connection there instead.
-static string AuthRateLimitPartition(HttpContext context, AuthMode mode) =>
-    mode == AuthMode.Local
-        ? "local"
-        : context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
 var app = builder.Build();
 
