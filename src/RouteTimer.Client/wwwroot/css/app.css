@@ -113,3 +113,61 @@ code {
 .form-floating > .form-control-plaintext:focus::placeholder, .form-floating > .form-control:focus::placeholder {
     text-align: start;
 }
+
+.predictions-input-modes { display: flex; gap: .5rem; margin-bottom: 1rem; }
+
+.predictions-mode {
+    background: transparent;
+    border: 1px solid #d0d7de;
+    border-radius: .4rem;
+    color: #57606a;
+    cursor: pointer;
+    font: inherit;
+    padding: .4rem .9rem;
+}
+
+.predictions-mode--active {
+    background: #1b6ec2;
+    border-color: #1861ac;
+    color: #fff;
+}
+
+.route-builder { display: grid; gap: .85rem; margin-top: .5rem; }
+.route-builder label { display: grid; gap: .3rem; font-size: .85rem; color: #57606a; }
+.route-builder input, .route-builder select {
+    border: 1px solid #d0d7de;
+    border-radius: .4rem;
+    font: inherit;
+    padding: .5rem .6rem;
+}
+.route-builder-key { display: grid; gap: .4rem; }
+.route-builder-disclosure { color: #57606a; font-size: .8rem; margin: 0; }
+
+.route-builder .log { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: .5rem; }
+.route-builder .log-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: .5rem .7rem;
+    border-bottom: 1px solid #d0d7de;
+    font-size: .8rem;
+    color: #57606a;
+}
+.route-builder .log-entries {
+    list-style: none;
+    margin: 0;
+    padding: .4rem;
+    max-height: 24rem;
+    overflow-y: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .78rem;
+}
+.route-builder .entry { padding: .2rem .3rem; display: grid; grid-template-columns: auto auto 1fr; gap: .5rem; }
+.route-builder .entry .at { color: #8b949e; }
+.route-builder .entry .level { font-weight: 600; }
+.route-builder .entry .message { word-break: break-word; }
+.route-builder .entry .detail { grid-column: 3; margin: .25rem 0 .4rem; white-space: pre-wrap; word-break: break-all; color: #57606a; }
+.route-builder .entry.info .level { color: #57606a; }
+.route-builder .entry.success .level { color: #1a7f37; }
+.route-builder .entry.warn .level { color: #9a6700; }
+.route-builder .entry.error .level { color: #cf222e; }

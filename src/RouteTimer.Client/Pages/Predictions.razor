@@ -8,6 +8,7 @@
 @using RouteTimer.Contracts.Jobs
 @using RouteTimer.Contracts.Models
 @using RouteTimer.Contracts.Predictions
+@using RouteTimer.Client.RouteBuilder
 @using RouteTimer.Contracts.Uploads
 @inject IRouteTimerApiClient Api
 @inject JobPoller JobPoller
@@ -22,30 +23,49 @@
 <section class="predictions-page">
     <section class="predictions-panel">
         <h2>Submit a route</h2>
-        <label for="gpx-upload">Prediction GPX file</label>
-        <InputFile id="gpx-upload" OnChange="SelectFiles" accept=".gpx" />
 
-        @if (tooManyFilesSelected)
+        <div class="predictions-input-modes" role="tablist">
+            <button type="button" role="tab" data-testid="predictions-mode-upload"
+                    class="@ModeClass(InputMode.Upload)"
+                    aria-selected="@(inputMode == InputMode.Upload)"
+                    @onclick="@(() => inputMode = InputMode.Upload)">Upload GPX</button>
+            <button type="button" role="tab" data-testid="predictions-mode-maps"
+                    class="@ModeClass(InputMode.GoogleMaps)"
+                    aria-selected="@(inputMode == InputMode.GoogleMaps)"
+                    @onclick="@(() => inputMode = InputMode.GoogleMaps)">Google Maps route</button>
+        </div>
+
+        @if (inputMode == InputMode.Upload)
         {
-            <p data-testid="predictions-too-many-files" class="predictions-message predictions-message--warning">
-                Please select a single GPX route.
-            </p>
-        }
-        else if (selectedFiles.Count == 0)
-        {
-            <p data-testid="predictions-upload-empty" class="predictions-message">Select one GPX file to start a prediction.</p>
+            <label for="gpx-upload">Prediction GPX file</label>
+            <InputFile id="gpx-upload" OnChange="SelectFiles" accept=".gpx" />
+
+            @if (tooManyFilesSelected)
+            {
+                <p data-testid="predictions-too-many-files" class="predictions-message predictions-message--warning">
+                    Please select a single GPX route.
+                </p>
+            }
+            else if (selectedFiles.Count == 0)
+            {
+                <p data-testid="predictions-upload-empty" class="predictions-message">Select one GPX file to start a prediction.</p>
+            }
+            else
+            {
+                <div class="predictions-submit-actions">
+                    <p>@selectedFiles[0].Name is ready to predict.</p>
+                    <button data-testid="predictions-submit"
+                            class="predictions-button"
+                            @onclick="SubmitAsync"
+                            disabled="@(!CanSubmit)">
+                        @(isSubmitting ? "Submitting route…" : "Submit prediction")
+                    </button>
+                </div>
+            }
         }
         else
         {
-            <div class="predictions-submit-actions">
-                <p>@selectedFiles[0].Name is ready to predict.</p>
-                <button data-testid="predictions-submit"
-                        class="predictions-button"
-                        @onclick="SubmitAsync"
-                        disabled="@(!CanSubmit)">
-                    @(isSubmitting ? "Submitting route…" : "Submit prediction")
-                </button>
-            </div>
+            <GoogleMapsRouteInput OnRouteBuilt="SubmitBuiltRouteAsync" />
         }
 
         @if (submissionProblem is not null || submissionFallbackProblem)
@@ -214,6 +234,13 @@
     private CancellationTokenSource? activeSubmissionCancellation;
     private CancellationTokenSource? activeDeleteCancellation;
 
+    private enum InputMode { Upload, GoogleMaps }
+
+    private InputMode inputMode = InputMode.Upload;
+
+    private string ModeClass(InputMode mode) =>
+        mode == inputMode ? "predictions-mode predictions-mode--active" : "predictions-mode";
+
     private bool CanSubmit =>
         !isSubmitting
         && !tooManyFilesSelected
@@ -259,13 +286,36 @@
         }
     }
 
-    private async Task SubmitAsync()
+    private Task SubmitAsync()
     {
         if (!CanSubmit)
+        {
+            return Task.CompletedTask;
+        }
+
+        var selectedFile = selectedFiles[0];
+        var upload = new ClientFileUpload(
+            selectedFile.Name,
+            selectedFile.Size,
+            () => selectedFile.OpenReadStream(UploadLimits.MaximumFileBytes, pageCancellation.Token));
+
+        return SubmitUploadAsync(upload);
+    }
+
+    private async Task SubmitBuiltRouteAsync(BuiltRoute route)
+    {
+        if (isSubmitting || modelStatus?.IsReady != true)
         {
             return;
         }
 
+        var bytes = System.Text.Encoding.UTF8.GetBytes(route.Gpx);
+        var upload = new ClientFileUpload(route.FileName, bytes.Length, () => new MemoryStream(bytes));
+        await SubmitUploadAsync(upload);
+    }
+
+    private async Task SubmitUploadAsync(ClientFileUpload upload)
+    {
         isSubmitting = true;
         submissionProblem = null;
         submissionFallbackProblem = false;
@@ -274,12 +324,6 @@
         {
             activeSubmissionCancellation?.Dispose();
             activeSubmissionCancellation = CancellationTokenSource.CreateLinkedTokenSource(pageCancellation.Token);
-
-            var selectedFile = selectedFiles[0];
-            var upload = new ClientFileUpload(
-                selectedFile.Name,
-                selectedFile.Size,
-                () => selectedFile.OpenReadStream(UploadLimits.MaximumFileBytes, pageCancellation.Token));
 
             var response = await Api.SubmitPredictionAsync(upload, activeSubmissionCancellation.Token);
             selectedFiles = [];

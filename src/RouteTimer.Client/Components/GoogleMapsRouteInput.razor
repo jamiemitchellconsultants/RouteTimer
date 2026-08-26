@@ -1,0 +1,286 @@
+@using RouteTimer.Client.Api
+@using RouteTimer.Client.Logging
+@using RouteTimer.Client.RouteBuilder
+@using RouteTimer.Client.RouteBuilder.Models
+@using RouteTimer.Contracts.Settings
+@implements IDisposable
+@inject IRouteTimerApiClient Api
+@inject ActionLog Log
+@inject DirectionsInterop Directions
+@inject BrowserInterop Browser
+@inject ShortLinkClient ShortLinks
+@inject TimeProvider TimeProvider
+
+<div class="route-builder">
+    <div class="route-builder-key" data-testid="maps-key-status">
+        @if (keyStatusLoading)
+        {
+            <p>Loading Google Maps key status...</p>
+        }
+        else if (!keyStatus!.StorageAvailable)
+        {
+            <p>A Google Maps API key cannot be saved on this deployment. Enter one below to use for this conversion only.</p>
+            <label>
+                Google Maps API key
+                <input type="password" autocomplete="off" spellcheck="false"
+                       @bind="typedKey" @bind:event="oninput" placeholder="Your own key" />
+            </label>
+        }
+        else if (keyStatus.Configured)
+        {
+            <p>
+                Saved key: @keyStatus.Hint
+                <button type="button" data-testid="maps-key-replace" @onclick="() => replacingKey = true">Replace</button>
+                <button type="button" data-testid="maps-key-delete" @onclick="DeleteKeyAsync">Delete</button>
+            </p>
+            @if (replacingKey)
+            {
+                <label>
+                    New Google Maps API key
+                    <input type="password" autocomplete="off" spellcheck="false"
+                           @bind="typedKey" @bind:event="oninput" placeholder="Your own key" />
+                </label>
+                <button type="button" data-testid="maps-key-save" @onclick="SaveKeyAsync" disabled="@string.IsNullOrWhiteSpace(typedKey)">Save key</button>
+            }
+        }
+        else
+        {
+            <label>
+                Google Maps API key
+                <input type="password" autocomplete="off" spellcheck="false"
+                       @bind="typedKey" @bind:event="oninput" placeholder="Your own key" />
+            </label>
+            <button type="button" data-testid="maps-key-save" @onclick="SaveKeyAsync" disabled="@string.IsNullOrWhiteSpace(typedKey)">Save key</button>
+        }
+    </div>
+
+    <p data-testid="maps-key-disclosure" class="route-builder-disclosure">
+        A saved key is encrypted at rest, but the server can decrypt it, and it is handed to this page and to
+        Google whenever you convert a route. Anyone who can sign in to this RouteTimer can spend against it.
+    </p>
+
+    <label>
+        Google Maps URL
+        <input type="text" data-testid="maps-url" autocomplete="off" spellcheck="false"
+               @bind="mapUrl" @bind:event="oninput"
+               placeholder="https://maps.app.goo.gl/... or https://www.google.com/maps/dir/..." />
+    </label>
+
+    <label>
+        Travel mode
+        <select data-testid="maps-mode" @bind="selectedMode">
+            <option value="@TravelMode.Bicycling">Bicycling</option>
+            <option value="@TravelMode.Driving">Driving</option>
+            <option value="@TravelMode.Walking">Walking</option>
+            <option value="@TravelMode.Transit">Transit</option>
+        </select>
+    </label>
+
+    <button type="button" data-testid="maps-convert" @onclick="ConvertAsync" disabled="@(!CanConvert)">
+        @(busy ? "Working..." : "Convert to GPX and predict")
+    </button>
+
+    <ActionLogView OnCopy="CopyLogAsync" />
+</div>
+
+@code {
+    private const int MaximumIntermediateWaypoints = 25;
+
+    [Parameter] public EventCallback<BuiltRoute> OnRouteBuilt { get; set; }
+
+    private readonly CancellationTokenSource pageCancellation = new();
+    private GoogleMapsKeyStatusResponse? keyStatus;
+    private bool keyStatusLoading = true;
+    private bool replacingKey;
+    private string typedKey = "";
+    private string mapUrl = "";
+    private TravelMode selectedMode = TravelMode.Bicycling;
+    private bool busy;
+
+    private bool CanConvert =>
+        !busy
+        && !keyStatusLoading
+        && !string.IsNullOrWhiteSpace(mapUrl)
+        && (keyStatus is { Configured: true } || !string.IsNullOrWhiteSpace(typedKey));
+
+    protected override async Task OnInitializedAsync()
+    {
+        keyStatus = await Api.GetGoogleMapsKeyStatusAsync(pageCancellation.Token);
+        keyStatusLoading = false;
+    }
+
+    public void Dispose()
+    {
+        pageCancellation.Cancel();
+        pageCancellation.Dispose();
+    }
+
+    private async Task SaveKeyAsync()
+    {
+        if (string.IsNullOrWhiteSpace(typedKey))
+        {
+            return;
+        }
+
+        await Api.SaveGoogleMapsKeyAsync(new SaveGoogleMapsKeyRequest(typedKey), pageCancellation.Token);
+        keyStatus = await Api.GetGoogleMapsKeyStatusAsync(pageCancellation.Token);
+        typedKey = "";
+        replacingKey = false;
+    }
+
+    private async Task DeleteKeyAsync()
+    {
+        await Api.DeleteGoogleMapsKeyAsync(pageCancellation.Token);
+        keyStatus = await Api.GetGoogleMapsKeyStatusAsync(pageCancellation.Token);
+    }
+
+    private async Task<string?> ResolveKeyAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(typedKey))
+        {
+            return typedKey;
+        }
+
+        try
+        {
+            var response = await Api.UseGoogleMapsKeyAsync(pageCancellation.Token);
+            return response.ApiKey;
+        }
+        catch (ApiProblemException)
+        {
+            Log.Error("No Google Maps API key is available.", "Enter a key above, or save one for reuse.");
+            return null;
+        }
+    }
+
+    private async Task ConvertAsync()
+    {
+        if (busy)
+        {
+            return;
+        }
+
+        busy = true;
+        Log.Clear();
+
+        var key = await ResolveKeyAsync();
+        if (key is null)
+        {
+            busy = false;
+            return;
+        }
+
+        Log.UseRedactionKey(key);
+
+        try
+        {
+            var url = mapUrl.Trim();
+            if (GoogleMapsUrlParser.IsShortLink(url, out var code))
+            {
+                var resolved = await ShortLinks.ResolveAsync(code, pageCancellation.Token);
+                if (resolved is null)
+                {
+                    return;
+                }
+
+                url = resolved;
+            }
+
+            var route = GoogleMapsUrlParser.Parse(url) with { Mode = selectedMode };
+            if (route.IsSinglePoint)
+            {
+                Log.Error("That URL describes a single place, not a route.", "Paste a /maps/dir/ route URL instead.");
+                return;
+            }
+
+            if (route.Intermediates.Count > MaximumIntermediateWaypoints)
+            {
+                Log.Error(
+                    $"That route has {route.Intermediates.Count} intermediate waypoints; the Directions service accepts at most {MaximumIntermediateWaypoints}.",
+                    "Remove intermediate stops in Google Maps and share a new link.");
+                return;
+            }
+
+            Log.Info($"This page's origin is {await Browser.OriginAsync()}",
+                "If your key has HTTP referrer restrictions, this is the value they must allow.");
+
+            await Directions.LoadApiAsync(key);
+            var outcome = await Directions.RouteAsync(route);
+
+            IReadOnlyList<RoutePoint> track;
+            try
+            {
+                track = await Directions.ElevateAsync(outcome.Path);
+            }
+            catch (Exception exception)
+            {
+                Log.Error("Elevation lookup failed, so this route cannot be predicted.", exception.Message);
+                return;
+            }
+
+            // RouteTimer predicts from gradient. A track missing elevation would produce a confident
+            // and wrong answer, so this stops rather than degrading the way MapToGarmin does.
+            if (!DirectionsInterop.HasCompleteElevation(track))
+            {
+                Log.Error(
+                    "Google returned no elevation for part of this route, so it cannot be predicted.",
+                    "Try a shorter route, or upload a GPX that already carries elevation.");
+                return;
+            }
+
+            var name = RouteName(route, outcome.Waypoints);
+            var gpx = RouteGpxWriter.Write(name, outcome.Waypoints, track, TimeProvider.GetUtcNow());
+            var fileName = RouteGpxWriter.SuggestFileName(name);
+            Log.Info($"Generated {fileName} ({gpx.Length:N0} characters).");
+
+            await OnRouteBuilt.InvokeAsync(new BuiltRoute(fileName, gpx));
+        }
+        catch (MapUrlParseException exception)
+        {
+            Log.Error("Could not read that URL.", exception.Message);
+        }
+        catch (Exception exception)
+        {
+            Log.Error("Conversion failed.", exception.Message);
+        }
+        finally
+        {
+            await ScrubKeyAsync();
+            busy = false;
+        }
+    }
+
+    private async Task ScrubKeyAsync()
+    {
+        typedKey = "";
+        Log.UseRedactionKey(null);
+        await Directions.ScrubKeyAsync();
+        StateHasChanged();
+    }
+
+    private async Task CopyLogAsync(string text)
+    {
+        try
+        {
+            await Browser.CopyToClipboardAsync(text);
+        }
+        catch (Exception exception)
+        {
+            Log.Warn("Could not copy the log automatically.", $"Select the text and copy it manually. {exception.Message}");
+        }
+    }
+
+    private static string RouteName(ParsedRoute route, IReadOnlyList<GpxWaypoint> waypoints)
+    {
+        if (waypoints.Count >= 2) return $"{waypoints[0].Name} to {waypoints[^1].Name}";
+        if (waypoints.Count == 1) return waypoints[0].Name;
+        return RawName(route.Origin);
+    }
+
+    private static string RawName(RouteWaypoint waypoint) => waypoint switch
+    {
+        CoordinateWaypoint c => $"{c.Lat:F7}, {c.Lng:F7}",
+        PlaceNameWaypoint p => p.Name,
+        _ => waypoint.ToString() ?? "unknown"
+    };
+}

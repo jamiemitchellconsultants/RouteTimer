@@ -6,11 +6,14 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
 using RouteTimer.Client.Api;
 using RouteTimer.Client.Jobs;
+using RouteTimer.Client.Logging;
 using RouteTimer.Client.Pages;
+using RouteTimer.Client.RouteBuilder;
 using RouteTimer.Client.Tests.Fakes;
 using RouteTimer.Contracts.Jobs;
 using RouteTimer.Contracts.Models;
 using RouteTimer.Contracts.Predictions;
+using RouteTimer.Contracts.Settings;
 
 namespace RouteTimer.Client.Tests;
 
@@ -21,9 +24,36 @@ public sealed class PredictionsPageTests : BunitContext
 
     public PredictionsPageTests()
     {
+        JSInterop.Mode = JSRuntimeMode.Loose;
         Services.AddSingleton<IRouteTimerApiClient>(api);
         Services.AddSingleton<TimeProvider>(time);
         Services.AddScoped<JobPoller>();
+
+        var log = new ActionLog();
+        Services.AddSingleton(log);
+        // See GoogleMapsRouteInputTests: pre-built instances so bUnit's synchronous teardown
+        // never has to await disposal of these IAsyncDisposable-only services.
+        Services.AddSingleton(new DirectionsInterop(JSInterop.JSRuntime, log));
+        Services.AddSingleton(new BrowserInterop(JSInterop.JSRuntime));
+        Services.AddScoped<ShortLinkClient>();
+    }
+
+    [Fact]
+    public void Switching_input_modes_does_not_discard_the_other_mode_state()
+    {
+        api.OnGetModelStatusAsync = _ => Task.FromResult(ReadyModelStatus());
+        api.OnGetPredictionsAsync = _ => Task.FromResult<IReadOnlyList<PredictionSummaryResponse>>([]);
+        api.OnGetGoogleMapsKeyStatusAsync = _ =>
+            Task.FromResult(new GoogleMapsKeyStatusResponse(true, "AIza…6789", true));
+
+        var cut = Render<Predictions>();
+
+        cut.WaitForElement("[data-testid=predictions-mode-maps]").Click();
+        cut.WaitForElement("[data-testid=maps-url]");
+
+        cut.Find("[data-testid=predictions-mode-upload]").Click();
+
+        cut.WaitForAssertion(() => Assert.Equal(".gpx", cut.Find("input[type=file]").GetAttribute("accept")));
     }
 
     [Fact]

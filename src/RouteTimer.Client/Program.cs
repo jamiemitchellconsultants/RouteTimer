@@ -8,6 +8,8 @@ using Microsoft.Extensions.DependencyInjection;
 using RouteTimer.Client.Api;
 using RouteTimer.Client.Auth;
 using RouteTimer.Client.Jobs;
+using RouteTimer.Client.Logging;
+using RouteTimer.Client.RouteBuilder;
 using RouteTimer.Client;
 using RouteTimer.Contracts.Auth;
 
@@ -58,6 +60,10 @@ else
 builder.Services.AddScoped<IRouteTimerApiClient>(sp => new RouteTimerApiClient(sp.GetRequiredService<HttpClient>()));
 builder.Services.AddScoped<JobPoller>();
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddScoped<ActionLog>();
+builder.Services.AddScoped<DirectionsInterop>();
+builder.Services.AddScoped<BrowserInterop>();
+builder.Services.AddScoped<ShortLinkClient>();
 
 await builder.Build().RunAsync();
 
