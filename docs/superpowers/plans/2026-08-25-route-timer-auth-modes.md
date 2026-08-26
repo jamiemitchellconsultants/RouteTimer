@@ -1879,6 +1879,53 @@ git commit -m "fix: hold readiness until migrations complete"
 
 ---
 
+### Task 7 amendments after review
+
+Review found the task's own stated rationale does not hold on this app's hosting model, and that
+its three HTTP-level tests cannot detect the one regression the task exists to prevent.
+
+**The gap in the task's rationale does not currently exist.** Under `WebApplicationBuilder`'s
+minimal hosting, user-registered hosted services run to completion before the framework's own
+`GenericWebHostService` starts, so Kestrel does not bind a port until `DatabaseMigrationService` has
+finished. The fix is still correct to add — as insurance against that ordering changing, for example
+if migrations ever move onto a `BackgroundService`, a common refactor since a long `StartAsync`
+blocks the whole host — but say so in both `MigrationState`'s doc comment and spec section 9.2,
+rather than asserting a live bug that direct testing shows does not exist today.
+
+**Add two unit tests directly against `DatabaseMigrationService`.** The three HTTP-level tests
+construct `MigrationState` by hand after removing every hosted service, so none of them ever calls
+the service whose correctness the task depends on — deleting `MarkCompleted()`, or moving it into
+the `finally` block, leaves all three green. Add
+`tests/RouteTimer.Api.Tests/DatabaseMigrationServiceTests.cs`:
+
+- a non-relational provider marks ready immediately, confirming the early-return branch;
+- a connection that cannot be opened leaves readiness false; and
+- **the one that catches the finally-move mutation**: point the `DbContext` at an open SQLite
+  connection rather than PostgreSQL. SQLite is relational, so the non-relational early return does
+  not apply and the connection opens successfully — entering the `try` block — but SQLite has no
+  `pg_advisory_lock` function, so the failure happens *inside* the try, before `MigrateAsync`, with
+  the `finally` block still running afterward. A connection-open failure alone cannot exercise that
+  code path, because `finally` never runs when the exception happens before the `try` begins.
+
+This needs `Microsoft.EntityFrameworkCore.Sqlite`, test-only, added to
+`tests/RouteTimer.Api.Tests/RouteTimer.Api.Tests.csproj` and `Directory.Packages.props` at the same
+version as the project's other EF Core packages.
+
+Not covered even by these: `MarkCompleted()` deleted entirely from the successful-migration branch.
+Proving the success path marks ready needs a real migration to actually succeed against real
+PostgreSQL — see `PostgresMigrationTests` in `RouteTimer.Persistence.Tests` for that weight class,
+which is out of proportion for this unit test. That specific gap fails loudly in deployment
+verification instead: `/health/ready` would never turn healthy and `docker compose up --wait` would
+time out rather than return early, so it does not ship silently.
+
+**Hoist the duplicated `Database:ApplyMigrations` read** in `Program.cs` into one local shared by
+both the `MigrationState` registration and the hosted-service registration, so the two decisions
+cannot diverge.
+
+Expected after this task: 156 API tests, 149 persistence.
+
+---
+
 ## Task 8: Client runtime authentication bootstrap
 
 **Files:**

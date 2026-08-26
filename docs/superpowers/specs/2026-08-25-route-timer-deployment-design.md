@@ -237,16 +237,22 @@ Migrations are applied on startup when `Database__ApplyMigrations` is true.
 `DatabaseMigrationService` already holds a PostgreSQL advisory lock across `MigrateAsync`, so
 concurrent instances cannot migrate simultaneously.
 
-Readiness does not currently wait for them, and this work must fix that. The migration service
-is registered after the web host's own hosted service, so Kestrel begins listening before
-migrations run, and the existing readiness check proves only that the database is reachable —
-not that the schema is current. Between those two points `/health/ready` can report healthy
-against a database that is still migrating.
+Readiness does not currently wait for them, and this work must fix that. The existing readiness
+check proves only that the database is reachable, not that the schema is current.
+
+Under this app's minimal hosting, user-registered hosted services -- including the migration
+service -- run to completion before the framework's own `GenericWebHostService` starts, so Kestrel
+does not currently bind a port until migrations are done: the gap described in an earlier draft of
+this section does not exist today. The fix is added anyway, as insurance against that ordering
+changing -- moving migrations onto a `BackgroundService`, a common refactor since a long
+`StartAsync` blocks the whole host, or enabling `HostOptions.ServicesStartConcurrently` -- either of
+which would let Kestrel begin serving before migrations finish.
 
 A readiness check reporting migration state is therefore added and tagged `ready`, so
-`/health/ready` fails until migrations have completed successfully. Without it, Compose's
-`--wait` and the homelab deployment's readiness gate both return early, which is the specific
-promise the run scripts make to the rider.
+`/health/ready` fails until migrations have completed successfully. Combined with the Dockerfile
+`HEALTHCHECK` and Compose `healthcheck` in section 10, this is what makes Compose's `--wait` and the
+homelab deployment's readiness gate wait for a genuinely ready application rather than a container
+that has merely started, which is the specific promise the run scripts make to the rider.
 
 ### 9.3 Rollback
 

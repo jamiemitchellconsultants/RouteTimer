@@ -29,14 +29,18 @@ using RouteTimer.Services.Validation;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddSingleton(new MigrationState(builder.Configuration.GetValue("Database:ApplyMigrations", false)));
+// Read once and shared: MigrationState's "is a migration required at all" answer and the decision
+// to register the migration service must never be able to diverge, or readiness could report
+// healthy while a schema migration nobody is running to complete ever runs.
+var applyMigrations = builder.Configuration.GetValue("Database:ApplyMigrations", false);
+builder.Services.AddSingleton(new MigrationState(applyMigrations));
 builder.Services.AddHealthChecks()
     .AddDbContextCheck<RouteTimerDbContext>("database", tags: ["ready"])
     .AddCheck<MigrationsReadyHealthCheck>("migrations", tags: ["ready"]);
 var connectionString = builder.Configuration.GetConnectionString("RouteTimer")
     ?? "Host=localhost;Database=routetimer;Username=routetimer;Password=routetimer";
 builder.Services.AddDbContext<RouteTimerDbContext>(options => options.UseNpgsql(connectionString));
-if (builder.Configuration.GetValue("Database:ApplyMigrations", false))
+if (applyMigrations)
 {
     builder.Services.AddHostedService<DatabaseMigrationService>();
 }
