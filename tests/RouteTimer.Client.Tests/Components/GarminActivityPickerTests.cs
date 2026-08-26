@@ -250,6 +250,48 @@ public sealed class GarminActivityPickerTests : BunitContext
     }
 
     [Fact]
+    public void Picker_shows_a_retryable_problem_when_accepted_job_polling_fails()
+    {
+        var jobId = Guid.NewGuid();
+        var completed = 0;
+        var shouldFail = true;
+        api.OnGetGarminActivitiesAsync = (_, _) => Task.FromResult(Page([Activity("accepted", "Accepted ride")], null));
+        api.OnImportGarminActivitiesAsync = (_, _) => Task.FromResult(new GarminImportBatchResponse(
+        [
+            Result("accepted", "Accepted ride", "accepted", jobId)
+        ]));
+        api.OnGetJobAsync = (_, _) => shouldFail
+            ? Task.FromException<JobResponse?>(new ApiProblemException(
+                HttpStatusCode.ServiceUnavailable,
+                "job-unavailable",
+                "Job status is unavailable.",
+                "Try again shortly."))
+            : Task.FromResult<JobResponse?>(Job(jobId, "Succeeded", 100, "completed"));
+        var cut = Render<GarminActivityPicker>(parameters => parameters
+            .Add(component => component.AcceptedImportsCompleted, () => completed++));
+
+        cut.WaitForElement("[data-activity-id=accepted] [data-testid=garmin-activity-select]").Change(true);
+        cut.Find("[data-testid=garmin-import-selected]").Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            var error = cut.Find("[data-testid=garmin-import-polling-error]");
+            Assert.Contains("job-unavailable", error.TextContent, StringComparison.Ordinal);
+            Assert.NotNull(cut.Find("[data-testid=garmin-import-polling-retry]"));
+        });
+
+        shouldFail = false;
+        cut.Find("[data-testid=garmin-import-polling-retry]").Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Equal(2, api.RequestedJobs.Count);
+            Assert.Empty(cut.FindAll("[data-testid=garmin-import-polling-error]"));
+            Assert.Equal(1, completed);
+        });
+    }
+
+    [Fact]
     public async Task Picker_cancels_an_in_flight_load_when_disposed()
     {
         CancellationToken observed = default;

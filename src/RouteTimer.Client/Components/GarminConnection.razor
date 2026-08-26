@@ -140,10 +140,22 @@
     [Parameter]
     public EventCallback<GarminConnectionResponse> ConnectionChanged { get; set; }
 
+    [Parameter]
+    public GarminConnectionResponse? Connection { get; set; }
+
     private bool IsConnected => connection?.State.Equals("connected", StringComparison.OrdinalIgnoreCase) == true;
 
     private bool RequiresMfa => connection?.State.Equals("mfa-required", StringComparison.OrdinalIgnoreCase) == true
         && !string.IsNullOrWhiteSpace(connection.ChallengeId);
+
+    protected override void OnParametersSet()
+    {
+        if (Connection is not null && !Equals(connection, Connection))
+        {
+            connection = Connection;
+            confirmDisconnect = false;
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {

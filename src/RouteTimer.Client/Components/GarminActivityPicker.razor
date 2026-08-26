@@ -2,6 +2,7 @@
 @using RouteTimer.Client.Api
 @using RouteTimer.Client.Formatting
 @using RouteTimer.Client.Jobs
+@using RouteTimer.Contracts.Errors
 @using RouteTimer.Contracts.Garmin
 @using RouteTimer.Contracts.Jobs
 @using RouteTimer.Contracts.Uploads
@@ -21,6 +22,20 @@
     {
         <div data-testid="garmin-import-error">
             <ProblemMessage Problem="@importProblem" FallbackMessage="We could not import the selected Garmin activities." />
+        </div>
+    }
+
+    @if (pollingProblem is not null || pollingFallbackProblem)
+    {
+        <div data-testid="garmin-import-polling-error">
+            <ProblemMessage Problem="@pollingProblem" FallbackMessage="We could not check the Garmin import status." />
+            <button type="button"
+                    data-testid="garmin-import-polling-retry"
+                    class="garmin-picker__button garmin-picker__button--secondary"
+                    @onclick="RetryAcceptedJobPollingAsync"
+                    disabled="@isPollingAcceptedJobs">
+                Retry
+            </button>
         </div>
     }
 
@@ -146,22 +161,29 @@
     private readonly CancellationTokenSource componentCancellation = new();
     private readonly List<string> selectedIds = [];
     private readonly Dictionary<Guid, JobResponse> importJobs = [];
+    private readonly HashSet<Guid> acceptedJobIds = [];
     private IReadOnlyList<GarminActivitySummaryResponse> activities = [];
     private IReadOnlyList<GarminImportResultResponse> importResults = [];
     private string? nextCursor;
     private ApiProblemException? loadProblem;
     private ApiProblemException? importProblem;
+    private ApiProblemException? pollingProblem;
     private bool loadFallbackProblem;
     private bool importFallbackProblem;
+    private bool pollingFallbackProblem;
     private bool isInitialLoading = true;
     private bool isLoadingMore;
     private bool isImporting;
+    private bool isPollingAcceptedJobs;
 
     [Parameter]
     public EventCallback<GarminImportBatchResponse> Imported { get; set; }
 
     [Parameter]
     public EventCallback AcceptedImportsCompleted { get; set; }
+
+    [Parameter]
+    public EventCallback ReconnectRequired { get; set; }
 
     protected override Task OnInitializedAsync() => LoadFirstPageAsync();
 
@@ -193,6 +215,7 @@
         {
             loadProblem = apiProblem;
             loadFallbackProblem = false;
+            await NotifyReconnectRequiredAsync(apiProblem);
         }
         catch (HttpRequestException)
         {
@@ -238,6 +261,7 @@
         {
             loadProblem = apiProblem;
             loadFallbackProblem = false;
+            await NotifyReconnectRequiredAsync(apiProblem);
         }
         catch (HttpRequestException)
         {
@@ -304,12 +328,14 @@
 
             if (acceptedJobs.Length > 0)
             {
+                acceptedJobIds.UnionWith(acceptedJobs);
                 _ = StartAcceptedJobPollingAsync(acceptedJobs);
             }
         }
         catch (ApiProblemException apiProblem)
         {
             importProblem = apiProblem;
+            await NotifyReconnectRequiredAsync(apiProblem);
         }
         catch (HttpRequestException)
         {
@@ -332,18 +358,52 @@
     {
         await Task.Yield();
 
+        if (isPollingAcceptedJobs || jobIds.Count == 0)
+        {
+            return;
+        }
+
+        isPollingAcceptedJobs = true;
+        ClearPollingProblem();
+
         try
         {
             await Task.WhenAll(jobIds.Select(PollAcceptedJobAsync));
             if (!componentCancellation.IsCancellationRequested)
             {
+                acceptedJobIds.ExceptWith(jobIds);
                 await AcceptedImportsCompleted.InvokeAsync();
             }
         }
         catch (OperationCanceledException) when (componentCancellation.IsCancellationRequested)
         {
         }
+        catch (ApiProblemException apiProblem)
+        {
+            pollingProblem = apiProblem;
+            pollingFallbackProblem = false;
+        }
+        catch (HttpRequestException)
+        {
+            pollingProblem = null;
+            pollingFallbackProblem = true;
+        }
+        catch (Exception) when (!componentCancellation.IsCancellationRequested)
+        {
+            pollingProblem = null;
+            pollingFallbackProblem = true;
+        }
+        finally
+        {
+            if (!componentCancellation.IsCancellationRequested)
+            {
+                isPollingAcceptedJobs = false;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
     }
+
+    private Task RetryAcceptedJobPollingAsync() => StartAcceptedJobPollingAsync(acceptedJobIds.ToArray());
 
     private async Task PollAcceptedJobAsync(Guid jobId)
     {
@@ -367,6 +427,17 @@
         loadProblem = null;
         loadFallbackProblem = false;
     }
+
+    private void ClearPollingProblem()
+    {
+        pollingProblem = null;
+        pollingFallbackProblem = false;
+    }
+
+    private Task NotifyReconnectRequiredAsync(ApiProblemException apiProblem) =>
+        apiProblem.Code.Equals(ErrorCodes.GarminReconnectRequired, StringComparison.Ordinal)
+            ? ReconnectRequired.InvokeAsync()
+            : Task.CompletedTask;
 
     private static bool IsChecked(object? value) => value is bool selected
         ? selected

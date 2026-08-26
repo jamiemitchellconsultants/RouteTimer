@@ -7,6 +7,7 @@ using RouteTimer.Client.Api;
 using RouteTimer.Client.Jobs;
 using RouteTimer.Client.Pages;
 using RouteTimer.Client.Tests.Fakes;
+using RouteTimer.Contracts.Errors;
 using RouteTimer.Contracts.Garmin;
 using RouteTimer.Contracts.Jobs;
 using RouteTimer.Contracts.Models;
@@ -58,6 +59,59 @@ public sealed class TrainingPageTests : BunitContext
             Assert.Contains("Garmin ride", cut.Find("[data-testid=garmin-activity-row]").TextContent, StringComparison.Ordinal);
             Assert.NotNull(cut.Find("input[type=file]"));
             Assert.DoesNotContain("password-secret", cut.Markup, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void Training_returns_to_the_reconnect_credentials_when_listing_requires_reconnection()
+    {
+        api.OnGetTrainingActivitiesAsync = _ => Task.FromResult<IReadOnlyList<TrainingActivitySummaryResponse>>([]);
+        api.OnGetModelStatusAsync = _ => Task.FromResult(NotReadyModelStatus());
+        api.OnGetGarminConnectionAsync = _ => Task.FromResult(new GarminConnectionResponse("connected", "garmin-user-42", "Sunday Rider", null));
+        api.OnGetGarminActivitiesAsync = (_, _) => Task.FromException<GarminActivityPageResponse>(new ApiProblemException(
+            System.Net.HttpStatusCode.Conflict,
+            ErrorCodes.GarminReconnectRequired,
+            "Garmin reconnection is required.",
+            "Connect Garmin again to continue."));
+
+        var cut = Render<Training>();
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.NotNull(cut.Find("[data-testid=garmin-email]"));
+            Assert.Contains("needs to be established again", cut.Markup, StringComparison.Ordinal);
+            Assert.Empty(cut.FindAll("[data-testid=garmin-connected-identity]"));
+            Assert.Empty(cut.FindAll("[data-testid=garmin-activities-error]"));
+        });
+    }
+
+    [Fact]
+    public void Training_returns_to_the_reconnect_credentials_when_importing_requires_reconnection()
+    {
+        api.OnGetTrainingActivitiesAsync = _ => Task.FromResult<IReadOnlyList<TrainingActivitySummaryResponse>>([]);
+        api.OnGetModelStatusAsync = _ => Task.FromResult(NotReadyModelStatus());
+        api.OnGetGarminConnectionAsync = _ => Task.FromResult(new GarminConnectionResponse("connected", "garmin-user-42", "Sunday Rider", null));
+        api.OnGetGarminActivitiesAsync = (_, _) => Task.FromResult(new GarminActivityPageResponse(
+        [
+            GarminActivity("garmin-ride", "Garmin ride")
+        ], null));
+        api.OnImportGarminActivitiesAsync = (_, _) => Task.FromException<GarminImportBatchResponse>(new ApiProblemException(
+            System.Net.HttpStatusCode.Conflict,
+            ErrorCodes.GarminReconnectRequired,
+            "Garmin reconnection is required.",
+            "Connect Garmin again to continue."));
+
+        var cut = Render<Training>();
+
+        cut.WaitForElement("[data-activity-id=garmin-ride] [data-testid=garmin-activity-select]").Change(true);
+        cut.Find("[data-testid=garmin-import-selected]").Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.NotNull(cut.Find("[data-testid=garmin-email]"));
+            Assert.Contains("needs to be established again", cut.Markup, StringComparison.Ordinal);
+            Assert.Empty(cut.FindAll("[data-testid=garmin-connected-identity]"));
+            Assert.Empty(cut.FindAll("[data-testid=garmin-import-error]"));
         });
     }
 

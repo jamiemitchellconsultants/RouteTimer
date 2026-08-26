@@ -19,10 +19,11 @@
 
 <section class="training-page">
     <section class="training-panel training-panel--garmin">
-        <GarminConnection ConnectionChanged="HandleGarminConnectionChanged" />
+        <GarminConnection Connection="@garminConnection" ConnectionChanged="HandleGarminConnectionChanged" />
         @if (garminConnection?.State.Equals("connected", StringComparison.OrdinalIgnoreCase) == true)
         {
-            <GarminActivityPicker AcceptedImportsCompleted="HandleAcceptedGarminImportsCompleted" />
+            <GarminActivityPicker AcceptedImportsCompleted="HandleAcceptedGarminImportsCompleted"
+                                  ReconnectRequired="HandleGarminReconnectRequired" />
         }
     </section>
 
@@ -239,6 +240,12 @@
     private Task HandleGarminConnectionChanged(GarminConnectionResponse updatedConnection)
     {
         garminConnection = updatedConnection;
+        return Task.CompletedTask;
+    }
+
+    private Task HandleGarminReconnectRequired()
+    {
+        garminConnection = new GarminConnectionResponse("reconnect-required", null, null, null);
         return Task.CompletedTask;
     }
 

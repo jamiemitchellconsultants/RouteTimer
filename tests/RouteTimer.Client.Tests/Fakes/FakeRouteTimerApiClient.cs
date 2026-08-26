@@ -22,6 +22,7 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
     public Func<ClientFileUpload, CancellationToken, Task<PredictionSubmissionResponse>>? OnSubmitPredictionAsync { get; set; }
     public Func<Guid, CancellationToken, Task<PredictionDetailResponse?>>? OnGetPredictionAsync { get; set; }
     public Func<Guid, CancellationToken, Task<bool>>? OnDeletePredictionAsync { get; set; }
+    public Func<Guid, CancellationToken, Task<JobResponse?>>? OnGetJobAsync { get; set; }
     public Func<CancellationToken, Task<GarminConnectionResponse>>? OnGetGarminConnectionAsync { get; set; }
     public Func<GarminLoginRequest, CancellationToken, Task<GarminConnectionResponse>>? OnLoginGarminAsync { get; set; }
     public Func<GarminMfaRequest, CancellationToken, Task<GarminConnectionResponse>>? OnCompleteGarminMfaAsync { get; set; }
@@ -150,6 +151,11 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
     public Task<JobResponse?> GetJobAsync(Guid id, CancellationToken ct)
     {
         RequestedJobs.Add((id, ct));
+
+        if (OnGetJobAsync is not null)
+        {
+            return OnGetJobAsync(id, ct);
+        }
 
         if (Jobs.Count == 0)
         {
