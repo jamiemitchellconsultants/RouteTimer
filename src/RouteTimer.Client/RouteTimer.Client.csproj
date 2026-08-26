@@ -17,4 +17,8 @@
     <ProjectReference Include="..\RouteTimer.Contracts\RouteTimer.Contracts.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="RouteTimer.Client.Tests" />
+  </ItemGroup>
+
 </Project>

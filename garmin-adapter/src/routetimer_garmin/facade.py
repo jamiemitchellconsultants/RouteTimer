@@ -12,6 +12,7 @@ from garminconnect.exceptions import (
     GarminConnectTooManyRequestsError,
 )
 
+from routetimer_garmin.courses import ACTIVITY_TYPE_IDS, CoursePayloadError, build_course_payload
 from routetimer_garmin.errors import AdapterError
 from routetimer_garmin.models import AdapterActivity, AdapterActivityBatch
 
@@ -57,6 +58,15 @@ class CompletedLogin:
     garmin_user_id: str | None
     display_name: str | None
     token_json: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class CreatedCourse:
+    course_id: int
+    course_name: str
+    distance_metres: float | None
+    elevation_gain_metres: float | None
+    elevation_loss_metres: float | None
 
 
 class PendingLogin:
@@ -148,6 +158,66 @@ class TokenSession:
         if not isinstance(content, bytes):
             raise AdapterError("response-invalid", 502)
         return content
+
+    def create_course(
+        self,
+        *,
+        gpx: bytes,
+        file_name: str,
+        course_name: str,
+        activity_type: str,
+        description: str | None,
+        elevation_gain_metres: float,
+        elevation_loss_metres: float,
+    ) -> CreatedCourse:
+        activity_type_id = ACTIVITY_TYPE_IDS.get(activity_type.lower())
+        if activity_type_id is None:
+            raise AdapterError("request-invalid", 400)
+
+        try:
+            parsed = self._garmin.client.post(
+                "connectapi",
+                "/course-service/course/import",
+                files={"file": (file_name, gpx, "application/gpx+xml")},
+                api=True,
+            )
+        except Exception as error:
+            raise _translate_error(error, "course-rejected") from None
+
+        if not isinstance(parsed, Mapping):
+            raise AdapterError("response-invalid", 502)
+
+        try:
+            payload = build_course_payload(
+                dict(parsed),
+                course_name=course_name or str(parsed.get("courseName") or file_name),
+                activity_type_id=activity_type_id,
+                description=description,
+                elevation_gain_metres=elevation_gain_metres,
+                elevation_loss_metres=elevation_loss_metres,
+            )
+        except CoursePayloadError:
+            raise AdapterError("course-rejected", 422) from None
+
+        try:
+            saved = self._garmin.client.post("connectapi", "/course-service/course", json=payload, api=True)
+        except Exception as error:
+            raise _translate_error(error, "course-rejected") from None
+
+        if not isinstance(saved, Mapping):
+            raise AdapterError("response-invalid", 502)
+
+        course_id = saved.get("courseId")
+        if not isinstance(course_id, int):
+            raise AdapterError("response-invalid", 502)
+
+        return CreatedCourse(
+            course_id=course_id,
+            course_name=str(saved.get("courseName") or course_name),
+            distance_metres=_optional_finite(saved.get("distanceMeter")),
+            elevation_gain_metres=_optional_finite(saved.get("elevationGainMeter")),
+            elevation_loss_metres=_optional_finite(saved.get("elevationLossMeter")),
+        )
 
 
 def _completed_login(garmin: Garmin, authentication_code: str) -> CompletedLogin:

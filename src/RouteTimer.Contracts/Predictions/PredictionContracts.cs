@@ -25,7 +25,9 @@ public sealed record PredictionSummaryResponse(
     string WeatherAssumption,
     bool MovingOnlyAssumption,
     DateTimeOffset CreatedAt,
-    DateTimeOffset? CompletedAt);
+    DateTimeOffset? CompletedAt,
+    long? GarminCourseId = null,
+    DateTimeOffset? GarminCourseUploadedAt = null);
 
 public sealed record PredictionSegmentResponse(
     int Sequence,
@@ -43,3 +45,7 @@ public sealed record PredictionSegmentResponse(
     string Confidence);
 
 public sealed record PredictionDetailResponse(PredictionSummaryResponse Summary, IReadOnlyList<PredictionSegmentResponse> Segments);
+
+public sealed record CreateGarminCourseRequest(string? Name, string? ActivityType);
+
+public sealed record GarminCourseResponse(long CourseId, string CourseName, string CourseUrl);

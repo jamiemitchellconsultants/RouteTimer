@@ -8,7 +8,7 @@ from zipfile import ZipFile
 
 from routetimer_garmin.challenges import ChallengeStore, PendingChallenge
 from routetimer_garmin.errors import AdapterError
-from routetimer_garmin.facade import CompletedLogin, GarminFacade
+from routetimer_garmin.facade import CompletedLogin, CreatedCourse, GarminFacade
 from routetimer_garmin.models import AdapterActivity, AdapterActivityPage
 
 logger = logging.getLogger(__name__)
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 PAGE_SIZE = 50
 MAX_SCAN_PAGES = 10
-MAX_FIT_BYTES = 50 * 1024 * 1024
+MAX_FILE_BYTES = 50 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +45,12 @@ class ActivitySummaryResult:
 class FitDownloadResult:
     content: bytes = field(repr=False)
     file_name: str
+    token_json: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class CourseResult:
+    course: CreatedCourse
     token_json: str = field(repr=False)
 
 
@@ -141,6 +147,30 @@ class GarminService:
         content = _read_single_fit(session.download_original(activity_id))
         return FitDownloadResult(content, f"{activity_id}.fit", session.dump_tokens())
 
+    async def create_course(
+        self,
+        token_json: str,
+        *,
+        gpx: bytes,
+        file_name: str,
+        course_name: str,
+        activity_type: str,
+        description: str | None,
+        elevation_gain_metres: float,
+        elevation_loss_metres: float,
+    ) -> CourseResult:
+        session = self._facade.from_tokens(token_json)
+        course = session.create_course(
+            gpx=gpx,
+            file_name=file_name,
+            course_name=course_name,
+            activity_type=activity_type,
+            description=description,
+            elevation_gain_metres=elevation_gain_metres,
+            elevation_loss_metres=elevation_loss_metres,
+        )
+        return CourseResult(course, session.dump_tokens())
+
     async def clear_challenges(self) -> None:
         self._challenges.clear()
 
@@ -180,11 +210,11 @@ def _read_single_fit(archive_bytes: bytes) -> bytes:
             if len(members) != 1:
                 raise AdapterError("response-invalid", 502)
             member = members[0]
-            if member.file_size > MAX_FIT_BYTES:
+            if member.file_size > MAX_FILE_BYTES:
                 raise AdapterError("fit-too-large", 413)
             with archive.open(member) as source:
-                content = source.read(MAX_FIT_BYTES + 1)
-            if len(content) > MAX_FIT_BYTES:
+                content = source.read(MAX_FILE_BYTES + 1)
+            if len(content) > MAX_FILE_BYTES:
                 raise AdapterError("fit-too-large", 413)
             return content
     except AdapterError:

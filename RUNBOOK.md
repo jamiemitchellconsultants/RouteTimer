@@ -18,8 +18,9 @@ Two commands, a few minutes of setup, then a page in your browser.
 
 You do **not** need to know .NET, Blazor, Python, or Docker Compose to run this. If you want to
 read the design, `docs/superpowers/specs/2026-08-24-route-timer-design.md`,
-`docs/superpowers/specs/2026-08-25-route-timer-deployment-design.md`, and
-`docs/superpowers/specs/2026-08-25-garmin-activity-import-design.md` are the design documents.
+`docs/superpowers/specs/2026-08-25-route-timer-deployment-design.md`,
+`docs/superpowers/specs/2026-08-25-garmin-activity-import-design.md`, and
+`docs/superpowers/specs/2026-08-26-predictions-route-builder-design.md` are the design documents.
 
 ---
 
@@ -72,9 +73,10 @@ cd RouteTimer
 .\run.ps1
 ```
 
-The first time you run this, it generates a random encryption key that protects any Garmin
-account you later connect, and saves it to `deploy/.env.local` — a file that never leaves your
-machine and is excluded from git. Then it pulls the published container images, starts them,
+The first time you run this, it generates two random encryption keys — one protecting any Garmin
+account you later connect, the other protecting a Google Maps API key if you choose to save one —
+and saves them to `deploy/.env.local`, a file that never leaves your machine and is excluded from
+git. Then it pulls the published container images, starts them,
 waits until RouteTimer has genuinely finished starting up — including any database migration, not
 just "the containers are running" — and opens your browser automatically. Nothing builds on your
 machine, so this takes seconds even on the first run, once the images are pulled.
@@ -108,11 +110,53 @@ If you do forget it, see Troubleshooting for how to reset it without losing your
    same training workflow. RouteTimer learns how your power output varies with gradient and how
    long you've been riding.
 2. Once you have a few eligible rides, RouteTimer builds a rider model automatically.
-3. On the Predictions page, upload a GPX route file. RouteTimer applies your model and a cycling
-   physics simulation to estimate your moving time, with a map and elevation/gradient/power/speed
-   profiles.
+3. On the Predictions page, upload a GPX route file — or paste a Google Maps route instead, see
+   below. RouteTimer applies your model and a cycling physics simulation to estimate your moving
+   time, with a map and elevation/gradient/power/speed profiles.
 
 Connecting Garmin is optional. Everything above works from manually uploaded FIT files alone.
+
+---
+
+## Predicting from a Google Maps route
+
+Instead of uploading a GPX file, the Predictions page's "Google Maps route" tab builds one for you
+from a Google Maps link, entirely in your browser — RouteTimer's server never sees the route or
+your API key, only the finished GPX it submits for prediction.
+
+You'll need your own Google Maps API key, free from
+[Google Cloud](https://console.cloud.google.com/), with three products enabled on it: **Maps
+JavaScript API**, **Directions API**, and **Elevation API**. If the key has HTTP referrer
+restrictions, it must allow this RouteTimer instance's own origin — the page shows you that origin
+in its on-screen log the moment you start a conversion, so you don't have to guess it.
+
+You can save the key for reuse, or type it fresh each time. A saved key is encrypted at rest the
+same way a connected Garmin account's tokens are, but the page is upfront that this is not the same
+guarantee as never storing it at all: the server can decrypt a saved key, and it is handed to the
+page and to Google every time you convert a route, so anyone who can sign in to this RouteTimer
+instance can spend against it. If that trade-off doesn't suit you, don't save it — typing it each
+time works identically and nothing about the conversion changes either way.
+
+Paste a full `https://www.google.com/maps/dir/...` URL or a short `https://maps.app.goo.gl/...`
+link, pick a travel mode (Bicycling by default), and convert. A route whose elevation Google can't
+supply is refused rather than predicted — RouteTimer's physics model needs real gradients, and a
+prediction built on missing elevation would be confidently wrong.
+
+---
+
+## Sending a prediction to Garmin
+
+A completed prediction can be downloaded as a GPX file — plain, or with predicted times stamped on
+each point, for tools that can play back a virtual ride — from its detail page or the prediction
+history list.
+
+If you have a Garmin account connected, the detail page also offers "Send to Garmin", which
+uploads the prediction directly as a course on Garmin Connect, ready to load onto a device. This
+goes through the same undocumented endpoints Garmin Connect's own website uses to import a course,
+because Garmin has no public API for this that an individual account can use — so unlike everything
+else in this README, it isn't sitting on a stable contract. If Garmin changes those endpoints, this
+feature can stop working with no warning; downloading the GPX and importing it manually on
+[connect.garmin.com](https://connect.garmin.com) always works as a fallback.
 
 ---
 
@@ -181,8 +225,11 @@ This writes a timestamped dump file to the current directory. To restore from on
 ```
 
 Restoring replaces everything currently in the database with the dump's contents. It does not
-touch `deploy/.env.local` — your Garmin encryption key is unaffected, so a restored connection to
-Garmin (if you had one) stays usable.
+touch `deploy/.env.local` — your Garmin and Google Maps encryption keys are unaffected, so a
+restored connection to Garmin, or a saved Google Maps key, stays usable. Back up
+`deploy/.env.local` itself alongside your database dumps: losing it makes a restored database's
+encrypted Garmin tokens and Google Maps key undecryptable, even though the rest of the restore
+succeeds.
 
 ---
 
@@ -222,12 +269,12 @@ run. Your uploaded activities, model, predictions, and any connected Garmin acco
 
 **You lost `deploy/.env.local`, or it's been deleted** — RouteTimer will refuse to start (its
 Garmin encryption key is gone). Delete the file if it partially exists, then run `./run.sh` again
-to generate a fresh one. Any previously connected Garmin account will show as needing
-reconnection, since its stored tokens can no longer be decrypted; your training data, model, and
-predictions are unaffected.
+to generate a fresh pair of keys. Any previously connected Garmin account will show as needing
+reconnection, and any saved Google Maps key will need re-entering, since neither can be decrypted
+with a new key; your training data, model, and predictions are unaffected.
 
 **Starting over completely** (deletes all your training data and predictions, but keeps your
-Garmin encryption key so a reconnect isn't required):
+Garmin and Google Maps encryption keys so a reconnect or re-entering the map key isn't required):
 
 ```bash
 docker compose -f deploy/docker-compose.local.yml --env-file deploy/.env.local down -v

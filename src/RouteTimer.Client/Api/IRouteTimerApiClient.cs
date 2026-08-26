@@ -3,6 +3,8 @@ using RouteTimer.Contracts.Jobs;
 using RouteTimer.Contracts.Models;
 using RouteTimer.Contracts.Predictions;
 using RouteTimer.Contracts.Profile;
+using RouteTimer.Contracts.Routes;
+using RouteTimer.Contracts.Settings;
 using RouteTimer.Contracts.Training;
 
 namespace RouteTimer.Client.Api;
@@ -31,4 +33,10 @@ public interface IRouteTimerApiClient
     Task LocalLogoutAsync(CancellationToken ct);
     Task<bool> SetupLocalCredentialAsync(string passphrase, CancellationToken ct);
     Task<bool> LocalLoginAsync(string passphrase, CancellationToken ct);
+    Task<ShortLinkResponse> ResolveShortLinkAsync(string code, CancellationToken ct);
+    Task<GarminCourseResponse> CreateGarminCourseAsync(Guid predictionId, CreateGarminCourseRequest request, CancellationToken ct);
+    Task<GoogleMapsKeyStatusResponse> GetGoogleMapsKeyStatusAsync(CancellationToken ct);
+    Task SaveGoogleMapsKeyAsync(SaveGoogleMapsKeyRequest request, CancellationToken ct);
+    Task DeleteGoogleMapsKeyAsync(CancellationToken ct);
+    Task<GoogleMapsKeyResponse> UseGoogleMapsKeyAsync(CancellationToken ct);
 }

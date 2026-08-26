@@ -15,15 +15,27 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+function New-EncryptionKey {
+    $KeyBytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Fill($KeyBytes)
+    return [Convert]::ToBase64String($KeyBytes)
+}
+
 if (-not (Test-Path $EnvFile)) {
     Write-Host "First run: generating a Garmin token encryption key..."
     # This key encrypts your Garmin account tokens at rest -- generated once, kept in this
     # git-ignored file, and reused on every future start. Losing it makes any stored Garmin
     # connection unreadable; RouteTimer's own training data and predictions are unaffected.
-    $KeyBytes = New-Object byte[] 32
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($KeyBytes)
-    $Key = [Convert]::ToBase64String($KeyBytes)
-    "GARMIN_TOKEN_ENCRYPTION_KEY=$Key" | Out-File -FilePath $EnvFile -Encoding ascii -NoNewline
+    "GARMIN_TOKEN_ENCRYPTION_KEY=$(New-EncryptionKey)" | Out-File -FilePath $EnvFile -Encoding ascii -NoNewline
+}
+
+if (-not (Test-Path $EnvFile) -or -not (Select-String -Path $EnvFile -Pattern '^GOOGLE_MAPS_KEY_ENCRYPTION_KEY=' -Quiet)) {
+    Write-Host "Generating a Google Maps key encryption key..."
+    # Encrypts a rider's saved Google Maps API key at rest, the same way the Garmin key above
+    # protects Garmin tokens. Unlike that key, this one is optional at the application level --
+    # but run.ps1 always generates it so a rider who saves a Google Maps key on day one doesn't
+    # lose it to a key that was never provisioned.
+    "`nGOOGLE_MAPS_KEY_ENCRYPTION_KEY=$(New-EncryptionKey)" | Out-File -FilePath $EnvFile -Encoding ascii -Append -NoNewline
 }
 
 Write-Host "Starting RouteTimer on port $Port..."

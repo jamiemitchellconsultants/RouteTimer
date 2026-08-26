@@ -18,6 +18,7 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
     public DbSet<PowerBandEntity> PowerBands => Set<PowerBandEntity>();
     public DbSet<RiderModelDescentLimitEntity> RiderModelDescentLimits => Set<RiderModelDescentLimitEntity>();
     public DbSet<GarminConnectionEntity> GarminConnections => Set<GarminConnectionEntity>();
+    public DbSet<GoogleMapsCredentialEntity> GoogleMapsCredentials => Set<GoogleMapsCredentialEntity>();
     public DbSet<GarminActivityImportEntity> GarminActivityImports => Set<GarminActivityImportEntity>();
     public DbSet<LocalCredentialEntity> LocalCredentials => Set<LocalCredentialEntity>();
 
@@ -41,6 +42,7 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
             .Metadata.SetValueComparer(ListComparer);
         prediction.Property(entity => entity.CreatedAt).HasColumnType("timestamp with time zone");
         prediction.Property(entity => entity.CompletedAt).HasColumnType("timestamp with time zone");
+        prediction.Property(entity => entity.GarminCourseUploadedAt).HasColumnType("timestamp with time zone");
         prediction.HasIndex(entity => entity.CreatedAt);
         prediction.HasIndex(entity => entity.UploadId);
         prediction.HasIndex(entity => entity.RiderModelId);
@@ -116,6 +118,19 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
         garminConnection.Property(entity => entity.Tag).HasColumnType("bytea").IsRequired();
         garminConnection.Property(entity => entity.LastValidatedAt).HasColumnType("timestamp with time zone");
         garminConnection.Property(entity => entity.UpdatedAt).HasColumnType("timestamp with time zone");
+
+        var googleMapsCredential = modelBuilder.Entity<GoogleMapsCredentialEntity>();
+        googleMapsCredential.ToTable(
+            "google_maps_credentials",
+            table => table.HasCheckConstraint("CK_google_maps_credentials_singleton", "\"Id\" = 1"));
+        googleMapsCredential.HasKey(entity => entity.Id);
+        googleMapsCredential.Property(entity => entity.Id).ValueGeneratedNever();
+        googleMapsCredential.Property(entity => entity.EncryptionVersion).IsRequired();
+        googleMapsCredential.Property(entity => entity.Nonce).HasColumnType("bytea").IsRequired();
+        googleMapsCredential.Property(entity => entity.Ciphertext).HasColumnType("bytea").IsRequired();
+        googleMapsCredential.Property(entity => entity.Tag).HasColumnType("bytea").IsRequired();
+        googleMapsCredential.Property(entity => entity.KeyHint).HasMaxLength(64).IsRequired();
+        googleMapsCredential.Property(entity => entity.UpdatedAt).HasColumnType("timestamp with time zone");
 
         var garminActivityImport = modelBuilder.Entity<GarminActivityImportEntity>();
         garminActivityImport.ToTable("garmin_activity_imports");

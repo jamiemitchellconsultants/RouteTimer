@@ -1,6 +1,7 @@
 using RouteTimer.Domain.Models;
 using RouteTimer.Domain.Predictions;
 using RouteTimer.Domain.Profile;
+using RouteTimer.Services.Routes;
 
 namespace RouteTimer.Services.Persistence;
 
@@ -67,7 +68,9 @@ public sealed record PredictionSummary(
     PredictionAssumptions Assumptions,
     DateTimeOffset CreatedAt,
     DateTimeOffset? CompletedAt,
-    IReadOnlyList<PersistedPredictionSegment> Segments);
+    IReadOnlyList<PersistedPredictionSegment> Segments,
+    long? GarminCourseId = null,
+    DateTimeOffset? GarminCourseUploadedAt = null);
 
 public sealed record PredictionDetail(
     Guid Id,
@@ -87,7 +90,9 @@ public sealed record PredictionDetail(
     PredictionAssumptions Assumptions,
     DateTimeOffset CreatedAt,
     DateTimeOffset? CompletedAt,
-    IReadOnlyList<PersistedPredictionSegment> Segments);
+    IReadOnlyList<PersistedPredictionSegment> Segments,
+    long? GarminCourseId = null,
+    DateTimeOffset? GarminCourseUploadedAt = null);
 
 public interface IPredictionRepository
 {
@@ -98,4 +103,6 @@ public interface IPredictionRepository
     Task FailAsync(Guid predictionId, string code, string message, CancellationToken cancellationToken);
     Task<IReadOnlyList<PredictionSummary>> GetSummariesAsync(CancellationToken cancellationToken);
     Task<PredictionDetail?> GetAsync(Guid predictionId, CancellationToken cancellationToken);
+    Task<PredictionGpxSource?> GetGpxSourceAsync(Guid predictionId, CancellationToken cancellationToken);
+    Task RecordGarminCourseAsync(Guid predictionId, long courseId, DateTimeOffset uploadedAt, CancellationToken cancellationToken);
 }

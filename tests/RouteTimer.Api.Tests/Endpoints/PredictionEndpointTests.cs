@@ -15,6 +15,7 @@ using RouteTimer.Domain.Physics;
 using RouteTimer.Domain.Profile;
 using RouteTimer.Persistence;
 using RouteTimer.Persistence.Repositories;
+using RouteTimer.Services.Garmin;
 using RouteTimer.Services.Persistence;
 
 namespace RouteTimer.Api.Tests.Endpoints;
@@ -123,6 +124,186 @@ public sealed class PredictionEndpointTests
         Assert.Contains("prediction-not-found", await missingPrediction.Content.ReadAsStringAsync());
         Assert.Equal(HttpStatusCode.NotFound, missingJob.StatusCode);
         Assert.Contains("job-not-found", await missingJob.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Gpx_download_returns_404_for_an_unknown_prediction()
+    {
+        await using var app = CreateRiderApp();
+        using var client = app.CreateClient();
+
+        using var response = await client.GetAsync($"/api/predictions/{Guid.NewGuid()}/gpx");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Contains("prediction-not-found", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Gpx_download_returns_409_for_a_queued_prediction()
+    {
+        await using var app = CreateRiderApp();
+        await SeedProfileAndModelAsync(app.Services);
+        using var client = app.CreateClient();
+        using var submitted = await client.PostAsync("/api/predictions", GpxForm());
+        var accepted = await submitted.Content.ReadFromJsonAsync<PredictionSubmissionResponse>();
+
+        using var response = await client.GetAsync($"/api/predictions/{accepted!.PredictionId}/gpx");
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Contains("prediction-not-complete", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Gpx_download_returns_the_untimed_course_track_by_default()
+    {
+        await using var app = CreateRiderApp();
+        await SeedProfileAndModelAsync(app.Services);
+        using var client = app.CreateClient();
+        using var submitted = await client.PostAsync("/api/predictions", GpxForm());
+        var accepted = await submitted.Content.ReadFromJsonAsync<PredictionSubmissionResponse>();
+        await PublishAsync(app.Services, accepted!.PredictionId);
+
+        using var response = await client.GetAsync($"/api/predictions/{accepted.PredictionId}/gpx");
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/gpx+xml", response.Content.Headers.ContentType!.MediaType);
+        Assert.NotNull(response.Content.Headers.ContentDisposition);
+        Assert.EndsWith(".gpx", response.Content.Headers.ContentDisposition!.FileNameStar ?? response.Content.Headers.ContentDisposition.FileName, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("<trkpt", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("<time>", body.Split("<trkseg>")[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Gpx_download_writes_predicted_times_when_timed_is_requested()
+    {
+        await using var app = CreateRiderApp();
+        await SeedProfileAndModelAsync(app.Services);
+        using var client = app.CreateClient();
+        using var submitted = await client.PostAsync("/api/predictions", GpxForm());
+        var accepted = await submitted.Content.ReadFromJsonAsync<PredictionSubmissionResponse>();
+        await PublishAsync(app.Services, accepted!.PredictionId);
+
+        using var response = await client.GetAsync($"/api/predictions/{accepted.PredictionId}/gpx?timed=true");
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("<time>", body.Split("<trkseg>")[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Garmin_course_returns_404_for_an_unknown_prediction()
+    {
+        await using var app = CreateRiderApp(services =>
+        {
+            services.RemoveAll<IGarminAdapterClient>();
+            services.AddSingleton<IGarminAdapterClient>(new FakeCourseAdapterClient());
+        });
+        using var client = app.CreateClient();
+
+        using var response = await client.PostAsJsonAsync($"/api/predictions/{Guid.NewGuid()}/garmin-course", new CreateGarminCourseRequest(null, null));
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Contains("prediction-not-found", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Garmin_course_returns_409_for_a_queued_prediction()
+    {
+        await using var app = CreateRiderApp(services =>
+        {
+            services.RemoveAll<IGarminAdapterClient>();
+            services.AddSingleton<IGarminAdapterClient>(new FakeCourseAdapterClient());
+        });
+        await SeedProfileAndModelAsync(app.Services);
+        await SaveGarminConnectionAsync(app.Services);
+        using var client = app.CreateClient();
+        using var submitted = await client.PostAsync("/api/predictions", GpxForm());
+        var accepted = await submitted.Content.ReadFromJsonAsync<PredictionSubmissionResponse>();
+
+        using var response = await client.PostAsJsonAsync($"/api/predictions/{accepted!.PredictionId}/garmin-course", new CreateGarminCourseRequest(null, null));
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Contains("prediction-not-complete", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Garmin_course_succeeds_and_returns_the_course_id_and_url()
+    {
+        var adapter = new FakeCourseAdapterClient
+        {
+            Result = new GarminAdapterCourse(4242, "Kingston to Dorking", "refreshed-token")
+        };
+        await using var app = CreateRiderApp(services =>
+        {
+            services.RemoveAll<IGarminAdapterClient>();
+            services.AddSingleton<IGarminAdapterClient>(adapter);
+        });
+        await SeedProfileAndModelAsync(app.Services);
+        await SaveGarminConnectionAsync(app.Services);
+        using var client = app.CreateClient();
+        using var submitted = await client.PostAsync("/api/predictions", GpxForm());
+        var accepted = await submitted.Content.ReadFromJsonAsync<PredictionSubmissionResponse>();
+        await PublishAsync(app.Services, accepted!.PredictionId);
+
+        using var response = await client.PostAsJsonAsync($"/api/predictions/{accepted.PredictionId}/garmin-course", new CreateGarminCourseRequest(null, null));
+        var body = await response.Content.ReadFromJsonAsync<GarminCourseResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(4242, body!.CourseId);
+        Assert.Equal("https://connect.garmin.com/modern/course/4242", body.CourseUrl);
+    }
+
+    [Fact]
+    public async Task Garmin_course_maps_a_rejected_course_to_422()
+    {
+        var adapter = new FakeCourseAdapterClient
+        {
+            Exception = new GarminAdapterException(GarminAdapterError.CourseRejected, "rejected")
+        };
+        await using var app = CreateRiderApp(services =>
+        {
+            services.RemoveAll<IGarminAdapterClient>();
+            services.AddSingleton<IGarminAdapterClient>(adapter);
+        });
+        await SeedProfileAndModelAsync(app.Services);
+        await SaveGarminConnectionAsync(app.Services);
+        using var client = app.CreateClient();
+        using var submitted = await client.PostAsync("/api/predictions", GpxForm());
+        var accepted = await submitted.Content.ReadFromJsonAsync<PredictionSubmissionResponse>();
+        await PublishAsync(app.Services, accepted!.PredictionId);
+
+        using var response = await client.PostAsJsonAsync($"/api/predictions/{accepted.PredictionId}/garmin-course", new CreateGarminCourseRequest(null, null));
+
+        Assert.Equal((HttpStatusCode)422, response.StatusCode);
+        Assert.Contains("garmin-course-rejected", await response.Content.ReadAsStringAsync());
+    }
+
+    private static async Task SaveGarminConnectionAsync(IServiceProvider services)
+    {
+        await using var scope = services.CreateAsyncScope();
+        var protector = scope.ServiceProvider.GetRequiredService<IGarminTokenProtector>();
+        var repository = scope.ServiceProvider.GetRequiredService<IGarminConnectionRepository>();
+        await repository.SaveAsync(
+            new GarminConnectionRecord("connected", "42", "Jamie", protector.Protect("saved-secret-token"), DateTimeOffset.UtcNow, DateTimeOffset.UtcNow),
+            CancellationToken.None);
+    }
+
+    private sealed class FakeCourseAdapterClient : IGarminAdapterClient
+    {
+        public GarminAdapterCourse Result { get; set; } = new(1, "R", "refreshed-token");
+        public GarminAdapterException? Exception { get; set; }
+
+        public Task<GarminAdapterCourse> CreateCourseAsync(string tokenJson, GarminCourseRequest request, CancellationToken cancellationToken) =>
+            Exception is null ? Task.FromResult(Result) : Task.FromException<GarminAdapterCourse>(Exception);
+
+        public Task<GarminAdapterLogin> LoginAsync(string email, string password, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<GarminAdapterLogin> CompleteMfaAsync(string challengeId, string code, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<GarminAdapterSession> ValidateAsync(string tokenJson, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<GarminAdapterActivityPage> GetActivitiesAsync(string tokenJson, int offset, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<GarminAdapterActivityResult> GetActivityAsync(string tokenJson, string activityId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<GarminAdapterFitDownload> DownloadFitAsync(string tokenJson, string activityId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task ClearChallengesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     [Fact]
@@ -391,5 +572,7 @@ public sealed class PredictionEndpointTests
         public Task FailAsync(Guid predictionId, string code, string message, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<IReadOnlyList<PredictionSummary>> GetSummariesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<PredictionDetail?> GetAsync(Guid predictionId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<RouteTimer.Services.Routes.PredictionGpxSource?> GetGpxSourceAsync(Guid predictionId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task RecordGarminCourseAsync(Guid predictionId, long courseId, DateTimeOffset uploadedAt, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 }

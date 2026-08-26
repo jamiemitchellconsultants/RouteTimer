@@ -1,0 +1,36 @@
+@using RouteTimer.Client.Logging
+@implements IDisposable
+@inject ActionLog Log
+
+<div class="log" data-testid="route-builder-log">
+    <div class="log-header">
+        <span>Action log</span>
+        <button type="button" class="secondary" @onclick="Copy" disabled="@(Log.Entries.Count == 0)">Copy log</button>
+    </div>
+    <ol class="log-entries">
+        @foreach (var entry in Log.Entries)
+        {
+            <li class="entry @entry.Level.ToString().ToLowerInvariant()">
+                <span class="at">@entry.At.ToString("HH:mm:ss.fff")</span>
+                <span class="level">@entry.Level.ToString().ToUpperInvariant()</span>
+                <span class="message">@entry.Message</span>
+                @if (entry.Detail is not null)
+                {
+                    <pre class="detail">@entry.Detail</pre>
+                }
+            </li>
+        }
+    </ol>
+</div>
+
+@code {
+    [Parameter] public EventCallback<string> OnCopy { get; set; }
+
+    protected override void OnInitialized() => Log.Changed += Refresh;
+
+    private void Refresh() => InvokeAsync(StateHasChanged);
+
+    private Task Copy() => OnCopy.InvokeAsync(Log.ToPlainText());
+
+    public void Dispose() => Log.Changed -= Refresh;
+}

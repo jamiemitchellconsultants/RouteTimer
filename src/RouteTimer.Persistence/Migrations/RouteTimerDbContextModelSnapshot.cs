@@ -219,6 +219,42 @@ namespace RouteTimer.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("RouteTimer.Persistence.Entities.GoogleMapsCredentialEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("integer");
+
+                    b.Property<byte[]>("Ciphertext")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<int>("EncryptionVersion")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("KeyHint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<byte[]>("Nonce")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<byte[]>("Tag")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("google_maps_credentials", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_google_maps_credentials_singleton", "\"Id\" = 1");
+                        });
+                });
+
             modelBuilder.Entity("RouteTimer.Persistence.Entities.LocalCredentialEntity", b =>
                 {
                     b.Property<int>("Id")
@@ -326,6 +362,12 @@ namespace RouteTimer.Persistence.Migrations
 
                     b.Property<double?>("DistanceMetres")
                         .HasColumnType("double precision");
+
+                    b.Property<long?>("GarminCourseId")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset?>("GarminCourseUploadedAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<double?>("ModelValidationMedianApe")
                         .HasColumnType("double precision");

@@ -423,6 +423,9 @@ public sealed class GarminImportServiceTests
             throw new NotSupportedException();
 
         public Task ClearChallengesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<GarminAdapterCourse> CreateCourseAsync(string tokenJson, GarminCourseRequest request, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 
     private class TrackingStream(byte[] content) : MemoryStream(content)

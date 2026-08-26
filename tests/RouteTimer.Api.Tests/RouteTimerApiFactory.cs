@@ -24,6 +24,7 @@ public sealed class RouteTimerApiFactory(
     internal const string DefaultKeycloakAuthority = "https://keycloak.test.invalid/realms/routetimer";
     private const string DefaultGarminTokenKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
     private const string DefaultGarminAdapterBaseUrl = "http://garmin-adapter.invalid/";
+    private const string DefaultGoogleMapsKeyEncryptionKey = "Hx4dHBsaGRgXFhUUExIREA8ODQwLCgkIBwYFBAMCAQA=";
 
     private static readonly IReadOnlyDictionary<string, string> DefaultSettings =
         new Dictionary<string, string>(StringComparer.Ordinal)
@@ -34,7 +35,11 @@ public sealed class RouteTimerApiFactory(
             // HttpClient refuses to be constructed without a base address, so every host that
             // boots Program needs both -- including the ones that never touch Garmin.
             ["Garmin:TokenEncryptionKey"] = DefaultGarminTokenKey,
-            ["GarminAdapter:BaseUrl"] = DefaultGarminAdapterBaseUrl
+            ["GarminAdapter:BaseUrl"] = DefaultGarminAdapterBaseUrl,
+            // Unlike the Garmin key, Program tolerates this being absent -- key storage just
+            // reports unavailable. Set by default so ordinary tests get working storage, and
+            // unset via WithSetting(..., null) to exercise the unavailable path specifically.
+            ["GoogleMaps:KeyEncryptionKey"] = DefaultGoogleMapsKeyEncryptionKey
         };
 
     /// <summary>

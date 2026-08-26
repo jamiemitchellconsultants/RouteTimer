@@ -1,10 +1,13 @@
 using RouteTimer.Api.Errors;
+using RouteTimer.Api.Garmin;
 using RouteTimer.Api.Uploads;
 using RouteTimer.Contracts.Errors;
 using RouteTimer.Contracts.Predictions;
 using RouteTimer.Contracts.Uploads;
+using RouteTimer.Services.Garmin;
 using RouteTimer.Services.Persistence;
 using RouteTimer.Services.Predictions;
+using RouteTimer.Services.Routes;
 
 namespace RouteTimer.Api.Endpoints;
 
@@ -16,6 +19,8 @@ public static class PredictionEndpoints
         routes.MapGet("/api/predictions", GetPredictionsAsync);
         routes.MapGet("/api/predictions/{id:guid}", GetPredictionAsync);
         routes.MapDelete("/api/predictions/{id:guid}", DeletePredictionAsync);
+        routes.MapGet("/api/predictions/{id:guid}/gpx", GetPredictionGpxAsync);
+        routes.MapPost("/api/predictions/{id:guid}/garmin-course", CreateGarminCourseAsync);
         return routes;
     }
 
@@ -92,6 +97,64 @@ public static class PredictionEndpoints
             ? TypedResults.NoContent()
             : ApiProblems.NotFound(ErrorCodes.PredictionNotFound, "The prediction was not found.");
 
+    private static async Task<IResult> GetPredictionGpxAsync(
+        Guid id,
+        bool? timed,
+        PredictionQueryService predictions,
+        CancellationToken cancellationToken)
+    {
+        var source = await predictions.GetGpxSourceAsync(id, cancellationToken);
+        if (source is null)
+        {
+            return ApiProblems.NotFound(ErrorCodes.PredictionNotFound, "The prediction was not found.");
+        }
+
+        try
+        {
+            var gpx = PredictionGpxWriter.Write(source, timed ?? false);
+            return TypedResults.File(
+                System.Text.Encoding.UTF8.GetBytes(gpx),
+                "application/gpx+xml",
+                PredictionGpxWriter.SuggestFileName(source.RouteName));
+        }
+        catch (PredictionNotCompleteException)
+        {
+            return ApiProblems.Conflict(
+                ErrorCodes.PredictionNotComplete,
+                "This prediction has not produced a route yet, so it cannot be exported.");
+        }
+    }
+
+    private static async Task<IResult> CreateGarminCourseAsync(
+        Guid id,
+        CreateGarminCourseRequest request,
+        GarminCourseService courses,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var created = await courses.CreateCourseAsync(
+                id,
+                new GarminCourseOptions(request.Name, request.ActivityType),
+                cancellationToken);
+            return TypedResults.Ok(new GarminCourseResponse(created.CourseId, created.CourseName, created.CourseUrl));
+        }
+        catch (PredictionMissingException)
+        {
+            return ApiProblems.NotFound(ErrorCodes.PredictionNotFound, "The prediction was not found.");
+        }
+        catch (PredictionNotCompleteException)
+        {
+            return ApiProblems.Conflict(
+                ErrorCodes.PredictionNotComplete,
+                "This prediction has not produced a route yet, so it cannot be sent to Garmin.");
+        }
+        catch (Exception exception) when (GarminProblemMapping.IsPublicGarminFailure(exception))
+        {
+            return GarminProblemMapping.ToProblem(exception);
+        }
+    }
+
     private static PredictionSummaryResponse ToSummary(PredictionSummary prediction) => new(
         prediction.Id,
         prediction.State.ToString(),
@@ -115,7 +178,9 @@ public static class PredictionEndpoints
         prediction.Assumptions.Weather,
         prediction.Assumptions.MovingOnly,
         prediction.CreatedAt,
-        prediction.CompletedAt);
+        prediction.CompletedAt,
+        prediction.GarminCourseId,
+        prediction.GarminCourseUploadedAt);
 
     private static PredictionSummaryResponse ToDetailSummary(PredictionDetail prediction) => new(
         prediction.Id,
@@ -140,7 +205,9 @@ public static class PredictionEndpoints
         prediction.Assumptions.Weather,
         prediction.Assumptions.MovingOnly,
         prediction.CreatedAt,
-        prediction.CompletedAt);
+        prediction.CompletedAt,
+        prediction.GarminCourseId,
+        prediction.GarminCourseUploadedAt);
 
     private static PredictionSegmentResponse ToSegment(PersistedPredictionSegment segment) => new(
         segment.Sequence,

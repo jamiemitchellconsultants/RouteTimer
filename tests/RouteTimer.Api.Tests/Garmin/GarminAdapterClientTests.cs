@@ -272,6 +272,7 @@ public sealed class GarminAdapterClientTests
     [InlineData("request-invalid", GarminAdapterError.RequestInvalid)]
     [InlineData("activity-not-allowed", GarminAdapterError.ActivityNotAllowed)]
     [InlineData("fit-too-large", GarminAdapterError.FitTooLarge)]
+    [InlineData("course-rejected", GarminAdapterError.CourseRejected)]
     public async Task Adapter_error_codes_map_without_retaining_response_details(string code, GarminAdapterError expected)
     {
         var client = CreateClient((_, _) => Task.FromResult(JsonResponse($"{{\"code\":\"{code}\",\"detail\":\"secret detail\",\"unknown\":\"secret field\"}}", HttpStatusCode.BadRequest)));
@@ -336,6 +337,46 @@ public sealed class GarminAdapterClientTests
         var exception = await Assert.ThrowsAsync<GarminAdapterException>(() => client.DownloadFitAsync("token-json", "123", CancellationToken.None));
 
         Assert.Equal(GarminAdapterError.ResponseInvalid, exception.Error);
+    }
+
+    [Fact]
+    public async Task Creates_a_course_and_returns_the_refreshed_token()
+    {
+        var client = CreateClient(async (request, cancellationToken) =>
+        {
+            Assert.Equal("/v1/courses", request.RequestUri!.AbsolutePath);
+            var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+            Assert.Contains("name=payload", body, StringComparison.Ordinal);
+            Assert.Contains("name=file", body, StringComparison.Ordinal);
+            Assert.Contains("route.gpx", body, StringComparison.Ordinal);
+            Assert.Contains("\"token\":\"token-json\"", body, StringComparison.Ordinal);
+            Assert.Contains("\"courseName\":\"Kingston to Dorking\"", body, StringComparison.Ordinal);
+            Assert.Contains("<gpx/>", body, StringComparison.Ordinal);
+            return JsonResponse("{\"courseId\":4242,\"courseName\":\"Kingston to Dorking\",\"tokenJson\":\"refreshed\"}");
+        });
+
+        var created = await client.CreateCourseAsync(
+            "token-json",
+            new GarminCourseRequest("route.gpx", "Kingston to Dorking", "road_biking", null, 410, 405, "<gpx/>"u8.ToArray()),
+            CancellationToken.None);
+
+        Assert.Equal(4242, created.CourseId);
+        Assert.Equal("Kingston to Dorking", created.CourseName);
+        Assert.Equal("refreshed", created.TokenJson);
+    }
+
+    [Fact]
+    public async Task Translates_a_rejected_course_into_a_typed_error()
+    {
+        var client = CreateClient((_, _) => Task.FromResult(
+            JsonResponse("{\"code\":\"course-rejected\",\"detail\":\"secret\"}", HttpStatusCode.UnprocessableEntity)));
+
+        var exception = await Assert.ThrowsAsync<GarminAdapterException>(() => client.CreateCourseAsync(
+            "token-json",
+            new GarminCourseRequest("route.gpx", "R", "road_biking", null, 0, 0, "<gpx/>"u8.ToArray()),
+            CancellationToken.None));
+
+        Assert.Equal(GarminAdapterError.CourseRejected, exception.Error);
     }
 
     [Fact]
