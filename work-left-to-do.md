@@ -62,3 +62,33 @@ render that does not change the selection no longer repeats the interop call.
 
 Deployment/browser acceptance and the undiscovered EndToEnd suite remain outside this execution
 environment.
+
+## Predictions route builder, GPX export, and Garmin course push (2026-08-26)
+
+Implemented per `docs/superpowers/specs/2026-08-26-predictions-route-builder-design.md` and
+`docs/superpowers/plans/2026-08-26-predictions-route-builder.md`:
+
+- The Predictions page's "Submit a route" panel now has an "Upload GPX" / "Google Maps route"
+  tab, the latter porting MapToGarmin's URL parser, Maps JavaScript interop, and action log into
+  `RouteTimer.Client.RouteBuilder`/`RouteTimer.Client.Logging`. Elevation is mandatory here, unlike
+  in MapToGarmin, since the predictor needs real gradients.
+- A Google Maps API key can be saved, encrypted at rest with a generalised version of the AES-GCM
+  protector that already guards Garmin tokens (`RouteTimer.Services.Security.AesGcmSecretProtector`,
+  keyed by purpose string). Storage is optional at the application level, gated by an optional
+  `GoogleMaps:KeyEncryptionKey` setting.
+- Any completed prediction can be downloaded as GPX, untimed or with predicted times stamped per
+  point, via `GET /api/predictions/{id}/gpx`.
+- A completed prediction can be pushed to Garmin Connect as a course via
+  `POST /api/predictions/{id}/garmin-course`, using an undocumented two-step Garmin flow implemented
+  in the Python adapter (`routetimer_garmin/courses.py`) and exercised through the existing stored
+  Garmin session and operation gate.
+
+**Known gap:** the Garmin course push was implemented and unit-tested against a faked Garmin client,
+but this session had no interactive access to run the live verification spike the plan's Task 1
+calls for (a real Garmin Connect login is needed). See `docs/garmin-course-spike.md` for what's
+still open there. Until that spike runs, treat "Send to Garmin" as unverified against a live
+account; the GPX download works regardless and needs no such verification.
+
+Full solution test suite passed (`dotnet test RouteTimer.slnx --no-restore -p:UseSharedCompilation=false`)
+after every task, and the Python adapter's suite passed with `mypy --strict` and `ruff check` clean
+after every adapter change.

@@ -48,6 +48,9 @@ services:
       Keycloak__Authority: ${KEYCLOAK_AUTHORITY:?set KEYCLOAK_AUTHORITY}
       GarminAdapter__BaseUrl: http://routetimer-garmin-adapter:8081
       Garmin__TokenEncryptionKey: ${ROUTETIMER_GARMIN_TOKEN_KEY:?set ROUTETIMER_GARMIN_TOKEN_KEY}
+      # Optional, unlike the Garmin key above: RouteTimer starts fine without it, and saving a
+      # Google Maps API key is simply unavailable until this is set.
+      GoogleMaps__KeyEncryptionKey: ${ROUTETIMER_GOOGLE_MAPS_KEY_ENCRYPTION_KEY:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
       interval: 10s

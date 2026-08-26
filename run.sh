@@ -29,6 +29,19 @@ if [ ! -f "$ENV_FILE" ]; then
 	chmod 600 "$ENV_FILE"
 fi
 
+if ! grep -q '^GOOGLE_MAPS_KEY_ENCRYPTION_KEY=' "$ENV_FILE" 2>/dev/null; then
+	if ! command -v openssl >/dev/null 2>&1; then
+		echo "openssl is required to generate the Google Maps key encryption key and was not found." >&2
+		exit 1
+	fi
+	echo "Generating a Google Maps key encryption key..."
+	# Encrypts a rider's saved Google Maps API key at rest, the same way the Garmin key above
+	# protects Garmin tokens. Unlike that key, this one is optional at the application level --
+	# but run.sh always generates it so a rider who saves a Google Maps key on day one doesn't
+	# lose it to a key that was never provisioned.
+	echo "GOOGLE_MAPS_KEY_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> "$ENV_FILE"
+fi
+
 echo "Starting RouteTimer on port $PORT..."
 if ! ROUTETIMER_PORT="$PORT" docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --pull always --wait; then
 	echo
