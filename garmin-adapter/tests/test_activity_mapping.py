@@ -1,7 +1,9 @@
 from datetime import UTC, datetime
 
+import pytest
+
 import routetimer_garmin.models as models
-from routetimer_garmin.facade import _map_activity
+from routetimer_garmin.facade import _map_activity, _parse_garmin_timestamp
 
 
 def test_map_activity_accepts_only_road_and_gravel() -> None:
@@ -62,6 +64,58 @@ def test_map_activity_with_permissive_type_still_maps_an_unrecognised_type() -> 
     assert mapped is not None
     assert mapped.activity_id == "300"
     assert mapped.activity_type == "indoor_cycling"
+
+
+def test_map_activity_reads_the_nested_dto_shape_garmins_detail_endpoint_also_returns() -> None:
+    # Garmin's single-activity detail endpoint has been observed returning two different shapes
+    # for the same ordinary ride depending on internal Garmin routing, not anything about the
+    # activity: the flat shape above (also what the list endpoint always uses), and this nested
+    # DTO shape, with the type under activityTypeDTO and everything else under summaryDTO -- and,
+    # within summaryDTO, average power renamed from avgPower to averagePower and startTimeGMT
+    # formatted differently (ISO-ish with fractional seconds, not "%Y-%m-%d %H:%M:%S"). Confirmed
+    # directly against a real account: a plain road ride's detail lookup came back in exactly this
+    # shape, format quirks included.
+    activity = _map_activity(
+        {
+            "activityId": 400,
+            "activityName": "Nested DTO shape ride",
+            "activityTypeDTO": {"typeKey": "road_biking"},
+            "summaryDTO": {
+                "startTimeGMT": "2026-08-25T06:30:00.0",
+                "distance": 42000.0,
+                "duration": 5400.0,
+                "elevationGain": 650.0,
+                "averagePower": 215.0,
+            },
+        }
+    )
+
+    assert activity is not None
+    assert activity.activity_type == "road-cycling"
+    assert activity.started_at == datetime(2026, 8, 25, 6, 30, tzinfo=UTC)
+    assert activity.distance_metres == 42000.0
+    assert activity.duration_seconds == 5400.0
+    assert activity.ascent_metres == 650.0
+    assert activity.average_power_watts == 215.0
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected"),
+    [
+        ("2026-08-25 06:30:00", datetime(2026, 8, 25, 6, 30, tzinfo=UTC)),
+        ("2026-08-25T06:30:00.0", datetime(2026, 8, 25, 6, 30, tzinfo=UTC)),
+        ("2026-08-25T06:30:00.123456", datetime(2026, 8, 25, 6, 30, 0, 123456, tzinfo=UTC)),
+    ],
+)
+def test_parse_garmin_timestamp_accepts_both_observed_formats(
+    raw_value: str, expected: datetime
+) -> None:
+    assert _parse_garmin_timestamp(raw_value) == expected
+
+
+def test_parse_garmin_timestamp_rejects_a_genuinely_unrecognised_format() -> None:
+    with pytest.raises(ValueError, match="did not match any known Garmin format"):
+        _parse_garmin_timestamp("not-a-timestamp")
 
 
 def test_map_activity_normalizes_stable_fields_and_nonfinite_metrics() -> None:

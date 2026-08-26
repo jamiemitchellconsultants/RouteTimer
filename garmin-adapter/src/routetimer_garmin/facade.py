@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -14,6 +15,7 @@ from garminconnect.exceptions import (
 from routetimer_garmin.errors import AdapterError
 from routetimer_garmin.models import AdapterActivity, AdapterActivityBatch
 
+logger = logging.getLogger(__name__)
 
 TYPE_MAP: Final = {
     "road_biking": "road-cycling",
@@ -120,10 +122,20 @@ class TokenSession:
         except Exception as error:
             raise _translate_error(error, "authentication") from None
         if not isinstance(raw_activity, Mapping):
+            # Field names/exception text only -- never the raw Garmin payload or its values.
+            logger.warning("get_activity: Garmin returned a non-mapping response, type=%s", type(raw_activity))
             raise AdapterError("response-invalid", 502)
         try:
             return _map_activity(raw_activity, require_known_type=False)
-        except Exception:
+        except Exception as error:
+            # Field names and exception text only -- never distance/time/power/location values.
+            # _map_activity already handles the two response shapes Garmin has been observed
+            # returning for this endpoint; if this still fires, it's a third one worth knowing
+            # the top-level shape of, not the flat/nested cases already handled above.
+            logger.warning(
+                "get_activity: mapping the Garmin response raised %s: %s; keys present=%s",
+                type(error).__name__, error, sorted(raw_activity.keys()),
+            )
             raise AdapterError("response-invalid", 502) from None
 
     def download_original(self, activity_id: str) -> bytes:
@@ -180,7 +192,15 @@ def _translate_error(error: Exception, authentication_code: str) -> AdapterError
 
 
 def _map_activity(raw: Mapping[str, Any], *, require_known_type: bool = True) -> AdapterActivity | None:
-    garmin_type = str(raw.get("activityType", {}).get("typeKey", ""))
+    # Garmin's single-activity detail endpoint has been observed returning two different shapes for
+    # an ordinary ride, seemingly depending on internal Garmin backend routing rather than anything
+    # about the activity itself: a flat shape (also what the list endpoint always uses, with
+    # activityType/startTimeGMT/distance/... at the top level) and a nested DTO shape, with the same
+    # information under activityTypeDTO and summaryDTO instead -- and, within summaryDTO, average
+    # power renamed from avgPower to averagePower. Both are handled here so a rider isn't at the
+    # mercy of which shape Garmin happens to answer with for a given request.
+    type_source = raw.get("activityTypeDTO", raw.get("activityType", {}))
+    garmin_type = str(type_source.get("typeKey", "")) if isinstance(type_source, Mapping) else ""
     canonical = TYPE_MAP.get(garmin_type)
     if canonical is None:
         # list_activities calls this with the default (require_known_type=True): Garmin's list
@@ -199,19 +219,39 @@ def _map_activity(raw: Mapping[str, Any], *, require_known_type: bool = True) ->
             return None
         canonical = garmin_type
 
-    started_at = datetime.strptime(str(raw["startTimeGMT"]), "%Y-%m-%d %H:%M:%S").replace(
-        tzinfo=UTC
-    )
+    summary = raw.get("summaryDTO", raw)
+    if not isinstance(summary, Mapping):
+        summary = raw
+
+    started_at = _parse_garmin_timestamp(summary["startTimeGMT"])
+    average_power = summary.get("avgPower", summary.get("averagePower"))
     return AdapterActivity(
         activity_id=str(int(raw["activityId"])),
         name=str(raw.get("activityName") or f"Garmin {raw['activityId']}").strip(),
         started_at=started_at,
         activity_type=cast(Literal["road-cycling", "gravel-cycling"], canonical),
-        distance_metres=_optional_finite(raw.get("distance")),
-        duration_seconds=_optional_finite(raw.get("duration")),
-        ascent_metres=_optional_finite(raw.get("elevationGain")),
-        average_power_watts=_optional_finite(raw.get("avgPower")),
+        distance_metres=_optional_finite(summary.get("distance")),
+        duration_seconds=_optional_finite(summary.get("duration")),
+        ascent_metres=_optional_finite(summary.get("elevationGain")),
+        average_power_watts=_optional_finite(average_power),
     )
+
+
+_START_TIME_FORMATS: Final = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f")
+
+
+def _parse_garmin_timestamp(value: object) -> datetime:
+    # The flat and nested-DTO response shapes format startTimeGMT differently -- confirmed
+    # directly: "2026-08-25 06:30:00" from the flat shape, "2025-10-01T12:15:37.0" (ISO-ish,
+    # fractional seconds) from the nested one. Try both rather than assuming the shape that
+    # decided which format also decided which parse this call needs.
+    text = str(value)
+    for time_format in _START_TIME_FORMATS:
+        try:
+            return datetime.strptime(text, time_format).replace(tzinfo=UTC)
+        except ValueError:
+            continue
+    raise ValueError(f"startTimeGMT {text!r} did not match any known Garmin format")
 
 
 def _optional_finite(value: Any) -> float | None:
