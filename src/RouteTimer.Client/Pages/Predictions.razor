@@ -138,6 +138,12 @@
                                     <span class="predictions-state">Queued</span>
                                 }
                                 <span class="predictions-state">@RouteTimerText.Sentence(prediction.State)</span>
+                                @if (prediction.MovingSeconds is not null)
+                                {
+                                    <a data-testid="@($"prediction-download-gpx-{prediction.Id}")"
+                                       class="predictions-button predictions-button--secondary"
+                                       href="@($"/api/predictions/{prediction.Id}/gpx")">GPX</a>
+                                }
                                 <button data-testid="@($"prediction-delete-request-{prediction.Id}")"
                                         class="predictions-button predictions-button--secondary"
                                         @onclick="@(() => RequestDelete(prediction.Id))"

@@ -216,6 +216,21 @@ public sealed class PredictionsPageTests : BunitContext
     }
 
     [Fact]
+    public void History_rows_link_to_the_untimed_gpx()
+    {
+        var predictionId = Guid.NewGuid();
+        api.OnGetModelStatusAsync = _ => Task.FromResult(ReadyModelStatus());
+        api.OnGetPredictionsAsync = _ => Task.FromResult<IReadOnlyList<PredictionSummaryResponse>>(
+            [PredictionSummary(predictionId, "Succeeded", DateTimeOffset.Parse("2026-08-25T10:00:00Z", CultureInfo.InvariantCulture))]);
+
+        var cut = Render<Predictions>();
+
+        cut.WaitForAssertion(() => Assert.Equal(
+            $"/api/predictions/{predictionId}/gpx",
+            cut.Find($"[data-testid='prediction-download-gpx-{predictionId}']").GetAttribute("href")));
+    }
+
+    [Fact]
     public void Predictions_shows_problem_state_when_history_loading_fails()
     {
         api.OnGetModelStatusAsync = _ => Task.FromResult(ReadyModelStatus());

@@ -32,6 +32,18 @@ else if (prediction is null)
 else
 {
     <section class="prediction-detail-panel">
+        @if (orderedSegments.Count > 0)
+        {
+            <div class="prediction-detail-actions">
+                <a data-testid="prediction-download-gpx"
+                   class="predictions-button predictions-button--secondary"
+                   href="@($"/api/predictions/{Id}/gpx")">Download GPX</a>
+                <a data-testid="prediction-download-gpx-timed"
+                   class="predictions-button predictions-button--secondary"
+                   href="@($"/api/predictions/{Id}/gpx?timed=true")">Download GPX with predicted times</a>
+            </div>
+        }
+
         <dl data-testid="prediction-detail-summary" class="prediction-detail-grid">
             <div>
                 <dt>Prediction ID</dt>

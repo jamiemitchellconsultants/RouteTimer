@@ -123,6 +123,38 @@ public sealed class PredictionDetailPageTests : BunitContext
     }
 
     [Fact]
+    public void Offers_both_gpx_variants_for_a_completed_prediction()
+    {
+        var predictionId = Guid.NewGuid();
+        var modelId = Guid.NewGuid();
+
+        api.OnGetPredictionAsync = (id, _) => Task.FromResult<PredictionDetailResponse?>(
+            new PredictionDetailResponse(
+                new PredictionSummaryResponse(
+                    predictionId, "Succeeded", 54321, 987, 5460, 8.56, 248, "Medium",
+                    ["temperature-estimated"], modelId, "v1.0.0", true, "Validated", 0.082, 0.156,
+                    71.3, 8.4, "dry-road", "calm", "temperate", true,
+                    DateTimeOffset.Parse("2026-08-25T08:30:00Z", CultureInfo.InvariantCulture),
+                    DateTimeOffset.Parse("2026-08-25T10:01:00Z", CultureInfo.InvariantCulture)),
+                [
+                    new PredictionSegmentResponse(1, 51.5, -0.11, 126, 500, 500, 0.02, 0.001, 246, 8.2, 60, 60, "Medium"),
+                    new PredictionSegmentResponse(2, 51.51, -0.12, 132, 1000, 500, 0.03, 0.001, 250, 8.9, 62, 122, "High")
+                ]));
+
+        var cut = Render<PredictionDetail>(parameters => parameters.Add(page => page.Id, predictionId));
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Equal(
+                $"/api/predictions/{predictionId}/gpx",
+                cut.Find("[data-testid=prediction-download-gpx]").GetAttribute("href"));
+            Assert.Equal(
+                $"/api/predictions/{predictionId}/gpx?timed=true",
+                cut.Find("[data-testid=prediction-download-gpx-timed]").GetAttribute("href"));
+        });
+    }
+
+    [Fact]
     public void PredictionDetail_keeps_visualization_hidden_for_non_terminal_or_segment_free_results()
     {
         var predictionId = Guid.NewGuid();
