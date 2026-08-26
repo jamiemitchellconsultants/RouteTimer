@@ -161,7 +161,8 @@
     private readonly CancellationTokenSource componentCancellation = new();
     private readonly List<string> selectedIds = [];
     private readonly Dictionary<Guid, JobResponse> importJobs = [];
-    private readonly HashSet<Guid> acceptedJobIds = [];
+    private readonly Queue<Guid> pendingAcceptedJobIds = new();
+    private readonly HashSet<Guid> knownAcceptedJobIds = [];
     private IReadOnlyList<GarminActivitySummaryResponse> activities = [];
     private IReadOnlyList<GarminImportResultResponse> importResults = [];
     private string? nextCursor;
@@ -175,6 +176,7 @@
     private bool isLoadingMore;
     private bool isImporting;
     private bool isPollingAcceptedJobs;
+    private bool hasCompletedAcceptedJobsAwaitingRefresh;
 
     [Parameter]
     public EventCallback<GarminImportBatchResponse> Imported { get; set; }
@@ -328,8 +330,8 @@
 
             if (acceptedJobs.Length > 0)
             {
-                acceptedJobIds.UnionWith(acceptedJobs);
-                _ = StartAcceptedJobPollingAsync(acceptedJobs);
+                EnqueueAcceptedJobs(acceptedJobs);
+                _ = StartAcceptedJobPollingAsync();
             }
         }
         catch (ApiProblemException apiProblem)
@@ -354,11 +356,11 @@
         }
     }
 
-    private async Task StartAcceptedJobPollingAsync(IReadOnlyList<Guid> jobIds)
+    private async Task StartAcceptedJobPollingAsync()
     {
         await Task.Yield();
 
-        if (isPollingAcceptedJobs || jobIds.Count == 0)
+        if (isPollingAcceptedJobs || pendingAcceptedJobIds.Count == 0)
         {
             return;
         }
@@ -368,30 +370,56 @@
 
         try
         {
-            await Task.WhenAll(jobIds.Select(PollAcceptedJobAsync));
-            if (!componentCancellation.IsCancellationRequested)
+            while (true)
             {
-                acceptedJobIds.ExceptWith(jobIds);
-                await AcceptedImportsCompleted.InvokeAsync();
+                while (pendingAcceptedJobIds.TryDequeue(out var jobId))
+                {
+                    try
+                    {
+                        await PollAcceptedJobAsync(jobId);
+                        hasCompletedAcceptedJobsAwaitingRefresh = true;
+                    }
+                    catch (OperationCanceledException) when (componentCancellation.IsCancellationRequested)
+                    {
+                        return;
+                    }
+                    catch (ApiProblemException apiProblem)
+                    {
+                        RequeueAcceptedJobFirst(jobId);
+                        pollingProblem = apiProblem;
+                        pollingFallbackProblem = false;
+                        return;
+                    }
+                    catch (HttpRequestException)
+                    {
+                        RequeueAcceptedJobFirst(jobId);
+                        pollingProblem = null;
+                        pollingFallbackProblem = true;
+                        return;
+                    }
+                    catch (Exception) when (!componentCancellation.IsCancellationRequested)
+                    {
+                        RequeueAcceptedJobFirst(jobId);
+                        pollingProblem = null;
+                        pollingFallbackProblem = true;
+                        return;
+                    }
+                }
+
+                if (hasCompletedAcceptedJobsAwaitingRefresh)
+                {
+                    hasCompletedAcceptedJobsAwaitingRefresh = false;
+                    await AcceptedImportsCompleted.InvokeAsync();
+                }
+
+                if (pendingAcceptedJobIds.Count == 0)
+                {
+                    break;
+                }
             }
         }
         catch (OperationCanceledException) when (componentCancellation.IsCancellationRequested)
         {
-        }
-        catch (ApiProblemException apiProblem)
-        {
-            pollingProblem = apiProblem;
-            pollingFallbackProblem = false;
-        }
-        catch (HttpRequestException)
-        {
-            pollingProblem = null;
-            pollingFallbackProblem = true;
-        }
-        catch (Exception) when (!componentCancellation.IsCancellationRequested)
-        {
-            pollingProblem = null;
-            pollingFallbackProblem = true;
         }
         finally
         {
@@ -403,7 +431,30 @@
         }
     }
 
-    private Task RetryAcceptedJobPollingAsync() => StartAcceptedJobPollingAsync(acceptedJobIds.ToArray());
+    private Task RetryAcceptedJobPollingAsync() => StartAcceptedJobPollingAsync();
+
+    private void EnqueueAcceptedJobs(IEnumerable<Guid> jobIds)
+    {
+        foreach (var jobId in jobIds)
+        {
+            if (knownAcceptedJobIds.Add(jobId))
+            {
+                pendingAcceptedJobIds.Enqueue(jobId);
+            }
+        }
+    }
+
+    private void RequeueAcceptedJobFirst(Guid jobId)
+    {
+        var waitingJobIds = pendingAcceptedJobIds.ToArray();
+        pendingAcceptedJobIds.Clear();
+        pendingAcceptedJobIds.Enqueue(jobId);
+
+        foreach (var waitingJobId in waitingJobIds)
+        {
+            pendingAcceptedJobIds.Enqueue(waitingJobId);
+        }
+    }
 
     private async Task PollAcceptedJobAsync(Guid jobId)
     {

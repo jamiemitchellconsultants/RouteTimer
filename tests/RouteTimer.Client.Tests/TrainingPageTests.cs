@@ -166,6 +166,71 @@ public sealed class TrainingPageTests : BunitContext
     }
 
     [Fact]
+    public void Training_drains_accepted_jobs_enqueued_by_a_second_import_before_refreshing()
+    {
+        var firstJobId = Guid.NewGuid();
+        var secondJobId = Guid.NewGuid();
+        var trainingRequests = 0;
+        var modelRequests = 0;
+        api.OnGetTrainingActivitiesAsync = _ =>
+        {
+            trainingRequests++;
+            return Task.FromResult<IReadOnlyList<TrainingActivitySummaryResponse>>([]);
+        };
+        api.OnGetModelStatusAsync = _ =>
+        {
+            modelRequests++;
+            return Task.FromResult(NotReadyModelStatus());
+        };
+        api.OnGetGarminConnectionAsync = _ => Task.FromResult(new GarminConnectionResponse("connected", "garmin-user-42", "Sunday Rider", null));
+        api.OnGetGarminActivitiesAsync = (_, _) => Task.FromResult(new GarminActivityPageResponse(
+        [
+            GarminActivity("first-ride", "First ride"),
+            GarminActivity("second-ride", "Second ride")
+        ], null));
+        api.OnImportGarminActivitiesAsync = (request, _) => Task.FromResult(new GarminImportBatchResponse(
+        [
+            request.ActivityIds.Single() switch
+            {
+                "first-ride" => new GarminImportResultResponse("first-ride", "First ride", "accepted", Guid.NewGuid(), firstJobId, null),
+                "second-ride" => new GarminImportResultResponse("second-ride", "Second ride", "accepted", Guid.NewGuid(), secondJobId, null),
+                _ => throw new InvalidOperationException("Unexpected Garmin activity ID.")
+            }
+        ]));
+        api.Jobs.Enqueue(Job(firstJobId, "Running", 40, "decoding-fit"));
+        api.Jobs.Enqueue(Job(firstJobId, "Succeeded", 100, "completed"));
+        api.Jobs.Enqueue(Job(secondJobId, "Succeeded", 100, "completed"));
+
+        var cut = Render<Training>();
+
+        cut.WaitForElement("[data-activity-id=first-ride] [data-testid=garmin-activity-select]").Change(true);
+        cut.Find("[data-testid=garmin-import-selected]").Click();
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Single(api.GarminImportRequests);
+            Assert.Single(api.RequestedJobs);
+            Assert.Equal(firstJobId, api.RequestedJobs[0].JobId);
+        });
+
+        cut.Find("[data-activity-id=second-ride] [data-testid=garmin-activity-select]").Change(true);
+        cut.Find("[data-testid=garmin-import-selected]").Click();
+        cut.WaitForAssertion(() => Assert.Equal(2, api.GarminImportRequests.Count));
+
+        Assert.Single(api.RequestedJobs);
+        Assert.Equal(1, trainingRequests);
+        Assert.Equal(1, modelRequests);
+
+        time.Advance(TimeSpan.FromSeconds(2));
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Equal([firstJobId, firstJobId, secondJobId], api.RequestedJobs.Select(request => request.JobId));
+            Assert.Equal(2, trainingRequests);
+            Assert.Equal(2, modelRequests);
+        });
+    }
+
+    [Fact]
     public void Training_accepts_multiple_fit_files_and_starts_with_no_file_state()
     {
         api.OnGetTrainingActivitiesAsync = _ => Task.FromResult<IReadOnlyList<TrainingActivitySummaryResponse>>([]);
