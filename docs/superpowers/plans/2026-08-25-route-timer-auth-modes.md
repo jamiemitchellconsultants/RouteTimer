@@ -2657,6 +2657,95 @@ git commit -m "feat: add the local mode sign-in page"
 
 ---
 
+### Task 9 amendments after review
+
+The `LocalSignIn.razor` code block above is the page's original shape. Three review rounds found
+defects in it and rewrote `SubmitAsync` twice; the version actually on this branch differs from
+what is printed above in the ways below.
+
+**`/signin` must not function in Keycloak mode.** The original page renders and works on any
+deployment: submitting posts to `/api/auth/login`, which only exists in local mode, so on the
+public multi-user deployment this was a live passphrase form that 404s. Guard it the same way
+`Authentication.razor` already guards the reverse case: `!AuthConfig.IsLocal` renders a short
+placeholder instead of the form, with its own `PageTitle` and `h1` so the tab title matches what
+is on screen and `FocusOnNavigate` has a target in that branch too.
+
+**The double-submit guard needs the passphrase and mismatch checks kept synchronous.**
+`isSubmitting = true` must be the last synchronous statement before the first `await` in
+`SubmitAsync` — WASM is single-threaded and non-preemptive, so as long as nothing between the
+`if (isSubmitting) return;` guard and setting it awaits, the window cannot be raced. Adding the
+empty-passphrase check (below) between them is safe only because it stays synchronous.
+
+**An empty or whitespace-only passphrase must be rejected before the round trip**, using
+`IsNullOrWhiteSpace`, not `IsNullOrEmpty` — the whitespace case slipped through the narrower check
+and reached the server, where on the login path it counts as a wrong guess against the rider's own
+lockout budget for nothing.
+
+**The button must stay disabled through the post-success `NavigateTo(forceLoad: true)`, not reset
+in a `finally`.** `forceLoad` starts a navigation and returns while the current document stays
+interactive for a stretch afterward; resetting eagerly leaves a window where a stray click
+double-POSTs — harmless on login, but a second setup call gets 409 and flashes "already
+configured" at the rider an instant before the page replaces itself. Move the reset into the
+catch blocks instead of `finally`.
+
+**That reset then has to be duplicated across every catch clause, including one the original page
+did not have.** `ApiProblemException` and `HttpRequestException` were the only two branches; a
+timeout (`HttpClient`'s own default, since this client sets none) surfaces as
+`OperationCanceledException` via `TaskCanceledException`, and without a third catch the button
+stayed disabled forever with no error shown — the exact failure mode the `finally` used to
+prevent, reintroduced by fixing the double-POST. All three catches clear `passphrase` and
+`confirmation` and reset `isSubmitting`; the two error catches read `problem.Detail ?? problem.Title`
+rather than `problem.Detail` alone, since a null detail otherwise renders nothing.
+
+**Drop the `NotifySessionChanged()` call and the `IServiceProvider` injection it required.**
+`forceLoad: true` tears down the whole WASM runtime, so the client re-reads
+`/api/auth/config`/`/api/auth/session` from scratch on the next boot regardless — the notify call
+only raced that reload for no benefit, and removing it also removes the service-locator pattern
+`LocalAuthenticationStateProvider` needed because it is not registered in Keycloak mode.
+
+**`@onchange` on the passphrase inputs must be `@oninput`.** Some autofill paths dispatch only
+`input`, not `change`; with `@onchange`, such a fill leaves the C# field empty and silently posts
+`""`. The six specified tests use bUnit's `.Change(...)` helper, which fires `onchange`
+specifically — once the inputs use `@oninput`, those calls must be `.Input(...)` instead, or they
+fail with `MissingEventHandlerException`.
+
+**The error message needs `role="alert"` and a stylesheet.** Neither existed in the original page;
+`.local-signin__error` was an unstyled, unannounced `<p>`. Add `role="alert"` in the markup and a
+new `LocalSignIn.razor.css` (`#9a3412` on white matches the existing `training-message--warning`
+convention and passes WCAG AA).
+
+**`AuthEndpoints.cs`'s lockout response, from Task 6, needs the wait time in its message, not only
+in `Retry-After`.** It read `"Wait for the lockout to expire before trying again."`; the flood
+guard a few lines away in the same file already says `"Wait {seconds} seconds..."`. Compute the
+seconds once and use it in both the header and the message: `$"Too many failed sign-in attempts.
+Wait {seconds} seconds before trying again."`.
+
+**Left deliberately unfixed: local mode drops the return URL.** `RedirectToLogin.razor`'s Keycloak
+branch preserves `returnUrl`; the local branch does not, and `LocalSignIn.razor` hardcodes
+`NavigateTo("/")` on success. A bookmarked or shared deep link therefore lands on the dashboard
+after local sign-in rather than where the rider was headed. The naive fix — read `returnUrl` from
+the query string and pass it to `NavigateTo` — is an open redirect on the app's own auth gate: it
+must be validated as a same-origin relative path first (`Uri.IsWellFormedUriString(value,
+UriKind.Relative)` **and** reject anything starting `//` or `/\`, which slip past that check as
+protocol-relative). Single-rider local deployment, one click from the dashboard to anywhere, and
+Keycloak mode already exhibits the correct behavior, so the asymmetry is visible rather than
+hidden. Fix in a follow-up task, not inline.
+
+**Tests added beyond the six specified**, all mutation-tested: `SetupLocalCredentialAsync`/
+`LocalLoginAsync` URL-and-body tests in `RouteTimerApiClientTests.cs` (the only two methods in that
+file without one, on endpoints one character apart whose confusion would silently set a fresh
+install's passphrase); a double-submit test with a gated `TaskCompletionSource`; a timeout test
+using `TaskCanceledException`; a `[Theory]` covering both the empty and whitespace-only passphrase
+cases; a Keycloak-mode placeholder-rendering test; `RedirectToLoginTests` covering both branches;
+and `RiderPageAuthorizationTests`, a reflection `[Theory]` asserting all six rider pages carry
+`[Authorize]` and the three anonymous pages do not — nothing else would have noticed either
+direction, since every existing page test renders the component directly rather than through the
+router.
+
+Expected after this task: 100 client tests, 170 API.
+
+---
+
 ## Task 10: Remove build-time authentication configuration
 
 **Files:**
