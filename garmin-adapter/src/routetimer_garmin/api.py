@@ -4,7 +4,7 @@ import logging
 from base64 import urlsafe_b64encode
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Request, Response
+from fastapi import Depends, FastAPI, File, Form, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
@@ -14,7 +14,9 @@ from routetimer_garmin.errors import AdapterError
 from routetimer_garmin.facade import GarminFacade
 from routetimer_garmin.models import AdapterActivity, AdapterActivityPage
 from routetimer_garmin.service import (
+    MAX_FILE_BYTES,
     ActivitySummaryResult,
+    CourseResult,
     FitDownloadResult,
     GarminService,
     LoginResult,
@@ -54,6 +56,15 @@ class TokenRequest(_SecretRequest):
 
 class ActivityPageRequest(TokenRequest):
     offset: int = Field(default=0, ge=0, strict=True)
+
+
+class CourseRequest(TokenRequest):
+    file_name: str = Field(alias="fileName")
+    course_name: str = Field(alias="courseName")
+    activity_type: str = Field(alias="activityType", default="road_biking")
+    description: str | None = None
+    elevation_gain_metres: float = Field(alias="elevationGainMetres", default=0.0)
+    elevation_loss_metres: float = Field(alias="elevationLossMetres", default=0.0)
 
 
 class LoginResponse(BaseModel):
@@ -144,6 +155,22 @@ class ActivitySummaryResponse(BaseModel):
     def from_result(cls, result: ActivitySummaryResult) -> ActivitySummaryResponse:
         return cls(
             activity=ActivityResponse.from_activity(result.activity), tokenJson=result.token_json
+        )
+
+
+class CourseResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    course_id: int = Field(alias="courseId")
+    course_name: str = Field(alias="courseName")
+    token_json: str = Field(alias="tokenJson", repr=False)
+
+    @classmethod
+    def from_result(cls, result: CourseResult) -> CourseResponse:
+        return cls(
+            courseId=result.course.course_id,
+            courseName=result.course.course_name,
+            tokenJson=result.token_json,
         )
 
 
@@ -238,6 +265,30 @@ async def download_fit(
             "X-RouteTimer-Garmin-Token": encoded_token,
         },
     )
+
+
+@app.post("/v1/courses", response_model=CourseResponse)
+async def create_course(
+    payload: Annotated[str, Form()],
+    file: Annotated[UploadFile, File()],
+    service: Annotated[GarminService, Depends(get_service)],
+) -> CourseResponse:
+    request = CourseRequest.model_validate_json(payload)
+    gpx = await file.read(MAX_FILE_BYTES + 1)
+    if len(gpx) > MAX_FILE_BYTES:
+        raise AdapterError("request-invalid", 400)
+
+    result = await service.create_course(
+        request.token.get_secret_value(),
+        gpx=gpx,
+        file_name=request.file_name,
+        course_name=request.course_name,
+        activity_type=request.activity_type,
+        description=request.description,
+        elevation_gain_metres=request.elevation_gain_metres,
+        elevation_loss_metres=request.elevation_loss_metres,
+    )
+    return CourseResponse.from_result(result)
 
 
 @app.delete("/v1/auth/challenges", status_code=204)
