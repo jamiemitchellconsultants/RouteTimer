@@ -5,6 +5,7 @@ using RouteTimer.Domain.Profile;
 using RouteTimer.Persistence.Entities;
 using RouteTimer.Services.Jobs;
 using RouteTimer.Services.Persistence;
+using RouteTimer.Services.Routes;
 
 namespace RouteTimer.Persistence.Repositories;
 
@@ -315,4 +316,71 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
     private static PersistedPredictionSegment ToSegment(PredictionSegmentEntity entity) => new(entity.Sequence, entity.Latitude, entity.Longitude, entity.ElevationMetres,
         entity.CumulativeDistanceMetres, entity.SegmentDistanceMetres, entity.Gradient, entity.CurvaturePerMetre, entity.PredictedPowerWatts,
         entity.PredictedSpeedMetresPerSecond, TimeSpan.FromSeconds(entity.SegmentMovingSeconds), TimeSpan.FromSeconds(entity.CumulativeMovingSeconds), Enum.Parse<ConfidenceLevel>(entity.Confidence));
+
+    public async Task<PredictionGpxSource?> GetGpxSourceAsync(Guid predictionId, CancellationToken cancellationToken)
+    {
+        var prediction = await context.Predictions
+            .AsNoTracking()
+            .Include(entity => entity.Upload)
+            .Include(entity => entity.Segments)
+            .SingleOrDefaultAsync(entity => entity.Id == predictionId, cancellationToken);
+
+        if (prediction is null)
+        {
+            return null;
+        }
+
+        var name = Path.GetFileNameWithoutExtension(prediction.Upload?.FileName ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            name = $"RouteTimer prediction {prediction.Id}";
+        }
+
+        return new PredictionGpxSource(
+            name,
+            DescribePrediction(prediction),
+            DateTimeOffset.UtcNow,
+            prediction.CompletedAt ?? prediction.CreatedAt,
+            prediction.Segments
+                .OrderBy(segment => segment.Sequence)
+                .Select(ToSegment)
+                .ToList());
+    }
+
+    private static string DescribePrediction(PredictionEntity prediction)
+    {
+        var parts = new List<string>();
+        if (prediction.MovingSeconds is { } seconds)
+        {
+            parts.Add($"Predicted {TimeSpan.FromSeconds(seconds):h\\:mm\\:ss}");
+        }
+
+        if (prediction.DistanceMetres is { } distance)
+        {
+            parts.Add($"{distance / 1000:F1} km");
+        }
+
+        if (prediction.AscentMetres is { } ascent)
+        {
+            parts.Add($"{ascent:F0} m ascent");
+        }
+
+        if (prediction.AverageSpeedMetresPerSecond is { } speed)
+        {
+            parts.Add($"{speed * 3.6:F1} km/h");
+        }
+
+        if (prediction.AveragePowerWatts is { } power)
+        {
+            parts.Add($"{power:F0} W");
+        }
+
+        if (!string.IsNullOrWhiteSpace(prediction.Confidence))
+        {
+            parts.Add($"{prediction.Confidence.ToLowerInvariant()} confidence");
+        }
+
+        parts.Add($"model {prediction.ModelVersion}");
+        return string.Join(" · ", parts);
+    }
 }

@@ -538,6 +538,7 @@ public sealed class PredictionWorkflowTests
         public Task FailAsync(Guid predictionId, string code, string message, CancellationToken cancellationToken) { Failure = (code, message); return Task.CompletedTask; }
         public Task<IReadOnlyList<PredictionSummary>> GetSummariesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<PredictionDetail?> GetAsync(Guid predictionId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<RouteTimer.Services.Routes.PredictionGpxSource?> GetGpxSourceAsync(Guid predictionId, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private sealed class FakeJobProgressReporter : IJobProgressReporter

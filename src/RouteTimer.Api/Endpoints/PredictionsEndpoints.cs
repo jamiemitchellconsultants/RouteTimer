@@ -5,6 +5,7 @@ using RouteTimer.Contracts.Predictions;
 using RouteTimer.Contracts.Uploads;
 using RouteTimer.Services.Persistence;
 using RouteTimer.Services.Predictions;
+using RouteTimer.Services.Routes;
 
 namespace RouteTimer.Api.Endpoints;
 
@@ -16,6 +17,7 @@ public static class PredictionEndpoints
         routes.MapGet("/api/predictions", GetPredictionsAsync);
         routes.MapGet("/api/predictions/{id:guid}", GetPredictionAsync);
         routes.MapDelete("/api/predictions/{id:guid}", DeletePredictionAsync);
+        routes.MapGet("/api/predictions/{id:guid}/gpx", GetPredictionGpxAsync);
         return routes;
     }
 
@@ -91,6 +93,34 @@ public static class PredictionEndpoints
         await deletions.DeleteAsync(id, cancellationToken)
             ? TypedResults.NoContent()
             : ApiProblems.NotFound(ErrorCodes.PredictionNotFound, "The prediction was not found.");
+
+    private static async Task<IResult> GetPredictionGpxAsync(
+        Guid id,
+        bool? timed,
+        PredictionQueryService predictions,
+        CancellationToken cancellationToken)
+    {
+        var source = await predictions.GetGpxSourceAsync(id, cancellationToken);
+        if (source is null)
+        {
+            return ApiProblems.NotFound(ErrorCodes.PredictionNotFound, "The prediction was not found.");
+        }
+
+        try
+        {
+            var gpx = PredictionGpxWriter.Write(source, timed ?? false);
+            return TypedResults.File(
+                System.Text.Encoding.UTF8.GetBytes(gpx),
+                "application/gpx+xml",
+                PredictionGpxWriter.SuggestFileName(source.RouteName));
+        }
+        catch (PredictionNotCompleteException)
+        {
+            return ApiProblems.Conflict(
+                ErrorCodes.PredictionNotComplete,
+                "This prediction has not produced a route yet, so it cannot be exported.");
+        }
+    }
 
     private static PredictionSummaryResponse ToSummary(PredictionSummary prediction) => new(
         prediction.Id,

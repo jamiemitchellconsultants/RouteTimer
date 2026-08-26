@@ -126,6 +126,71 @@ public sealed class PredictionEndpointTests
     }
 
     [Fact]
+    public async Task Gpx_download_returns_404_for_an_unknown_prediction()
+    {
+        await using var app = CreateRiderApp();
+        using var client = app.CreateClient();
+
+        using var response = await client.GetAsync($"/api/predictions/{Guid.NewGuid()}/gpx");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Contains("prediction-not-found", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Gpx_download_returns_409_for_a_queued_prediction()
+    {
+        await using var app = CreateRiderApp();
+        await SeedProfileAndModelAsync(app.Services);
+        using var client = app.CreateClient();
+        using var submitted = await client.PostAsync("/api/predictions", GpxForm());
+        var accepted = await submitted.Content.ReadFromJsonAsync<PredictionSubmissionResponse>();
+
+        using var response = await client.GetAsync($"/api/predictions/{accepted!.PredictionId}/gpx");
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Contains("prediction-not-complete", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Gpx_download_returns_the_untimed_course_track_by_default()
+    {
+        await using var app = CreateRiderApp();
+        await SeedProfileAndModelAsync(app.Services);
+        using var client = app.CreateClient();
+        using var submitted = await client.PostAsync("/api/predictions", GpxForm());
+        var accepted = await submitted.Content.ReadFromJsonAsync<PredictionSubmissionResponse>();
+        await PublishAsync(app.Services, accepted!.PredictionId);
+
+        using var response = await client.GetAsync($"/api/predictions/{accepted.PredictionId}/gpx");
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/gpx+xml", response.Content.Headers.ContentType!.MediaType);
+        Assert.NotNull(response.Content.Headers.ContentDisposition);
+        Assert.EndsWith(".gpx", response.Content.Headers.ContentDisposition!.FileNameStar ?? response.Content.Headers.ContentDisposition.FileName, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("<trkpt", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("<time>", body.Split("<trkseg>")[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Gpx_download_writes_predicted_times_when_timed_is_requested()
+    {
+        await using var app = CreateRiderApp();
+        await SeedProfileAndModelAsync(app.Services);
+        using var client = app.CreateClient();
+        using var submitted = await client.PostAsync("/api/predictions", GpxForm());
+        var accepted = await submitted.Content.ReadFromJsonAsync<PredictionSubmissionResponse>();
+        await PublishAsync(app.Services, accepted!.PredictionId);
+
+        using var response = await client.GetAsync($"/api/predictions/{accepted.PredictionId}/gpx?timed=true");
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("<time>", body.Split("<trkseg>")[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Submission_rejects_empty_and_wrong_extension_uploads_with_stable_codes()
     {
         await using var app = CreateRiderApp();
@@ -391,5 +456,6 @@ public sealed class PredictionEndpointTests
         public Task FailAsync(Guid predictionId, string code, string message, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<IReadOnlyList<PredictionSummary>> GetSummariesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<PredictionDetail?> GetAsync(Guid predictionId, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<RouteTimer.Services.Routes.PredictionGpxSource?> GetGpxSourceAsync(Guid predictionId, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 }

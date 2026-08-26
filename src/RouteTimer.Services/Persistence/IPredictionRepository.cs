@@ -1,6 +1,7 @@
 using RouteTimer.Domain.Models;
 using RouteTimer.Domain.Predictions;
 using RouteTimer.Domain.Profile;
+using RouteTimer.Services.Routes;
 
 namespace RouteTimer.Services.Persistence;
 
@@ -98,4 +99,5 @@ public interface IPredictionRepository
     Task FailAsync(Guid predictionId, string code, string message, CancellationToken cancellationToken);
     Task<IReadOnlyList<PredictionSummary>> GetSummariesAsync(CancellationToken cancellationToken);
     Task<PredictionDetail?> GetAsync(Guid predictionId, CancellationToken cancellationToken);
+    Task<PredictionGpxSource?> GetGpxSourceAsync(Guid predictionId, CancellationToken cancellationToken);
 }
