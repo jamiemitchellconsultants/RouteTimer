@@ -13,6 +13,12 @@ public sealed class GarminTokenConfigurationTests
     {
         using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
+            // A deployment is what this test is about, and it must not inherit the fixed
+            // development key from appsettings.Development.json -- that key exists only so the
+            // app starts on a developer machine, and letting it leak in here would quietly turn
+            // the null case into "started fine", which is the exact failure this test exists to
+            // catch.
+            builder.UseEnvironment("Production");
             builder.UseSetting("GarminAdapter:BaseUrl", "http://garmin-adapter.invalid/");
             if (encodedKey is not null)
             {

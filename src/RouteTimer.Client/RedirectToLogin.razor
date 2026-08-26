@@ -1,5 +1,16 @@
+@using RouteTimer.Client.Auth
 @inject NavigationManager Navigation
+@inject ClientAuthConfig AuthConfig
 
 @code {
-    protected override void OnInitialized() => Navigation.NavigateTo($"authentication/login?returnUrl={Uri.EscapeDataString(Navigation.Uri)}");
+    protected override void OnInitialized()
+    {
+        if (AuthConfig.IsLocal)
+        {
+            Navigation.NavigateTo("signin");
+            return;
+        }
+
+        Navigation.NavigateTo($"authentication/login?returnUrl={Uri.EscapeDataString(Navigation.Uri)}");
+    }
 }

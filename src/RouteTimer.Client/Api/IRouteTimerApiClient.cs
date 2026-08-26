@@ -28,4 +28,7 @@ public interface IRouteTimerApiClient
     Task DisconnectGarminAsync(CancellationToken ct);
     Task<GarminActivityPageResponse> GetGarminActivitiesAsync(string? cursor, CancellationToken ct);
     Task<GarminImportBatchResponse> ImportGarminActivitiesAsync(GarminImportRequest request, CancellationToken ct);
+    Task LocalLogoutAsync(CancellationToken ct);
+    Task<bool> SetupLocalCredentialAsync(string passphrase, CancellationToken ct);
+    Task<bool> LocalLoginAsync(string passphrase, CancellationToken ct);
 }

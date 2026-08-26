@@ -18,6 +18,15 @@ public static class ApiProblems
     public static IResult Conflict(string code, string detail) =>
         Create(StatusCodes.Status409Conflict, code, detail);
 
+    public static IResult Forbidden(string code, string detail) =>
+        Create(StatusCodes.Status403Forbidden, code, detail);
+
+    public static IResult NotFound(string code, string detail) =>
+        Create(StatusCodes.Status404NotFound, code, detail);
+
+    public static IResult PayloadTooLarge(string code, string detail) =>
+        Create(StatusCodes.Status413PayloadTooLarge, code, detail);
+
     public static IResult TooManyRequests(string code, string detail) =>
         Create(StatusCodes.Status429TooManyRequests, code, detail);
 
@@ -26,12 +35,6 @@ public static class ApiProblems
 
     public static IResult ServiceUnavailable(string code, string detail) =>
         Create(StatusCodes.Status503ServiceUnavailable, code, detail);
-
-    public static IResult NotFound(string code, string detail) =>
-        Create(StatusCodes.Status404NotFound, code, detail);
-
-    public static IResult PayloadTooLarge(string code, string detail) =>
-        Create(StatusCodes.Status413PayloadTooLarge, code, detail);
 
     public static IResult InvalidProfile(ProfileValidationException exception)
     {

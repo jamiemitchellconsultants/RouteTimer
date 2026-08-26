@@ -9,7 +9,10 @@
       "publicClient": true,
       "protocol": "openid-connect",
       "standardFlowEnabled": true,
-      "redirectUris": ["https://ROUTETIMER_HOSTNAME/authentication/login-callback"],
+      "redirectUris": [
+        "https://ROUTETIMER_HOSTNAME/authentication/login-callback",
+        "https://ROUTETIMER_HOSTNAME/authentication/logout-callback"
+      ],
       "webOrigins": ["https://ROUTETIMER_HOSTNAME"],
       "defaultClientScopes": ["profile", "email", "roles"]
     },

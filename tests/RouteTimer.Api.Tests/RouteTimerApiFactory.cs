@@ -8,34 +8,84 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RouteTimer.Persistence;
 
 namespace RouteTimer.Api.Tests;
 
-public sealed class RouteTimerApiFactory(bool authenticateAsRider = false, Action<IServiceCollection>? configureServices = null)
+public sealed class RouteTimerApiFactory(
+    bool authenticateAsRider = false,
+    Action<IServiceCollection>? configureServices = null,
+    string authMode = "Keycloak",
+    IReadOnlyDictionary<string, string>? settings = null)
     : WebApplicationFactory<Program>
 {
+    internal const string DefaultKeycloakAuthority = "https://keycloak.test.invalid/realms/routetimer";
+    private const string DefaultGarminTokenKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
+    private const string DefaultGarminAdapterBaseUrl = "http://garmin-adapter.invalid/";
+
+    private static readonly IReadOnlyDictionary<string, string> DefaultSettings =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            // Keycloak mode refuses to start without an authority, so the default mode needs one.
+            ["Keycloak:Authority"] = DefaultKeycloakAuthority,
+            // Program refuses to build without a Garmin token key, and the adapter's typed
+            // HttpClient refuses to be constructed without a base address, so every host that
+            // boots Program needs both -- including the ones that never touch Garmin.
+            ["Garmin:TokenEncryptionKey"] = DefaultGarminTokenKey,
+            ["GarminAdapter:BaseUrl"] = DefaultGarminAdapterBaseUrl
+        };
+
+    /// <summary>
+    /// Applies the settings without which <c>Program</c> refuses to start, for the test hosts
+    /// that derive from <see cref="WebApplicationFactory{TEntryPoint}"/> directly rather than
+    /// from this factory. Keeping that list in one place is why the values above are consts.
+    /// </summary>
+    internal static void ApplyRequiredSettings(IWebHostBuilder builder, string authMode = "Keycloak")
+    {
+        builder.UseSetting(RouteTimer.Api.Auth.AuthModeResolver.ConfigurationKey, authMode);
+        foreach (var setting in DefaultSettings)
+        {
+            builder.UseSetting(setting.Key, setting.Value);
+        }
+    }
+
     private readonly string databaseName = Guid.NewGuid().ToString();
 
     public RouteTimerApiFactory WithRiderAuthentication(Action<IServiceCollection>? configure = null) =>
-        new(true, Combine(configureServices, configure));
+        new(true, Combine(configureServices, configure), authMode, settings);
 
     public RouteTimerApiFactory WithServices(Action<IServiceCollection> configure) =>
-        new(authenticateAsRider, Combine(configureServices, configure));
+        new(authenticateAsRider, Combine(configureServices, configure), authMode, settings);
+
+    public RouteTimerApiFactory WithAuthMode(string mode) =>
+        new(authenticateAsRider, configureServices, mode, settings);
+
+    /// <summary>Overrides one configuration value. Pass null to unset a default.</summary>
+    public RouteTimerApiFactory WithSetting(string key, string? value)
+    {
+        var merged = new Dictionary<string, string>(settings ?? DefaultSettings, StringComparer.Ordinal);
+        if (value is null)
+        {
+            merged.Remove(key);
+        }
+        else
+        {
+            merged[key] = value;
+        }
+
+        return new RouteTimerApiFactory(authenticateAsRider, configureServices, authMode, merged);
+    }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        builder.UseSetting(
-            "Garmin:TokenEncryptionKey",
-            "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
-        builder.ConfigureAppConfiguration((_, configuration) =>
-            configuration.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["GarminAdapter:BaseUrl"] = "http://garmin-adapter.invalid/"
-            }));
+        builder.UseSetting(RouteTimer.Api.Auth.AuthModeResolver.ConfigurationKey, authMode);
+        foreach (var setting in settings ?? DefaultSettings)
+        {
+            builder.UseSetting(setting.Key, setting.Value);
+        }
+
         builder.ConfigureTestServices(services =>
         {
             services.RemoveAll<DbContextOptions<RouteTimerDbContext>>();

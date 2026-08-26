@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using RouteTimer.Contracts.Auth;
 using RouteTimer.Contracts.Garmin;
 using RouteTimer.Contracts.Jobs;
 using RouteTimer.Contracts.Models;
@@ -75,6 +76,13 @@ public sealed class RouteTimerApiClient(HttpClient httpClient) : IRouteTimerApiC
         await EnsureSuccessAsync(response, ct);
     }
 
+    public async Task LocalLogoutAsync(CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/logout");
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        await EnsureSuccessAsync(response, ct);
+    }
+
     public Task<GarminActivityPageResponse> GetGarminActivitiesAsync(string? cursor, CancellationToken ct)
     {
         var path = cursor is null
@@ -85,6 +93,24 @@ public sealed class RouteTimerApiClient(HttpClient httpClient) : IRouteTimerApiC
 
     public Task<GarminImportBatchResponse> ImportGarminActivitiesAsync(GarminImportRequest request, CancellationToken ct) =>
         SendJsonAsync<GarminImportBatchResponse>(HttpMethod.Post, "/api/garmin/activities/import", request, ct);
+
+    public async Task<bool> SetupLocalCredentialAsync(string passphrase, CancellationToken ct)
+    {
+        using var content = JsonContent.Create(new SetLocalCredentialRequest(passphrase), options: JsonOptions);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/setup") { Content = content };
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        await EnsureSuccessAsync(response, ct);
+        return true;
+    }
+
+    public async Task<bool> LocalLoginAsync(string passphrase, CancellationToken ct)
+    {
+        using var content = JsonContent.Create(new LocalLoginRequest(passphrase), options: JsonOptions);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/login") { Content = content };
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        await EnsureSuccessAsync(response, ct);
+        return true;
+    }
 
     private async Task<T> GetRequiredAsync<T>(string path, CancellationToken ct) =>
         await SendAsync<T>(HttpMethod.Get, path, content: null, ct);

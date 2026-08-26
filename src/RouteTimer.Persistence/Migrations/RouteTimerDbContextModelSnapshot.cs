@@ -219,6 +219,30 @@ namespace RouteTimer.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("RouteTimer.Persistence.Entities.LocalCredentialEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("PasswordHash")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("local_credential", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_local_credential_singleton", "\"Id\" = 1");
+                        });
+                });
+
             modelBuilder.Entity("RouteTimer.Persistence.Entities.PowerBandEntity", b =>
                 {
                     b.Property<Guid>("ModelId")

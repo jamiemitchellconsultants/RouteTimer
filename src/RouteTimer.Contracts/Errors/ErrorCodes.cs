@@ -29,4 +29,12 @@ public static class ErrorCodes
     public const string GarminResponseInvalid = "garmin-response-invalid";
     public const string GarminCursorInvalid = "garmin-cursor-invalid";
     public const string GarminImportLimit = "garmin-import-limit";
+    public const string LocalCredentialAlreadyConfigured = "local-credential-already-configured";
+    public const string LocalCredentialTooShort = "local-credential-too-short";
+    public const string LocalCredentialPadded = "local-credential-padded";
+    public const string LocalCredentialTooLong = "local-credential-too-long";
+    public const string LocalCredentialRejected = "local-credential-rejected";
+    public const string LocalCredentialLockedOut = "local-credential-locked-out";
+    public const string RequestRateExceeded = "request-rate-exceeded";
+    public const string CrossSiteRequestRejected = "cross-site-request-rejected";
 }

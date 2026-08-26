@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using RouteTimer.Client.Api;
+using RouteTimer.Contracts.Auth;
 using RouteTimer.Contracts.Garmin;
 using RouteTimer.Contracts.Jobs;
 using RouteTimer.Contracts.Models;
@@ -498,6 +499,51 @@ public sealed class RouteTimerApiClientTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.GetPredictionsAsync(cts.Token));
         Assert.True(observed.CanBeCanceled);
+    }
+
+    // The failure mode this test class exists to prevent: SetupLocalCredentialAsync and
+    // LocalLoginAsync are one character apart in URL and wildly different in effect -- swapping
+    // them would silently *set* a fresh install's passphrase to whatever a login attempt typed.
+    [Fact]
+    public async Task SetupLocalCredentialAsync_posts_the_passphrase_to_the_setup_endpoint()
+    {
+        HttpRequestMessage? captured = null;
+        SetLocalCredentialRequest? payload = null;
+        var client = CreateApiClient(async (request, ct) =>
+        {
+            captured = request;
+            payload = await request.Content!.ReadFromJsonAsync<SetLocalCredentialRequest>(ct);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+
+        var result = await client.SetupLocalCredentialAsync("correct horse battery staple", CancellationToken.None);
+
+        Assert.True(result);
+        Assert.NotNull(captured);
+        Assert.Equal(HttpMethod.Post, captured!.Method);
+        Assert.Equal("/api/auth/setup", captured.RequestUri!.AbsolutePath);
+        Assert.Equal("correct horse battery staple", payload?.Passphrase);
+    }
+
+    [Fact]
+    public async Task LocalLoginAsync_posts_the_passphrase_to_the_login_endpoint()
+    {
+        HttpRequestMessage? captured = null;
+        LocalLoginRequest? payload = null;
+        var client = CreateApiClient(async (request, ct) =>
+        {
+            captured = request;
+            payload = await request.Content!.ReadFromJsonAsync<LocalLoginRequest>(ct);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+
+        var result = await client.LocalLoginAsync("correct horse battery staple", CancellationToken.None);
+
+        Assert.True(result);
+        Assert.NotNull(captured);
+        Assert.Equal(HttpMethod.Post, captured!.Method);
+        Assert.Equal("/api/auth/login", captured.RequestUri!.AbsolutePath);
+        Assert.Equal("correct horse battery staple", payload?.Passphrase);
     }
 
     private static RouteTimerApiClient CreateApiClient(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler) =>
