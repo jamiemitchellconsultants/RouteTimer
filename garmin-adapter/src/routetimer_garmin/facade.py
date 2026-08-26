@@ -122,7 +122,7 @@ class TokenSession:
         if not isinstance(raw_activity, Mapping):
             raise AdapterError("response-invalid", 502)
         try:
-            return _map_activity(raw_activity)
+            return _map_activity(raw_activity, require_known_type=False)
         except Exception:
             raise AdapterError("response-invalid", 502) from None
 
@@ -179,11 +179,25 @@ def _translate_error(error: Exception, authentication_code: str) -> AdapterError
     return AdapterError("unavailable", 503)
 
 
-def _map_activity(raw: Mapping[str, Any]) -> AdapterActivity | None:
+def _map_activity(raw: Mapping[str, Any], *, require_known_type: bool = True) -> AdapterActivity | None:
     garmin_type = str(raw.get("activityType", {}).get("typeKey", ""))
     canonical = TYPE_MAP.get(garmin_type)
     if canonical is None:
-        return None
+        # list_activities calls this with the default (require_known_type=True): Garmin's list
+        # endpoint is the one place a not-yet-imported activity's type gets decided, so an
+        # unrecognised type there means "don't show this as importable" -- correct to exclude it.
+        # get_activity calls this with require_known_type=False: Garmin's list and single-activity
+        # detail endpoints are separate backend services and can disagree on typeKey for the same
+        # activity (observed directly: an activity the list reported as road_biking came back with
+        # a different, unmapped typeKey from the detail endpoint days later, with no indication the
+        # rider had ever reclassified it). Rejecting the already-selected, already-listed activity
+        # on a second, independent opinion just breaks a legitimate import; the canonical type this
+        # dataclass carries is not read for anything past this point once permissively mapped, so
+        # echoing Garmin's own raw label back here (rather than fabricating one of the two allowed
+        # values) is the honest choice, not a meaningful one.
+        if require_known_type:
+            return None
+        canonical = garmin_type
 
     started_at = datetime.strptime(str(raw["startTimeGMT"]), "%Y-%m-%d %H:%M:%S").replace(
         tzinfo=UTC

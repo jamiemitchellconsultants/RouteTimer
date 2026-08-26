@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Extensions.Logging.Abstractions;
 using RouteTimer.Services.Garmin;
 using RouteTimer.Services.Persistence;
 
@@ -231,7 +232,8 @@ public sealed class GarminActivityServiceTests
             protector ?? connections.Protector,
             gate ?? new GarminOperationGate(),
             new RouteTimer.Services.Training.TrainingUploadService(new UnusedTrainingUploadRepository(), new FixedTimeProvider(Now)),
-            new FixedTimeProvider(Now));
+            new FixedTimeProvider(Now),
+            NullLogger<GarminActivityService>.Instance);
 
     private static FakeConnectionRepository ConnectedRepository(string tokenJson)
     {
