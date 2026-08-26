@@ -14,8 +14,13 @@ RUN dotnet publish src/RouteTimer.Client/RouteTimer.Client.csproj -c Release --n
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/api .
 COPY --from=build /out/client/wwwroot ./wwwroot
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=6 \
+    CMD curl -f http://localhost:8080/health/ready || exit 1
 ENTRYPOINT ["dotnet", "RouteTimer.Api.dll"]

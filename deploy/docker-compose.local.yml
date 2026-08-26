@@ -1,0 +1,90 @@
+services:
+  routetimer-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: routetimer
+      POSTGRES_USER: routetimer
+      # Not a secret. This is a single-rider install on the rider's own machine: the database
+      # publishes no host port and sits on an internal network, so anyone able to use this
+      # password can already reach the container directly. A generated per-install password
+      # would have to persist alongside the data volume for the volume's whole lifetime, and a
+      # rider who lost that file would be permanently locked out of their own training history --
+      # a worse outcome than a fixed, documented value for a database nothing external can reach.
+      # This is unlike GARMIN_TOKEN_ENCRYPTION_KEY below, which really is generated and persisted:
+      # that key protects the rider's actual Garmin account credentials at rest, not just access
+      # to this container.
+      POSTGRES_PASSWORD: routetimer-local-only
+    volumes:
+      - routetimer_local_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U routetimer -d routetimer"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks:
+      - routetimer-private
+
+  routetimer-garmin-adapter:
+    image: ghcr.io/jamiemitchellconsultants/routetimer-garmin-adapter:latest
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - routetimer-private
+      - garmin-egress
+
+  routetimer:
+    image: ghcr.io/jamiemitchellconsultants/routetimer:latest
+    restart: unless-stopped
+    depends_on:
+      routetimer-db:
+        condition: service_healthy
+      routetimer-garmin-adapter:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__RouteTimer: Host=routetimer-db;Database=routetimer;Username=routetimer;Password=routetimer-local-only
+      Database__ApplyMigrations: "true"
+      Auth__Mode: Local
+      GarminAdapter__BaseUrl: http://routetimer-garmin-adapter:8081
+      # Generated once by run.sh/run.ps1 on first launch and persisted to deploy/.env.local
+      # (git-ignored). This is a real secret, unlike the Postgres password above: it is the
+      # AES-256 key protecting the rider's actual Garmin account tokens at rest, so it must not
+      # be fixed or checked into source control.
+      Garmin__TokenEncryptionKey: ${GARMIN_TOKEN_ENCRYPTION_KEY:?run ./run.sh or ./run.ps1, which generates this}
+    ports:
+      # Loopback only, deliberately. Local mode's whole network story is "only this machine can
+      # reach it" -- the passphrase is the gate, and this bind is the wall behind it. Do not
+      # simplify this to "49215:8080", which publishes on every interface.
+      - "127.0.0.1:${ROUTETIMER_PORT:-49215}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
+    networks:
+      # routetimer-private reaches the database and the adapter; routetimer-public exists only so
+      # the ports: mapping above actually works -- a container on an internal-only network cannot
+      # have its published port reached from the host at all, verified directly while writing
+      # this file.
+      - routetimer-private
+      - routetimer-public
+
+volumes:
+  routetimer_local_postgres:
+
+networks:
+  routetimer-private:
+    internal: true
+  routetimer-public: {}
+  garmin-egress:
+    driver: bridge
