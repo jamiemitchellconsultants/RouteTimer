@@ -42,6 +42,7 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
             .Metadata.SetValueComparer(ListComparer);
         prediction.Property(entity => entity.CreatedAt).HasColumnType("timestamp with time zone");
         prediction.Property(entity => entity.CompletedAt).HasColumnType("timestamp with time zone");
+        prediction.Property(entity => entity.GarminCourseUploadedAt).HasColumnType("timestamp with time zone");
         prediction.HasIndex(entity => entity.CreatedAt);
         prediction.HasIndex(entity => entity.UploadId);
         prediction.HasIndex(entity => entity.RiderModelId);

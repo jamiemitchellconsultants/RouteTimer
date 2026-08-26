@@ -300,12 +300,14 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
     private static PredictionSummary ToSummary(PredictionEntity entity, IReadOnlyList<PersistedPredictionSegment> segments) => new(
         entity.Id, Enum.Parse<PredictionState>(entity.State), entity.DistanceMetres, entity.AscentMetres, ToTime(entity.MovingSeconds),
         entity.AverageSpeedMetresPerSecond, entity.AveragePowerWatts, ToConfidence(entity.Confidence), entity.Warnings,
-        entity.RiderModelId, entity.ModelVersion, entity.ModelWasCalibrated, Validation(entity), Profile(entity), Assumptions(entity), entity.CreatedAt, entity.CompletedAt, segments);
+        entity.RiderModelId, entity.ModelVersion, entity.ModelWasCalibrated, Validation(entity), Profile(entity), Assumptions(entity), entity.CreatedAt, entity.CompletedAt, segments,
+        entity.GarminCourseId, entity.GarminCourseUploadedAt);
 
     private static PredictionDetail ToDetail(PredictionEntity entity, IReadOnlyList<PersistedPredictionSegment> segments) => new(
         entity.Id, Enum.Parse<PredictionState>(entity.State), entity.DistanceMetres, entity.AscentMetres, ToTime(entity.MovingSeconds),
         entity.AverageSpeedMetresPerSecond, entity.AveragePowerWatts, ToConfidence(entity.Confidence), entity.Warnings,
-        entity.RiderModelId, entity.ModelVersion, entity.ModelWasCalibrated, Validation(entity), Profile(entity), Assumptions(entity), entity.CreatedAt, entity.CompletedAt, segments);
+        entity.RiderModelId, entity.ModelVersion, entity.ModelWasCalibrated, Validation(entity), Profile(entity), Assumptions(entity), entity.CreatedAt, entity.CompletedAt, segments,
+        entity.GarminCourseId, entity.GarminCourseUploadedAt);
 
     private static ModelValidationSummary Validation(PredictionEntity entity) => new(
         Enum.Parse<ModelValidationStatus>(entity.ModelValidationStatus), entity.ModelValidationMedianApe, entity.ModelValidationP90Ape);
@@ -345,6 +347,19 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
                 .OrderBy(segment => segment.Sequence)
                 .Select(ToSegment)
                 .ToList());
+    }
+
+    public async Task RecordGarminCourseAsync(Guid predictionId, long courseId, DateTimeOffset uploadedAt, CancellationToken cancellationToken)
+    {
+        var prediction = await context.Predictions.SingleOrDefaultAsync(entity => entity.Id == predictionId, cancellationToken);
+        if (prediction is null)
+        {
+            return;
+        }
+
+        prediction.GarminCourseId = courseId;
+        prediction.GarminCourseUploadedAt = uploadedAt;
+        await context.SaveChangesAsync(cancellationToken);
     }
 
     private static string DescribePrediction(PredictionEntity prediction)

@@ -79,6 +79,7 @@ builder.Services.AddScoped<PredictionQueryService>();
 builder.Services.AddScoped<PredictionDeletionService>();
 builder.Services.AddScoped<GarminConnectionService>();
 builder.Services.AddScoped<GarminActivityService>();
+builder.Services.AddScoped<GarminCourseService>();
 var encodedGarminKey = builder.Configuration["Garmin:TokenEncryptionKey"]
     ?? throw new InvalidOperationException("Garmin:TokenEncryptionKey is required.");
 byte[] garminKey;

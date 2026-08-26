@@ -26,6 +26,8 @@ public sealed class PredictionEntity
     public List<string> Warnings { get; set; } = [];
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
+    public long? GarminCourseId { get; set; }
+    public DateTimeOffset? GarminCourseUploadedAt { get; set; }
 
     public StoredUploadEntity? Upload { get; set; }
     public RiderModelEntity? RiderModel { get; set; }
