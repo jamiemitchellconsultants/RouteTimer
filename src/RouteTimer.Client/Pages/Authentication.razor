@@ -1,9 +1,30 @@
 @page "/authentication/{action}"
 @using Microsoft.AspNetCore.Components.WebAssembly.Authentication
+@using RouteTimer.Client.Auth
+@inject ClientAuthConfig AuthConfig
+@inject NavigationManager Navigation
+@attribute [Microsoft.AspNetCore.Authorization.AllowAnonymous]
 
-<RemoteAuthenticatorView Action="@Action" />
+@if (AuthConfig.IsLocal)
+{
+    <p>This installation does not use single sign-on.</p>
+}
+else
+{
+    <RemoteAuthenticatorView Action="@Action" />
+}
 
 @code {
     [Parameter]
     public string? Action { get; set; }
+
+    protected override void OnInitialized()
+    {
+        // Local mode registers no OIDC services at all, so RemoteAuthenticatorView would throw
+        // trying to resolve them -- this route only exists for the Keycloak-mode sign-in flow.
+        if (AuthConfig.IsLocal)
+        {
+            Navigation.NavigateTo("/");
+        }
+    }
 }

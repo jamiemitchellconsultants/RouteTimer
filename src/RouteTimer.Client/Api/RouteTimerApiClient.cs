@@ -58,6 +58,13 @@ public sealed class RouteTimerApiClient(HttpClient httpClient) : IRouteTimerApiC
     public Task<JobResponse?> GetJobAsync(Guid id, CancellationToken ct) =>
         GetOptionalAsync<JobResponse>($"/api/jobs/{id}", ct);
 
+    public async Task LocalLogoutAsync(CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/logout");
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        await EnsureSuccessAsync(response, ct);
+    }
+
     private async Task<T> GetRequiredAsync<T>(string path, CancellationToken ct) =>
         await SendAsync<T>(HttpMethod.Get, path, content: null, ct);
 

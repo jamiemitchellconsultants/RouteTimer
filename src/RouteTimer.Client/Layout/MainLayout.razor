@@ -1,4 +1,9 @@
 ﻿@inherits LayoutComponentBase
+@using RouteTimer.Client.Api
+@using RouteTimer.Client.Auth
+@inject ClientAuthConfig AuthConfig
+@inject IRouteTimerApiClient Api
+@inject NavigationManager Navigation
 
 <div class="page">
     <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -14,14 +19,24 @@
             <AuthorizeView>
                 <Authorized>
                     <nav class="account-links" aria-label="Account">
-                        <a href="authentication/profile">Account</a>
-                        <a href="authentication/logout">Log out</a>
+                        @if (AuthConfig.IsLocal)
+                        {
+                            <button type="button" class="account-links__signout" @onclick="LocalLogoutAsync">Log out</button>
+                        }
+                        else
+                        {
+                            <a href="authentication/profile">Account</a>
+                            <a href="authentication/logout">Log out</a>
+                        }
                     </nav>
                 </Authorized>
                 <NotAuthorized>
-                    <nav class="account-links" aria-label="Authentication">
-                        <a href="authentication/login">Log in</a>
-                    </nav>
+                    @if (!AuthConfig.IsLocal)
+                    {
+                        <nav class="account-links" aria-label="Authentication">
+                            <a href="authentication/login">Log in</a>
+                        </nav>
+                    }
                 </NotAuthorized>
             </AuthorizeView>
         </header>
@@ -33,3 +48,15 @@
         </main>
     </div>
 </div>
+
+@code {
+    private async Task LocalLogoutAsync()
+    {
+        await Api.LocalLogoutAsync(CancellationToken.None);
+
+        // A forced reload re-reads /api/auth/config and /api/auth/session from scratch on the next
+        // boot, which is simpler than reaching for the framework's auth-state provider from here and
+        // just as correct for a sign-out that has already succeeded server-side.
+        Navigation.NavigateTo("/", forceLoad: true);
+    }
+}

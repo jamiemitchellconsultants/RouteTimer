@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Security.Claims;
+using System.Text.Json;
 using Microsoft.AspNetCore.Components.Authorization;
 using RouteTimer.Contracts.Auth;
 
@@ -34,8 +35,13 @@ public sealed class LocalAuthenticationStateProvider(HttpClient http) : Authenti
 
             return new AuthenticationState(new ClaimsPrincipal(identity));
         }
-        catch (HttpRequestException)
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException)
         {
+            // A failed session check is treated as "not signed in" rather than propagated: this
+            // return value feeds CascadingAuthenticationState directly, and an uncaught exception
+            // here breaks authentication-state rendering for the whole component tree. Malformed
+            // JSON and a timed-out request are just as much "could not confirm a session" as a
+            // network error is.
             return Anonymous;
         }
     }

@@ -256,6 +256,31 @@ app.MapPredictionEndpoints();
 app.MapJobEndpoints();
 app.MapAuthEndpoints(authMode);
 
+// Every unmapped GET -- every client-side route, and the OIDC redirect and post-logout callbacks
+// Keycloak mode sends the browser to -- must still serve the compiled WASM app rather than 404 or,
+// worse, 401 from the fallback authorization policy applying to an endpointless request. Anonymous:
+// the app itself decides what to render once it boots, including redirecting an unauthenticated
+// rider to sign in, and that decision cannot be made if the server blocks the page from loading.
+//
+// MapFallbackToFile matches every HTTP method on any unmapped path, not only GET, and answers a
+// non-GET request with 405 rather than serving the file. That would turn a POST to a typo'd or
+// legacy API path into "405 Method Not Allowed" instead of the "404 Not Found" several tests
+// pin as the documented contract for a route that does not exist. Route explicitly to GET/HEAD
+// only, so every other method continues to fall through to ordinary unmatched-route 404.
+app.MapFallback("{**path}", (HttpContext context) =>
+{
+    if (!HttpMethods.IsGet(context.Request.Method) && !HttpMethods.IsHead(context.Request.Method))
+    {
+        return Results.NotFound();
+    }
+
+    var indexFile = context.RequestServices.GetRequiredService<IWebHostEnvironment>()
+        .WebRootFileProvider.GetFileInfo("index.html");
+    return indexFile.Exists
+        ? Results.File(indexFile.CreateReadStream(), "text/html")
+        : Results.NotFound();
+}).AllowAnonymous();
+
 app.Run();
 
 public partial class Program;
