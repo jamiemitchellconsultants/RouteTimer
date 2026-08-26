@@ -184,7 +184,7 @@ public sealed class GarminDeploymentTests
         };
         startInfo.ArgumentList.Add("compose");
         startInfo.ArgumentList.Add("--file");
-        startInfo.ArgumentList.Add(Path.Combine(repositoryRoot, "docker-compose.yml"));
+        startInfo.ArgumentList.Add(Path.Combine(repositoryRoot, "deploy", "docker-compose.yml"));
         startInfo.ArgumentList.Add("config");
         startInfo.ArgumentList.Add("--format");
         startInfo.ArgumentList.Add("json");

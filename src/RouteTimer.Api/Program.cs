@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
 using RouteTimer.Api;
@@ -273,18 +274,62 @@ builder.Services.AddRateLimiter(options =>
 
 var app = builder.Build();
 
-// Despite being registered first, this does NOT run before authentication/authorization: when
-// UseAuthentication/UseAuthorization are not called explicitly, WebApplication auto-inserts them
-// ahead of any user middleware regardless of source order, so the actual sequence is routing ->
-// authentication -> authorization -> this middleware -> endpoint. A cross-site request carrying no
-// (or an invalid) cookie is therefore rejected 401 by authorization before ever reaching here. That
-// is not a security gap: the load-bearing case -- a cross-site request that DOES carry a valid
-// cookie, which is what SameSite=Strict alone fails to stop -- passes authentication/authorization
-// (the cookie is genuine) and is still rejected 403 here, before the endpoint runs.
+// This runs before authentication/authorization regardless of endpoint state, since it never
+// touches context.GetEndpoint() -- unlike static files below, whose serve-or-not decision does
+// depend on whether routing has already selected an endpoint for the request. A cross-site
+// request carrying no (or an invalid) cookie is rejected 401 by authorization once routing and
+// auth run further down. That is not a security gap: the load-bearing case -- a cross-site
+// request that DOES carry a valid cookie, which is what SameSite=Strict alone fails to stop --
+// is rejected 403 right here, before authentication/authorization or the endpoint ever run.
 app.UseSameOriginEnforcement();
-app.UseRateLimiter();
+
+// UseDefaultFiles/UseStaticFiles MUST run before routing selects an endpoint: StaticFileMiddleware
+// checks context.GetEndpoint() and silently declines to serve a physical file once an endpoint is
+// already assigned, to avoid double-handling a request. MapFallback below registers "{**path}",
+// which matches every unmatched path including every static asset's own path -- so if routing ran
+// first (as it would with no explicit UseRouting() call: WebApplication auto-inserts routing at
+// the very start of the pipeline, before any of this file's app.Use()/app.Map() calls, regardless
+// of their source order), every static asset request would already be endpoint-bound to the SPA
+// fallback by the time static files middleware got a turn, and it would serve index.html's HTML
+// for every JS/CSS/JSON/WASM request instead of the real file. Verified directly: the WebAssembly
+// bundle, appsettings.json, and even favicon.png all came back as index.html's HTML, byte for
+// byte, until this explicit UseRouting() call was added in exactly this position.
 app.UseDefaultFiles();
-app.UseStaticFiles();
+
+// The default FileExtensionContentTypeProvider has no mapping for .dat -- the ICU internationalization
+// data files (icudt_*.dat) the WebAssembly runtime downloads at boot. ServeUnknownFileTypes defaults
+// to false, so without this, StaticFileMiddleware silently declines to serve them (the same "falls
+// through to the SPA fallback" failure the UseRouting() reordering above fixed for every other
+// extension, but this one is a genuinely separate gap: reordering alone does not teach the default
+// provider a new extension). Verified against the actual published wwwroot: .dat is the only
+// extension present there without a built-in mapping.
+var staticFileTypeProvider = new FileExtensionContentTypeProvider();
+staticFileTypeProvider.Mappings[".dat"] = "application/octet-stream";
+app.UseStaticFiles(new StaticFileOptions { ContentTypeProvider = staticFileTypeProvider });
+
+app.UseRouting();
+
+// Explicit, not relying on WebApplication's automatic insertion: with UseRouting() called
+// explicitly (required above, see its comment), automatic insertion of authentication/
+// authorization no longer lands where a plain reading of the docs suggests. Verified directly --
+// omitting these two lines and leaving insertion implicit made every AllowAnonymous auth endpoint
+// (login, setup, logout, session, config) return 401, meaning AllowAnonymous's metadata wasn't
+// being honored by whatever position auth ended up running at. Explicit calls here, immediately
+// after routing and before anything that depends on the authenticated principal or the matched
+// endpoint's authorization metadata, is the only arrangement confirmed to work correctly by the
+// full Api test suite.
+app.UseAuthentication();
+app.UseAuthorization();
+
+// UseRateLimiter MUST run after routing and authorization: LoginRateLimitPolicy/AuthRateLimitPolicy
+// below are named per-endpoint policies applied via RequireRateLimiting on specific auth
+// endpoints, and this middleware resolves which policy applies from the already-matched endpoint's
+// metadata -- placing it before routing would make every policy lookup fail to find an endpoint
+// and silently apply no limit at all. Running after authorization is safe specifically because
+// every endpoint carrying one of these policies is also AllowAnonymous, so authorization never
+// gates the requests this is meant to limit.
+app.UseRateLimiter();
+
 app.MapHealthChecks("/health/live", new HealthCheckOptions
 {
     Predicate = static _ => false,
