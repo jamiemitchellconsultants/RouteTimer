@@ -52,7 +52,16 @@
 @code {
     private async Task LocalLogoutAsync()
     {
-        await Api.LocalLogoutAsync(CancellationToken.None);
+        try
+        {
+            await Api.LocalLogoutAsync(CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is ApiProblemException or HttpRequestException)
+        {
+            // A rate limit or a transient API failure here must not surface as the app's generic
+            // unhandled-error bar for what the rider experiences as a routine "sign out" click. The
+            // forced reload below re-establishes ground truth from the server either way.
+        }
 
         // A forced reload re-reads /api/auth/config and /api/auth/session from scratch on the next
         // boot, which is simpler than reaching for the framework's auth-state provider from here and

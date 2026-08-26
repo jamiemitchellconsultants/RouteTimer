@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using RouteTimer.Api;
 using RouteTimer.Api.Auth;
 using RouteTimer.Api.Health;
+using RouteTimer.Api.Routing;
 using RouteTimer.Contracts.Errors;
 using RouteTimer.Api.Endpoints;
 using RouteTimer.Api.Security;
@@ -261,25 +262,12 @@ app.MapAuthEndpoints(authMode);
 // worse, 401 from the fallback authorization policy applying to an endpointless request. Anonymous:
 // the app itself decides what to render once it boots, including redirecting an unauthenticated
 // rider to sign in, and that decision cannot be made if the server blocks the page from loading.
-//
-// MapFallbackToFile matches every HTTP method on any unmapped path, not only GET, and answers a
-// non-GET request with 405 rather than serving the file. That would turn a POST to a typo'd or
-// legacy API path into "405 Method Not Allowed" instead of the "404 Not Found" several tests
-// pin as the documented contract for a route that does not exist. Route explicitly to GET/HEAD
-// only, so every other method continues to fall through to ordinary unmatched-route 404.
-app.MapFallback("{**path}", (HttpContext context) =>
-{
-    if (!HttpMethods.IsGet(context.Request.Method) && !HttpMethods.IsHead(context.Request.Method))
-    {
-        return Results.NotFound();
-    }
-
-    var indexFile = context.RequestServices.GetRequiredService<IWebHostEnvironment>()
-        .WebRootFileProvider.GetFileInfo("index.html");
-    return indexFile.Exists
-        ? Results.File(indexFile.CreateReadStream(), "text/html")
-        : Results.NotFound();
-}).AllowAnonymous();
+// See SpaFallbackEndpoint for the method/prefix rules and why each exists; it is a plain function
+// so those rules are unit-tested directly rather than only through a full HTTP round trip.
+app.MapFallback("{**path}", (HttpContext context) => SpaFallbackEndpoint.Handle(
+    context,
+    context.RequestServices.GetRequiredService<IWebHostEnvironment>().WebRootFileProvider))
+    .AllowAnonymous();
 
 app.Run();
 

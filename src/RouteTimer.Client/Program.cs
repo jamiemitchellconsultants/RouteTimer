@@ -73,7 +73,10 @@ static async Task<AuthConfigResponse> FetchAuthConfigAsync(string baseAddress)
     using var client = new HttpClient
     {
         BaseAddress = new Uri(baseAddress),
-        Timeout = TimeSpan.FromSeconds(10)
+        // Shorter than the general-purpose 10s used elsewhere: this call blocks the entire app boot,
+        // so the worst case across all four attempts (4 * timeout + backoff) should stay well under
+        // a minute rather than approaching it. Still generous for a healthy same-origin API.
+        Timeout = TimeSpan.FromSeconds(5)
     };
 
     Exception? lastFailure = null;
