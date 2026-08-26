@@ -27,6 +27,8 @@ using RouteTimer.Services.Models;
 using RouteTimer.Services.Physics;
 using RouteTimer.Services.Persistence;
 using RouteTimer.Services.Predictions;
+using RouteTimer.Services.Security;
+using RouteTimer.Services.Settings;
 using RouteTimer.Services.Training;
 using RouteTimer.Services.Jobs;
 using RouteTimer.Services.Routes;
@@ -65,6 +67,7 @@ builder.Services.AddScoped<IPredictionRepository, PredictionRepository>();
 builder.Services.AddScoped<IJobRepository, JobRepository>();
 builder.Services.AddScoped<IGarminConnectionRepository, GarminConnectionRepository>();
 builder.Services.AddScoped<IGarminActivityImportRepository, GarminActivityImportRepository>();
+builder.Services.AddScoped<IGoogleMapsCredentialRepository, GoogleMapsCredentialRepository>();
 builder.Services.AddScoped<TrainingUploadService>();
 builder.Services.AddScoped<TrainingActivityQueryService>();
 builder.Services.AddScoped<TrainingActivityDeletionService>();
@@ -105,6 +108,26 @@ finally
 
 builder.Services.AddSingleton<IGarminTokenProtector>(_ => garminTokenProtector);
 builder.Services.AddSingleton<GarminOperationGate>();
+
+// Optional, unlike the Garmin key. Without it the rider can still type a key for one conversion;
+// only saving is unavailable. A deployment that never uses Google Maps needs no new configuration.
+var encodedMapsKey = builder.Configuration["GoogleMaps:KeyEncryptionKey"];
+AesGcmSecretProtector? googleMapsKeyProtector = null;
+if (!string.IsNullOrWhiteSpace(encodedMapsKey))
+{
+    var mapsKey = Convert.FromBase64String(encodedMapsKey);
+    if (mapsKey.Length != 32)
+    {
+        throw new InvalidOperationException("GoogleMaps:KeyEncryptionKey must decode to 32 bytes.");
+    }
+
+    googleMapsKeyProtector = new AesGcmSecretProtector(mapsKey, GoogleMapsKeyService.Purpose);
+}
+
+builder.Services.AddScoped(sp => new GoogleMapsKeyService(
+    sp.GetRequiredService<IGoogleMapsCredentialRepository>(),
+    googleMapsKeyProtector,
+    sp.GetRequiredService<TimeProvider>()));
 builder.Services.AddHttpClient<IGarminAdapterClient, GarminAdapterClient>(client =>
 {
     var baseUrl = builder.Configuration["GarminAdapter:BaseUrl"]
@@ -361,6 +384,7 @@ app.MapPredictionEndpoints();
 app.MapJobEndpoints();
 app.MapGarminEndpoints();
 app.MapRouteEndpoints();
+app.MapSettingsEndpoints();
 app.MapAuthEndpoints(authMode);
 
 // Every unmapped GET -- every client-side route, and the OIDC redirect and post-logout callbacks
