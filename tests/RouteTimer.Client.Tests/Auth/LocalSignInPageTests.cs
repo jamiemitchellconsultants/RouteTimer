@@ -1,5 +1,6 @@
 using System.Net;
 using Bunit;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using RouteTimer.Client;
@@ -101,6 +102,27 @@ public sealed class LocalSignInPageTests : BunitContext
     }
 
     [Fact]
+    public void A_timed_out_submission_shows_an_error_and_re_enables_the_button()
+    {
+        // TaskCanceledException is what a timeout looks like here -- CancellationToken.None is
+        // always what SubmitAsync passes, so this can only be a timeout, never a caller-initiated
+        // cancellation. Removing the finally block that used to reset isSubmitting on this path left
+        // the button disabled forever with no error shown; this pins the replacement catch.
+        Arrange(setupRequired: false);
+        api.OnLocalLoginAsync = (_, _) => Task.FromException<bool>(new TaskCanceledException());
+
+        var cut = Render<LocalSignIn>();
+        cut.Find("[data-testid=local-signin-passphrase]").Input("correct horse battery staple");
+        cut.Find("[data-testid=local-signin-submit]").Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("did not respond in time", cut.Find("[data-testid=local-signin-error]").TextContent, StringComparison.Ordinal);
+            Assert.False(cut.Find("[data-testid=local-signin-submit]").HasAttribute("disabled"));
+        });
+    }
+
+    [Fact]
     public void Submit_is_a_no_op_once_a_submission_is_already_in_flight()
     {
         // A future refactor that moves the isSubmitting=true assignment after an await, or adds
@@ -171,6 +193,36 @@ public sealed class LocalSignInPageTests : BunitContext
                 "That passphrase was not recognised.",
                 cut.Find("[data-testid=local-signin-error]").TextContent,
                 StringComparison.Ordinal));
+    }
+}
+
+public sealed class RiderPageAuthorizationTests
+{
+    // Deleting [Authorize] from a page compiles cleanly and every existing test for that page still
+    // passes, because those tests render the component directly rather than through the router --
+    // AuthorizeRouteView never gets involved, so nothing else would notice the page had quietly
+    // become reachable by an anonymous caller.
+    [Theory]
+    [InlineData(typeof(Home))]
+    [InlineData(typeof(Profile))]
+    [InlineData(typeof(Training))]
+    [InlineData(typeof(TrainingDetail))]
+    [InlineData(typeof(Predictions))]
+    [InlineData(typeof(PredictionDetail))]
+    public void Rider_pages_carry_the_authorize_attribute(Type page)
+    {
+        Assert.True(
+            page.GetCustomAttributes(typeof(AuthorizeAttribute), inherit: true).Length > 0,
+            $"{page.Name} is missing [Authorize] and would render for an anonymous caller.");
+    }
+
+    [Theory]
+    [InlineData(typeof(LocalSignIn))]
+    [InlineData(typeof(Authentication))]
+    [InlineData(typeof(NotFound))]
+    public void Anonymous_pages_do_not_carry_the_authorize_attribute(Type page)
+    {
+        Assert.Empty(page.GetCustomAttributes(typeof(AuthorizeAttribute), inherit: true));
     }
 }
 

@@ -49,6 +49,11 @@ public sealed class AuthRateLimitTests
         Assert.NotNull(lockedOut);
         var problem = await lockedOut.Content.ReadFromJsonAsync<JsonElement>(CancellationToken.None);
         Assert.Equal(ErrorCodes.LocalCredentialLockedOut, problem.GetProperty("code").GetString());
+
+        // "wait for the lockout to expire" is not something a rider can act on -- the response
+        // already computes the wait as Retry-After, so the message should say how long too.
+        Assert.Contains("seconds", problem.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.True(lockedOut.Headers.RetryAfter is not null);
         lockedOut.Dispose();
     }
 

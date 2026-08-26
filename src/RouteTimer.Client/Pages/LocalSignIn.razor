@@ -9,15 +9,16 @@
 @inject NavigationManager Navigation
 @attribute [AllowAnonymous]
 
-<PageTitle>@Title | RouteTimer</PageTitle>
-
 @if (!AuthConfig.IsLocal)
 {
+    <PageTitle>Local sign-in unavailable | RouteTimer</PageTitle>
+    <h1>Local sign-in unavailable</h1>
     <p>This installation does not use a local passphrase.</p>
 }
 else
 {
 
+<PageTitle>@Title | RouteTimer</PageTitle>
 <h1>@Title</h1>
 
 @if (AuthConfig.SetupRequired)
@@ -80,7 +81,7 @@ else
 
         error = null;
 
-        if (string.IsNullOrEmpty(passphrase))
+        if (string.IsNullOrWhiteSpace(passphrase))
         {
             error = "Enter a passphrase.";
             return;
@@ -121,6 +122,15 @@ else
         {
             passphrase = confirmation = string.Empty;
             error = "RouteTimer could not be reached. Check that the container is still running.";
+            isSubmitting = false;
+        }
+        catch (OperationCanceledException)
+        {
+            // The request timed out (this client sets none, so it is HttpClient's own 100s default;
+            // CancellationToken.None is always what's passed here, so this can only be a timeout, never
+            // a caller-initiated cancellation).
+            passphrase = confirmation = string.Empty;
+            error = "RouteTimer did not respond in time. Try again.";
             isSubmitting = false;
         }
     }
