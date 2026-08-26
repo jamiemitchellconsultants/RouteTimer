@@ -37,4 +37,11 @@ public static class ErrorCodes
     public const string LocalCredentialLockedOut = "local-credential-locked-out";
     public const string RequestRateExceeded = "request-rate-exceeded";
     public const string CrossSiteRequestRejected = "cross-site-request-rejected";
+    public const string ShortLinkCodeInvalid = "short-link-code-invalid";
+    public const string ShortLinkUnresolved = "short-link-unresolved";
+    public const string GoogleMapsKeyNotStored = "google-maps-key-not-stored";
+    public const string GoogleMapsKeyInvalid = "google-maps-key-invalid";
+    public const string GoogleMapsKeyStorageUnavailable = "google-maps-key-storage-unavailable";
+    public const string PredictionNotComplete = "prediction-not-complete";
+    public const string GarminCourseRejected = "garmin-course-rejected";
 }

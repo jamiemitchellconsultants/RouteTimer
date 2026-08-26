@@ -113,6 +113,21 @@ builder.Services.AddHttpClient<IGarminAdapterClient, GarminAdapterClient>(client
     client.Timeout = TimeSpan.FromMinutes(2);
 })
 .RedactLoggedHeaders(["X-RouteTimer-Garmin-Token"]);
+
+// maps.app.goo.gl sends no Access-Control-Allow-Origin and is cross-origin-resource-policy:
+// same-site, so the browser cannot expand a short link itself. Redirects are not followed: the
+// Location header is the entire answer, and following it would fetch Google on the rider's behalf.
+builder.Services.AddHttpClient<ShortLinkResolutionService>(client =>
+{
+    client.BaseAddress = new Uri("https://maps.app.goo.gl");
+    client.Timeout = TimeSpan.FromSeconds(10);
+})
+.ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    AllowAutoRedirect = false,
+    UseCookies = false
+});
+
 builder.Services.AddSingleton<IGpxRouteParser, GpxRouteParser>();
 builder.Services.AddSingleton<IRouteProcessor>(_ => new RouteProcessor(RouteProcessingOptions.Default));
 builder.Services.AddSingleton(TimeProvider.System);
@@ -345,6 +360,7 @@ app.MapModelsEndpoints();
 app.MapPredictionEndpoints();
 app.MapJobEndpoints();
 app.MapGarminEndpoints();
+app.MapRouteEndpoints();
 app.MapAuthEndpoints(authMode);
 
 // Every unmapped GET -- every client-side route, and the OIDC redirect and post-logout callbacks
