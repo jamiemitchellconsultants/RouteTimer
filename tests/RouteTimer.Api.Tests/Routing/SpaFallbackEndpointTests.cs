@@ -26,6 +26,19 @@ public sealed class SpaFallbackEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task Never_lets_the_browser_cache_a_fallback_response_under_a_static_asset_URL()
+    {
+        // A fingerprinted asset URL never changes on its own, so a cached wrong response outlives
+        // whatever bug served it here instead of the real file, until the rider clears their cache
+        // even after the bug is fixed. See the matching comment in SpaFallbackEndpoint.
+        WriteIndexHtml("<html>RouteTimer</html>");
+
+        var response = await ExecuteAsync("GET", "/_framework/dotnet.native.abc123.wasm");
+
+        Assert.Equal("no-store", response.CacheControl);
+    }
+
+    [Fact]
     public async Task Serves_the_index_file_for_HEAD_too()
     {
         WriteIndexHtml("<html>RouteTimer</html>");
@@ -83,7 +96,7 @@ public sealed class SpaFallbackEndpointTests : IDisposable
     private void WriteIndexHtml(string content) =>
         File.WriteAllText(Path.Combine(root, "index.html"), content);
 
-    private async Task<(int Status, string Body, string? ContentType)> ExecuteAsync(string method, string path)
+    private async Task<(int Status, string Body, string? ContentType, string? CacheControl)> ExecuteAsync(string method, string path)
     {
         using var provider = new PhysicalFileProvider(root);
         using var services = new ServiceCollection().AddLogging().BuildServiceProvider();
@@ -101,7 +114,10 @@ public sealed class SpaFallbackEndpointTests : IDisposable
         using var reader = new StreamReader(context.Response.Body);
         var body = await reader.ReadToEndAsync();
         var contentType = context.Response.ContentType?.Split(';')[0];
-        return (context.Response.StatusCode, body, contentType);
+        var cacheControl = context.Response.Headers.CacheControl.Count > 0
+            ? context.Response.Headers.CacheControl.ToString()
+            : null;
+        return (context.Response.StatusCode, body, contentType, cacheControl);
     }
 
     public void Dispose() => Directory.Delete(root, recursive: true);

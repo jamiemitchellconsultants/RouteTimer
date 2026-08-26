@@ -33,8 +33,19 @@ public static class SpaFallbackEndpoint
         }
 
         var indexFile = webRoot.GetFileInfo("index.html");
-        return indexFile.Exists
-            ? Results.File(indexFile.CreateReadStream(), "text/html")
-            : Results.NotFound();
+        if (!indexFile.Exists)
+        {
+            return Results.NotFound();
+        }
+
+        // A misconfigured or momentarily-broken deployment can end up routing a real static asset's
+        // URL here instead of to the actual file (verified directly: a middleware-ordering bug once
+        // did exactly that for every _framework/* request). Browsers cache a plain 200 with no
+        // cache-control heuristically, keyed by URL -- for a fingerprinted asset path that never
+        // changes on its own, that would mean the wrong (HTML) response outlives the bug that caused
+        // it, breaking the app for that rider until they clear their cache even after a real fix
+        // ships. This response must never be cached under someone else's URL.
+        context.Response.Headers.CacheControl = "no-store";
+        return Results.File(indexFile.CreateReadStream(), "text/html");
     }
 }
