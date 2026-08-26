@@ -7,6 +7,8 @@ from routetimer_garmin.courses import (
     initial_bearing,
     haversine_metres,
 )
+from routetimer_garmin.errors import AdapterError
+from routetimer_garmin.facade import TokenSession
 
 
 def _points():
@@ -102,3 +104,66 @@ def test_rejects_fewer_than_two_points(parsed):
             elevation_gain_metres=0.0,
             elevation_loss_metres=0.0,
         )
+
+
+class _FakeGarminClient:
+    def __init__(self, parsed, saved):
+        self._parsed = parsed
+        self._saved = saved
+        self.calls = []
+
+    def post(self, service, path, **kwargs):
+        self.calls.append((path, kwargs))
+        if path == "/course-service/course/import":
+            return self._parsed
+        if path == "/course-service/course":
+            return self._saved
+        raise AssertionError(f"unexpected path {path}")
+
+
+class _FakeGarmin:
+    def __init__(self, client):
+        self.client = client
+
+
+def test_create_course_posts_the_gpx_then_saves():
+    client = _FakeGarminClient(
+        parsed={"courseName": "Parsed name", "geoPoints": _points()},
+        saved={"courseId": 4242, "courseName": "Kingston to Dorking", "distanceMeter": 1234.5},
+    )
+    session = TokenSession(_FakeGarmin(client))
+
+    result = session.create_course(
+        gpx=b"<gpx/>",
+        file_name="route.gpx",
+        course_name="Kingston to Dorking",
+        activity_type="road_biking",
+        description=None,
+        elevation_gain_metres=17.6,
+        elevation_loss_metres=3.2,
+    )
+
+    assert result.course_id == 4242
+    assert [call[0] for call in client.calls] == [
+        "/course-service/course/import",
+        "/course-service/course",
+    ]
+    assert client.calls[0][1]["files"]["file"][2] == "application/gpx+xml"
+    assert client.calls[1][1]["json"]["elevationGainMeter"] == 17.6
+
+
+def test_create_course_rejects_an_unknown_activity_type():
+    session = TokenSession(_FakeGarmin(_FakeGarminClient({"geoPoints": _points()}, {"courseId": 1})))
+
+    with pytest.raises(AdapterError) as raised:
+        session.create_course(
+            gpx=b"<gpx/>",
+            file_name="route.gpx",
+            course_name="R",
+            activity_type="unicycling",
+            description=None,
+            elevation_gain_metres=0.0,
+            elevation_loss_metres=0.0,
+        )
+
+    assert raised.value.code == "request-invalid"
