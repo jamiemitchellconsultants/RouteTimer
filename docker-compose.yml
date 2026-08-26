@@ -16,6 +16,23 @@ services:
     networks:
       - routetimer-private
 
+  routetimer-garmin-adapter:
+    build:
+      context: ./garmin-adapter
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - routetimer-private
+
   routetimer:
     build:
       context: .
@@ -26,10 +43,14 @@ services:
     depends_on:
       routetimer-db:
         condition: service_healthy
+      routetimer-garmin-adapter:
+        condition: service_healthy
     environment:
       ConnectionStrings__RouteTimer: Host=routetimer-db;Database=${ROUTETIMER_DB_NAME:-routetimer};Username=${ROUTETIMER_DB_USER:-routetimer};Password=${ROUTETIMER_DB_PASSWORD:?set ROUTETIMER_DB_PASSWORD}
       Database__ApplyMigrations: "true"
       Keycloak__Authority: ${KEYCLOAK_AUTHORITY:?set KEYCLOAK_AUTHORITY}
+      GarminAdapter__BaseUrl: http://routetimer-garmin-adapter:8081
+      Garmin__TokenEncryptionKey: ${ROUTETIMER_GARMIN_TOKEN_KEY:?set ROUTETIMER_GARMIN_TOKEN_KEY}
     networks:
       - routetimer-private
       - mcp-public
