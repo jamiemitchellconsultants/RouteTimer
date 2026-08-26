@@ -10,6 +10,8 @@ namespace RouteTimer.Api.Garmin;
 
 public sealed class GarminAdapterClient(HttpClient httpClient) : IGarminAdapterClient
 {
+    private const int ActivityPageSize = 50;
+    private const int MaximumActivityOffset = 100_000_000;
     private const string TokenHeader = "X-RouteTimer-Garmin-Token";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
@@ -24,7 +26,12 @@ public sealed class GarminAdapterClient(HttpClient httpClient) : IGarminAdapterC
         SendJsonAsync<GarminAdapterSession>(HttpMethod.Post, "/v1/auth/validate", new { token = tokenJson }, ValidateSession, cancellationToken);
 
     public Task<GarminAdapterActivityPage> GetActivitiesAsync(string tokenJson, int offset, CancellationToken cancellationToken) =>
-        SendJsonAsync<GarminAdapterActivityPage>(HttpMethod.Post, "/v1/activities/page", new { token = tokenJson, offset }, ValidatePage, cancellationToken);
+        SendJsonAsync<GarminAdapterActivityPage>(
+            HttpMethod.Post,
+            "/v1/activities/page",
+            new { token = tokenJson, offset },
+            page => ValidatePage(page, offset),
+            cancellationToken);
 
     public Task<GarminAdapterActivityResult> GetActivityAsync(string tokenJson, string activityId, CancellationToken cancellationToken)
     {
@@ -232,9 +239,13 @@ public sealed class GarminAdapterClient(HttpClient httpClient) : IGarminAdapterC
     private static bool ValidateSession(GarminAdapterSession session) =>
         !string.IsNullOrWhiteSpace(session.TokenJson);
 
-    private static bool ValidatePage(GarminAdapterActivityPage page) =>
+    private static bool ValidatePage(GarminAdapterActivityPage page, int requestedOffset) =>
         !string.IsNullOrWhiteSpace(page.TokenJson) &&
         page.Activities is not null &&
+        page.Activities.Count <= ActivityPageSize &&
+        (page.NextOffset is null ||
+            page.NextOffset is >= 0 and <= MaximumActivityOffset &&
+            page.NextOffset > requestedOffset) &&
         page.Activities.All(IsValidActivity);
 
     private static bool ValidateActivityResult(GarminAdapterActivityResult result) =>

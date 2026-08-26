@@ -18,10 +18,38 @@ public sealed class GarminDeploymentTests
         Assert.True(File.Exists(dockerfilePath), "The Garmin adapter Dockerfile is required.");
 
         var dockerfile = File.ReadAllText(dockerfilePath);
-        Assert.Contains("FROM python:3.12-slim", dockerfile, StringComparison.Ordinal);
+        Assert.Contains(
+            "FROM python:3.12-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36",
+            dockerfile,
+            StringComparison.Ordinal);
         Assert.Contains("useradd --create-home --uid 10001 adapter", dockerfile, StringComparison.Ordinal);
         Assert.Contains("USER adapter", dockerfile, StringComparison.Ordinal);
         Assert.Contains("routetimer_garmin.api:app", dockerfile, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Adapter_image_installs_only_hash_locked_external_dependencies()
+    {
+        var dockerfile = File.ReadAllText(FindRepositoryFile("garmin-adapter", "Dockerfile"));
+        var lockPath = FindRepositoryFile("garmin-adapter", "requirements.lock");
+
+        Assert.True(File.Exists(lockPath), "The Garmin adapter dependency lock is required.");
+
+        var dependencyLock = File.ReadAllText(lockPath);
+        Assert.Contains("fastapi==0.116.1", dependencyLock, StringComparison.Ordinal);
+        Assert.Contains("garminconnect==0.3.4", dependencyLock, StringComparison.Ordinal);
+        Assert.Contains("uvicorn==0.35.0", dependencyLock, StringComparison.Ordinal);
+        Assert.Contains("setuptools==80.9.0", dependencyLock, StringComparison.Ordinal);
+        Assert.Contains("--hash=sha256:", dependencyLock, StringComparison.Ordinal);
+        Assert.Contains("COPY requirements.lock ./", dockerfile, StringComparison.Ordinal);
+        Assert.Contains(
+            "pip install --no-cache-dir --require-hashes -r requirements.lock",
+            dockerfile,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "pip install --no-cache-dir --no-deps --no-build-isolation .",
+            dockerfile,
+            StringComparison.Ordinal);
     }
 
     [Fact]

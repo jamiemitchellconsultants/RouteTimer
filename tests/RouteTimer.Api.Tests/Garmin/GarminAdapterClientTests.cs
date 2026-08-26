@@ -83,6 +83,49 @@ public sealed class GarminAdapterClientTests
     }
 
     [Fact]
+    public async Task Get_activities_rejects_pages_larger_than_the_adapter_contract_limit()
+    {
+        const string privateToken = "private-adapter-token";
+        var client = CreateClient((_, _) =>
+            Task.FromResult(JsonResponse(ActivityPageJson(51, null, privateToken))));
+
+        var exception = await Assert.ThrowsAsync<GarminAdapterException>(() =>
+            client.GetActivitiesAsync("token-json", 0, CancellationToken.None));
+
+        Assert.Equal(GarminAdapterError.ResponseInvalid, exception.Error);
+        Assert.DoesNotContain(privateToken, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(100_000_001)]
+    [InlineData(50)]
+    [InlineData(49)]
+    public async Task Get_activities_rejects_out_of_range_repeated_or_backward_next_offsets(int nextOffset)
+    {
+        const string privateToken = "private-adapter-token";
+        var client = CreateClient((_, _) =>
+            Task.FromResult(JsonResponse(ActivityPageJson(1, nextOffset, privateToken))));
+
+        var exception = await Assert.ThrowsAsync<GarminAdapterException>(() =>
+            client.GetActivitiesAsync("token-json", 50, CancellationToken.None));
+
+        Assert.Equal(GarminAdapterError.ResponseInvalid, exception.Error);
+        Assert.DoesNotContain(privateToken, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Get_activities_accepts_the_maximum_forward_next_offset()
+    {
+        var client = CreateClient((_, _) =>
+            Task.FromResult(JsonResponse(ActivityPageJson(1, 100_000_000, "rotated-token"))));
+
+        var page = await client.GetActivitiesAsync("token-json", 99_999_999, CancellationToken.None);
+
+        Assert.Equal(100_000_000, page.NextOffset);
+    }
+
+    [Fact]
     public async Task Get_activity_posts_canonical_id_and_returns_activity_with_rotated_token()
     {
         var client = CreateClient(async (request, cancellationToken) =>
@@ -324,6 +367,24 @@ public sealed class GarminAdapterClientTests
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
+
+    private static string ActivityPageJson(int activityCount, int? nextOffset, string tokenJson) =>
+        JsonSerializer.Serialize(new
+        {
+            activities = Enumerable.Range(1, activityCount).Select(id => new
+            {
+                activityId = id.ToString(),
+                name = $"Ride {id}",
+                startedAt = "2026-08-25T08:00:00Z",
+                activityType = "road-cycling",
+                distanceMetres = 1234.5,
+                durationSeconds = 3600,
+                ascentMetres = 100,
+                averagePowerWatts = 200,
+            }),
+            nextOffset,
+            tokenJson,
+        });
 
     private static HttpResponseMessage FitResponse(string tokenHeader)
     {
