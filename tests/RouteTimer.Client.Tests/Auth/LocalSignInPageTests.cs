@@ -143,14 +143,22 @@ public sealed class LocalSignInPageTests : BunitContext
         Assert.Single(api.LocalLogins);
     }
 
-    [Fact]
-    public void Submit_rejects_an_empty_passphrase_without_a_round_trip()
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Submit_rejects_an_empty_or_whitespace_passphrase_without_a_round_trip(string passphrase)
     {
-        // An accidental empty submit must not reach the server: on the login path it would count as
-        // a wrong guess against the rider's own lockout budget.
+        // An accidental empty or whitespace-only submit must not reach the server: on the login path
+        // it would count as a wrong guess against the rider's own lockout budget. Whitespace-only
+        // used to slip past an IsNullOrEmpty check and spend that attempt for real.
         Arrange(setupRequired: false);
 
         var cut = Render<LocalSignIn>();
+        if (!string.IsNullOrEmpty(passphrase))
+        {
+            cut.Find("[data-testid=local-signin-passphrase]").Input(passphrase);
+        }
+
         cut.Find("[data-testid=local-signin-submit]").Click();
 
         cut.WaitForAssertion(() =>
