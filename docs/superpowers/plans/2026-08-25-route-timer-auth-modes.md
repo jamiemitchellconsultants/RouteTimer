@@ -2206,6 +2206,83 @@ git commit -m "feat: select client authentication at runtime"
 
 ---
 
+### Task 8 amendments after review
+
+Three rounds of review found defects the original task text did not anticipate at all -- not
+deviations from specified code, since none was given for these paths, but gaps the task's own
+file list never covered. Record them so a future compliance check does not read their absence as
+drift to correct back out.
+
+**The bootstrap fetch needs retry, a timeout, and a narrower failure window.** A bare
+`GetFromJsonAsync` with `?? throw` dies on the very first transient failure, and the realistic
+trigger is routine: a page load during the post-deploy migration window hits the API before it
+reports ready and gets a 500, the fetch throws inside `Main`, and WASM never boots -- a permanent
+spinner, the cause console-only. Extract the fetch into a local function `FetchAuthConfigAsync`
+with a bounded, back-off retry (500ms/1s/2s, four attempts total) catching
+`HttpRequestException`, `JsonException`, and `TaskCanceledException`, and a five-second
+per-attempt timeout -- short because this call blocks the entire app boot, so the worst case
+across all four attempts should stay well under a minute rather than approaching one. Do not
+retry aggressively: Keycloak-mode deployments carry no rate limiter on this endpoint at all (see
+the Task 6 amendments -- the shared ingress owns that instead), and every open tab hitting this
+during a real outage must not hammer it.
+
+`LocalAuthenticationStateProvider`'s own `catch (HttpRequestException)` is too narrow for the
+same reason: malformed JSON and a timed-out request both escape uncaught into
+`CascadingAuthenticationState`, breaking authentication-state rendering for the whole component
+tree. Widen it to the same three exception types. Give this provider its own dedicated
+`HttpClient` with a ten-second timeout -- **not** the one `RouteTimerApiClient` shares for
+uploads up to roughly 500 MB, where a blanket short timeout would cut off a legitimate large
+upload.
+
+**`MainLayout.razor` and `Pages/Authentication.razor` need to branch on `ClientAuthConfig.IsLocal`,
+or local mode crashes.** Neither file is in Task 8's original list, but both throw
+`InvalidOperationException` resolving `IRemoteAuthenticationService` the moment a local-mode
+rider reaches them, because local mode registers no OIDC services at all. `MainLayout` linked
+unconditionally to `authentication/profile` and `authentication/logout`; `Authentication.razor`
+unconditionally rendered `RemoteAuthenticatorView`. Branch both: local mode shows a "Log out"
+button wired to a new `IRouteTimerApiClient.LocalLogoutAsync()` (`POST /api/auth/logout`,
+wrapped in `catch (ApiProblemException or HttpRequestException)` so a rate-limited or
+unreachable logout does not surface the app's generic unhandled-error bar for what the rider
+experiences as a routine click) followed by a forced reload; Keycloak mode is unchanged.
+`Authentication.razor` renders a short "does not use single sign-on" message and redirects home
+instead of `RemoteAuthenticatorView`. Add `LocalModeUiTests.cs` covering all four
+mode/authentication combinations -- the local-only tests alone would not notice `IsLocal`
+regressing to always-true or always-false, since neither failure changes what local mode renders.
+
+**`LocalLogoutAsync` already exists** on `IRouteTimerApiClient`, `RouteTimerApiClient`, and
+`FakeRouteTimerApiClient.cs` (as `OnLocalLogoutAsync`/`LocalLogouts`) as of this amendment. Task 9
+below still adds `SetupLocalCredentialAsync` and `LocalLoginAsync` to the same three files; do not
+re-add `LocalLogoutAsync` alongside them.
+
+**Nothing routed an unmapped GET to the compiled app, including the OIDC callback this task's own
+`RedirectUri`/`PostLogoutRedirectUri` point at.** The fallback authorization policy applied to
+every unmatched path and returned 401 before any attempt to serve a file -- confirmed by removing
+the mapping and observing that exact status, and separately by serving a real `index.html` and
+observing 200. This blocked the Keycloak sign-in flow entirely and broke deep-link refresh in
+both modes. Add `src/RouteTimer.Api/Routing/SpaFallbackEndpoint.cs`, a plain function taking
+`(HttpContext, IFileProvider)`, called from a `MapFallback("{**path}", ...)` registration in
+`Program.cs`. It must restrict itself to GET/HEAD -- `MapFallbackToFile` matches every HTTP
+method on any unmapped path and answers a non-GET request with 405 rather than serving the file,
+which turns a POST to a typo'd or legacy API path into 405 instead of the 404 several existing
+tests already pin as that route's contract -- and it must exclude `/api` and `/health`, or a
+mistyped API GET silently serves the app shell as HTML instead of a 404.
+
+Test this as a plain function against a `PhysicalFileProvider` over a private
+`Directory.CreateTempSubdirectory()`, not through `WebApplicationFactory`. Two working paths were
+tried and rejected: `builder.UseWebRoot(...)`/`UseSetting(WebHostDefaults.WebRootKey, ...)` inside
+`ConfigureWebHost` does not take effect, because `StaticWebAssetsLoader` runs during
+`WebApplication.CreateBuilder(args)` itself, before minimal hosting's `ConfigureWebHost`
+customization applies; and a real `wwwroot/index.html` created directly in the source tree works,
+but risks contaminating unrelated tests if xunit runs test classes in parallel while it exists.
+The unit-test version is what actually caught both fallback defects -- the first `MapFallbackToFile`
+attempt (bare, no method restriction) and the second `MapFallback` attempt (no `/api`/`/health`
+exclusion) both passed an integration-style test that had no wwwroot content to serve and so 404'd
+every path regardless of what the guards did.
+
+Expected after this task: 76 client tests, 170 API.
+
+---
+
 ## Task 9: Local sign-in and first-run setup page
 
 **Files:**
