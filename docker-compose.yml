@@ -19,9 +19,6 @@ services:
   routetimer:
     build:
       context: .
-      args:
-        KEYCLOAK_AUTHORITY: ${KEYCLOAK_AUTHORITY:?set KEYCLOAK_AUTHORITY}
-        ROUTETIMER_HOSTNAME: ${ROUTETIMER_HOSTNAME:?set ROUTETIMER_HOSTNAME}
     restart: unless-stopped
     depends_on:
       routetimer-db:
@@ -29,6 +26,7 @@ services:
     environment:
       ConnectionStrings__RouteTimer: Host=routetimer-db;Database=${ROUTETIMER_DB_NAME:-routetimer};Username=${ROUTETIMER_DB_USER:-routetimer};Password=${ROUTETIMER_DB_PASSWORD:?set ROUTETIMER_DB_PASSWORD}
       Database__ApplyMigrations: "true"
+      Auth__Mode: Keycloak
       Keycloak__Authority: ${KEYCLOAK_AUTHORITY:?set KEYCLOAK_AUTHORITY}
     networks:
       - routetimer-private
