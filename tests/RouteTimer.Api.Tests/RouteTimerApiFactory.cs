@@ -22,13 +22,34 @@ public sealed class RouteTimerApiFactory(
     : WebApplicationFactory<Program>
 {
     internal const string DefaultKeycloakAuthority = "https://keycloak.test.invalid/realms/routetimer";
+    private const string DefaultGarminTokenKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
+    private const string DefaultGarminAdapterBaseUrl = "http://garmin-adapter.invalid/";
 
     private static readonly IReadOnlyDictionary<string, string> DefaultSettings =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
             // Keycloak mode refuses to start without an authority, so the default mode needs one.
-            ["Keycloak:Authority"] = DefaultKeycloakAuthority
+            ["Keycloak:Authority"] = DefaultKeycloakAuthority,
+            // Program refuses to build without a Garmin token key, and the adapter's typed
+            // HttpClient refuses to be constructed without a base address, so every host that
+            // boots Program needs both -- including the ones that never touch Garmin.
+            ["Garmin:TokenEncryptionKey"] = DefaultGarminTokenKey,
+            ["GarminAdapter:BaseUrl"] = DefaultGarminAdapterBaseUrl
         };
+
+    /// <summary>
+    /// Applies the settings without which <c>Program</c> refuses to start, for the test hosts
+    /// that derive from <see cref="WebApplicationFactory{TEntryPoint}"/> directly rather than
+    /// from this factory. Keeping that list in one place is why the values above are consts.
+    /// </summary>
+    internal static void ApplyRequiredSettings(IWebHostBuilder builder, string authMode = "Keycloak")
+    {
+        builder.UseSetting(RouteTimer.Api.Auth.AuthModeResolver.ConfigurationKey, authMode);
+        foreach (var setting in DefaultSettings)
+        {
+            builder.UseSetting(setting.Key, setting.Value);
+        }
+    }
 
     private readonly string databaseName = Guid.NewGuid().ToString();
 

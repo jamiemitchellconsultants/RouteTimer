@@ -60,9 +60,7 @@ public sealed class HealthEndpointTests
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
-            builder.UseSetting(RouteTimer.Api.Auth.AuthModeResolver.ConfigurationKey, "Keycloak");
-            // Keycloak mode refuses to start without an authority.
-            builder.UseSetting("Keycloak:Authority", RouteTimerApiFactory.DefaultKeycloakAuthority);
+            RouteTimerApiFactory.ApplyRequiredSettings(builder);
         }
     }
 

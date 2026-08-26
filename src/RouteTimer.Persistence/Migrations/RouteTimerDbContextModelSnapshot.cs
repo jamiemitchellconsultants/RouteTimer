@@ -148,6 +148,77 @@ namespace RouteTimer.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("RouteTimer.Persistence.Entities.GarminActivityImportEntity", b =>
+                {
+                    b.Property<string>("GarminActivityId")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("ActivityName")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<DateTimeOffset>("LinkedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UploadId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("GarminActivityId");
+
+                    b.HasIndex("UploadId");
+
+                    b.ToTable("garmin_activity_imports", (string)null);
+                });
+
+            modelBuilder.Entity("RouteTimer.Persistence.Entities.GarminConnectionEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("integer");
+
+                    b.Property<byte[]>("Ciphertext")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<string>("DisplayName")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<int>("EncryptionVersion")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("GarminUserId")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset?>("LastValidatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<byte[]>("Nonce")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<byte[]>("Tag")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("garmin_connections", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_garmin_connections_singleton", "\"Id\" = 1");
+                        });
+                });
+
             modelBuilder.Entity("RouteTimer.Persistence.Entities.LocalCredentialEntity", b =>
                 {
                     b.Property<int>("Id")
@@ -594,6 +665,15 @@ namespace RouteTimer.Persistence.Migrations
                     b.HasOne("RouteTimer.Persistence.Entities.TrainingActivityEntity", null)
                         .WithMany("Samples")
                         .HasForeignKey("ActivityId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("RouteTimer.Persistence.Entities.GarminActivityImportEntity", b =>
+                {
+                    b.HasOne("RouteTimer.Persistence.Entities.StoredUploadEntity", null)
+                        .WithMany()
+                        .HasForeignKey("UploadId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

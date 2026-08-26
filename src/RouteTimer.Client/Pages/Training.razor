@@ -5,6 +5,7 @@
 @using RouteTimer.Client.Components
 @using RouteTimer.Client.Formatting
 @using RouteTimer.Client.Jobs
+@using RouteTimer.Contracts.Garmin
 @using RouteTimer.Contracts.Jobs
 @using RouteTimer.Contracts.Models
 @using RouteTimer.Contracts.Training
@@ -18,6 +19,15 @@
 <p>Upload FIT rides, review activity quality, and remove evidence that no longer fits your rider model.</p>
 
 <section class="training-page">
+    <section class="training-panel training-panel--garmin">
+        <GarminConnection Connection="@garminConnection" ConnectionChanged="HandleGarminConnectionChanged" />
+        @if (garminConnection?.State.Equals("connected", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            <GarminActivityPicker AcceptedImportsCompleted="HandleAcceptedGarminImportsCompleted"
+                                  ReconnectRequired="HandleGarminReconnectRequired" />
+        }
+    </section>
+
     <section class="training-panel">
         <h2>Upload FIT training files</h2>
         <label for="fit-upload">FIT training files</label>
@@ -182,6 +192,7 @@
     private IReadOnlyList<IBrowserFile> selectedFiles = [];
     private IReadOnlyList<TrainingUploadFileResponse> uploadResults = [];
     private IReadOnlyList<TrainingActivitySummaryResponse> activities = [];
+    private GarminConnectionResponse? garminConnection;
     private ModelStatusResponse? modelStatus;
     private ApiProblemException? activitiesProblem;
     private ApiProblemException? modelProblem;
@@ -225,6 +236,25 @@
             selectedFiles = [];
             tooManyFilesSelected = true;
         }
+    }
+
+    private Task HandleGarminConnectionChanged(GarminConnectionResponse updatedConnection)
+    {
+        garminConnection = updatedConnection;
+        return Task.CompletedTask;
+    }
+
+    private Task HandleGarminReconnectRequired()
+    {
+        garminConnection = new GarminConnectionResponse("reconnect-required", null, null, null);
+        return Task.CompletedTask;
+    }
+
+    private async Task HandleAcceptedGarminImportsCompleted()
+    {
+        await Task.WhenAll(
+            LoadActivitiesAsync(showLoading: false),
+            LoadModelStatusAsync(showLoading: false));
     }
 
     private async Task UploadAsync()

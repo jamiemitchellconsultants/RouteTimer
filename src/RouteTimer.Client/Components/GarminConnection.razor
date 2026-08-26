@@ -1,0 +1,342 @@
+@implements IDisposable
+@using RouteTimer.Client.Api
+@using RouteTimer.Contracts.Errors
+@using RouteTimer.Contracts.Garmin
+@inject IRouteTimerApiClient Api
+
+<section class="garmin-connection" aria-labelledby="garmin-connection-heading">
+    <h2 id="garmin-connection-heading">Garmin Connect</h2>
+
+    @if (isLoading)
+    {
+        <p data-testid="garmin-connection-loading">Checking Garmin connection…</p>
+    }
+    else
+    {
+        @if (problem is not null || fallbackProblem)
+        {
+            <div data-testid="garmin-connection-error">
+                <ProblemMessage Problem="@problem" FallbackMessage="We could not update the Garmin connection." />
+            </div>
+        }
+
+        @if (IsConnected)
+        {
+            <div class="garmin-connection__status">
+                <p>Connected to Garmin.</p>
+                <p data-testid="garmin-connected-identity">
+                    @if (!string.IsNullOrWhiteSpace(connection?.DisplayName))
+                    {
+                        <strong>@connection.DisplayName</strong>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(connection?.GarminUserId))
+                    {
+                        <span>@connection.GarminUserId</span>
+                    }
+                </p>
+
+                @if (!confirmDisconnect)
+                {
+                    <button type="button"
+                            data-testid="garmin-disconnect-request"
+                            class="garmin-connection__button garmin-connection__button--secondary"
+                            @onclick="RequestDisconnect"
+                            disabled="@isDisconnecting">
+                        Disconnect Garmin
+                    </button>
+                }
+                else
+                {
+                    <div data-testid="garmin-disconnect-confirmation" class="garmin-connection__confirmation">
+                        <p>Disconnect Garmin? Imported training evidence will be kept.</p>
+                        <div class="garmin-connection__actions">
+                            <button type="button"
+                                    data-testid="garmin-disconnect-confirm"
+                                    class="garmin-connection__button garmin-connection__button--danger"
+                                    @onclick="DisconnectAsync"
+                                    disabled="@isDisconnecting">
+                                @(isDisconnecting ? "Disconnecting…" : "Disconnect")
+                            </button>
+                            <button type="button"
+                                    data-testid="garmin-disconnect-cancel"
+                                    class="garmin-connection__button garmin-connection__button--secondary"
+                                    @onclick="CancelDisconnect"
+                                    disabled="@isDisconnecting">
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+        else if (RequiresMfa)
+        {
+            <EditForm Model="mfa" OnValidSubmit="CompleteMfaAsync" data-testid="garmin-mfa-form">
+                <div class="garmin-connection__field">
+                    <label for="garmin-mfa-code">Garmin verification code</label>
+                    <InputText id="garmin-mfa-code"
+                               data-testid="garmin-mfa-code"
+                               type="password"
+                               inputmode="numeric"
+                               autocomplete="one-time-code"
+                               @bind-Value="mfa.Code" />
+                </div>
+                <button type="submit"
+                        data-testid="garmin-mfa-submit"
+                        class="garmin-connection__button"
+                        disabled="@isSubmitting">
+                    @(isSubmitting ? "Verifying…" : "Verify code")
+                </button>
+            </EditForm>
+        }
+        else
+        {
+            @if (connection?.State.Equals("reconnect-required", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                <p>Your Garmin connection needs to be established again.</p>
+            }
+
+            <EditForm Model="credentials" OnValidSubmit="LoginAsync" data-testid="garmin-login-form">
+                <div class="garmin-connection__field">
+                    <label for="garmin-email">Garmin email</label>
+                    <InputText id="garmin-email"
+                               data-testid="garmin-email"
+                               type="email"
+                               autocomplete="username"
+                               @bind-Value="credentials.Email" />
+                </div>
+                <div class="garmin-connection__field">
+                    <label for="garmin-password">Garmin password</label>
+                    <InputText id="garmin-password"
+                               data-testid="garmin-password"
+                               type="password"
+                               autocomplete="current-password"
+                               @bind-Value="credentials.Password" />
+                </div>
+                <p>RouteTimer uses these credentials only to establish the Garmin connection. They are not saved.</p>
+                <button type="submit"
+                        data-testid="garmin-login"
+                        class="garmin-connection__button"
+                        disabled="@isSubmitting">
+                    @(isSubmitting ? "Connecting…" : "Connect Garmin")
+                </button>
+            </EditForm>
+        }
+    }
+</section>
+
+@code {
+    private readonly CancellationTokenSource componentCancellation = new();
+    private readonly CredentialsModel credentials = new();
+    private readonly MfaModel mfa = new();
+    private GarminConnectionResponse? connection;
+    private ApiProblemException? problem;
+    private bool fallbackProblem;
+    private bool isLoading = true;
+    private bool isSubmitting;
+    private bool isDisconnecting;
+    private bool confirmDisconnect;
+
+    [Parameter]
+    public EventCallback<GarminConnectionResponse> ConnectionChanged { get; set; }
+
+    [Parameter]
+    public GarminConnectionResponse? Connection { get; set; }
+
+    private bool IsConnected => connection?.State.Equals("connected", StringComparison.OrdinalIgnoreCase) == true;
+
+    private bool RequiresMfa => connection?.State.Equals("mfa-required", StringComparison.OrdinalIgnoreCase) == true
+        && !string.IsNullOrWhiteSpace(connection.ChallengeId);
+
+    protected override void OnParametersSet()
+    {
+        if (Connection is not null && !Equals(connection, Connection))
+        {
+            connection = Connection;
+            confirmDisconnect = false;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            connection = await Api.GetGarminConnectionAsync(componentCancellation.Token);
+            ClearProblem();
+            await ConnectionChanged.InvokeAsync(connection);
+        }
+        catch (ApiProblemException apiProblem)
+        {
+            problem = apiProblem;
+            fallbackProblem = false;
+            connection = NotConnected();
+        }
+        catch (HttpRequestException)
+        {
+            problem = null;
+            fallbackProblem = true;
+            connection = NotConnected();
+        }
+        catch (OperationCanceledException) when (componentCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (!componentCancellation.IsCancellationRequested)
+            {
+                isLoading = false;
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        componentCancellation.Cancel();
+        componentCancellation.Dispose();
+    }
+
+    private async Task LoginAsync()
+    {
+        if (isSubmitting)
+        {
+            return;
+        }
+
+        isSubmitting = true;
+        ClearProblem();
+        var request = new GarminLoginRequest(credentials.Email, credentials.Password);
+
+        try
+        {
+            connection = await Api.LoginGarminAsync(request, componentCancellation.Token);
+            await ConnectionChanged.InvokeAsync(connection);
+        }
+        catch (ApiProblemException apiProblem)
+        {
+            problem = apiProblem;
+        }
+        catch (HttpRequestException)
+        {
+            fallbackProblem = true;
+        }
+        catch (OperationCanceledException) when (componentCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            credentials.Password = string.Empty;
+            if (!componentCancellation.IsCancellationRequested)
+            {
+                isSubmitting = false;
+            }
+        }
+    }
+
+    private async Task CompleteMfaAsync()
+    {
+        if (isSubmitting || string.IsNullOrWhiteSpace(connection?.ChallengeId))
+        {
+            return;
+        }
+
+        isSubmitting = true;
+        ClearProblem();
+        var request = new GarminMfaRequest(connection.ChallengeId, mfa.Code);
+
+        try
+        {
+            connection = await Api.CompleteGarminMfaAsync(request, componentCancellation.Token);
+            await ConnectionChanged.InvokeAsync(connection);
+        }
+        catch (ApiProblemException apiProblem)
+        {
+            problem = apiProblem;
+            if (apiProblem.Code.Equals(ErrorCodes.GarminChallengeExpired, StringComparison.Ordinal))
+            {
+                connection = NotConnected();
+                await ConnectionChanged.InvokeAsync(connection);
+            }
+        }
+        catch (HttpRequestException)
+        {
+            fallbackProblem = true;
+        }
+        catch (OperationCanceledException) when (componentCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            mfa.Code = string.Empty;
+            if (!componentCancellation.IsCancellationRequested)
+            {
+                isSubmitting = false;
+            }
+        }
+    }
+
+    private void RequestDisconnect() => confirmDisconnect = true;
+
+    private void CancelDisconnect() => confirmDisconnect = false;
+
+    private async Task DisconnectAsync()
+    {
+        if (isDisconnecting)
+        {
+            return;
+        }
+
+        isDisconnecting = true;
+        ClearProblem();
+
+        try
+        {
+            await Api.DisconnectGarminAsync(componentCancellation.Token);
+            connection = NotConnected();
+            confirmDisconnect = false;
+            credentials.Email = string.Empty;
+            await ConnectionChanged.InvokeAsync(connection);
+        }
+        catch (ApiProblemException apiProblem)
+        {
+            problem = apiProblem;
+        }
+        catch (HttpRequestException)
+        {
+            fallbackProblem = true;
+        }
+        catch (OperationCanceledException) when (componentCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (!componentCancellation.IsCancellationRequested)
+            {
+                isDisconnecting = false;
+            }
+        }
+    }
+
+    private void ClearProblem()
+    {
+        problem = null;
+        fallbackProblem = false;
+    }
+
+    private static GarminConnectionResponse NotConnected() => new("not-connected", null, null, null);
+
+    private sealed class CredentialsModel
+    {
+        public string Email { get; set; } = string.Empty;
+
+        public string Password { get; set; } = string.Empty;
+    }
+
+    private sealed class MfaModel
+    {
+        public string Code { get; set; } = string.Empty;
+    }
+}

@@ -5,12 +5,14 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Cryptography;
 using RouteTimer.Api;
 using RouteTimer.Api.Auth;
 using RouteTimer.Api.Health;
 using RouteTimer.Api.Routing;
 using RouteTimer.Contracts.Errors;
 using RouteTimer.Api.Endpoints;
+using RouteTimer.Api.Garmin;
 using RouteTimer.Api.Security;
 using RouteTimer.Api.Workers;
 using RouteTimer.Contracts.Uploads;
@@ -18,6 +20,7 @@ using RouteTimer.Persistence;
 using RouteTimer.Persistence.Repositories;
 using RouteTimer.Persistence.Jobs;
 using RouteTimer.Services.Activities;
+using RouteTimer.Services.Garmin;
 using RouteTimer.Services.Profile;
 using RouteTimer.Services.Models;
 using RouteTimer.Services.Physics;
@@ -59,6 +62,8 @@ builder.Services.AddSingleton(sp => new CredentialRevalidationCache(
     TimeSpan.FromSeconds(CredentialRevalidationCache.DefaultTtlSeconds)));
 builder.Services.AddScoped<IPredictionRepository, PredictionRepository>();
 builder.Services.AddScoped<IJobRepository, JobRepository>();
+builder.Services.AddScoped<IGarminConnectionRepository, GarminConnectionRepository>();
+builder.Services.AddScoped<IGarminActivityImportRepository, GarminActivityImportRepository>();
 builder.Services.AddScoped<TrainingUploadService>();
 builder.Services.AddScoped<TrainingActivityQueryService>();
 builder.Services.AddScoped<TrainingActivityDeletionService>();
@@ -68,6 +73,45 @@ builder.Services.AddScoped<ModelRebuildService>();
 builder.Services.AddScoped<PredictionSubmissionService>();
 builder.Services.AddScoped<PredictionQueryService>();
 builder.Services.AddScoped<PredictionDeletionService>();
+builder.Services.AddScoped<GarminConnectionService>();
+builder.Services.AddScoped<GarminActivityService>();
+var encodedGarminKey = builder.Configuration["Garmin:TokenEncryptionKey"]
+    ?? throw new InvalidOperationException("Garmin:TokenEncryptionKey is required.");
+byte[] garminKey;
+try
+{
+    garminKey = Convert.FromBase64String(encodedGarminKey);
+}
+catch (FormatException exception)
+{
+    throw new InvalidOperationException("Garmin:TokenEncryptionKey must be base64.", exception);
+}
+
+AesGcmGarminTokenProtector garminTokenProtector;
+try
+{
+    if (garminKey.Length != 32)
+    {
+        throw new InvalidOperationException("Garmin:TokenEncryptionKey must decode to exactly 32 bytes.");
+    }
+
+    garminTokenProtector = new AesGcmGarminTokenProtector(garminKey);
+}
+finally
+{
+    CryptographicOperations.ZeroMemory(garminKey);
+}
+
+builder.Services.AddSingleton<IGarminTokenProtector>(_ => garminTokenProtector);
+builder.Services.AddSingleton<GarminOperationGate>();
+builder.Services.AddHttpClient<IGarminAdapterClient, GarminAdapterClient>(client =>
+{
+    var baseUrl = builder.Configuration["GarminAdapter:BaseUrl"]
+        ?? throw new InvalidOperationException("GarminAdapter:BaseUrl is required.");
+    client.BaseAddress = new Uri(baseUrl, UriKind.Absolute);
+    client.Timeout = TimeSpan.FromMinutes(2);
+})
+.RedactLoggedHeaders(["X-RouteTimer-Garmin-Token"]);
 builder.Services.AddSingleton<IGpxRouteParser, GpxRouteParser>();
 builder.Services.AddSingleton<IRouteProcessor>(_ => new RouteProcessor(RouteProcessingOptions.Default));
 builder.Services.AddSingleton(TimeProvider.System);
@@ -255,6 +299,7 @@ app.MapTrainingEndpoints();
 app.MapModelsEndpoints();
 app.MapPredictionEndpoints();
 app.MapJobEndpoints();
+app.MapGarminEndpoints();
 app.MapAuthEndpoints(authMode);
 
 // Every unmapped GET -- every client-side route, and the OIDC redirect and post-logout callbacks

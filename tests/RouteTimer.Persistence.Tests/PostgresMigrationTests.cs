@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Npgsql;
 using RouteTimer.Domain.Models;
 using RouteTimer.Domain.Physics;
 using RouteTimer.Domain.Profile;
@@ -128,14 +129,70 @@ public sealed class PostgresMigrationTests
         await context.Database.MigrateAsync();
 
         await using var command = context.Database.GetDbConnection().CreateCommand();
-        command.CommandText = "SELECT array_agg(to_regclass(table_name)::text ORDER BY table_name) FROM (VALUES ('predictions'), ('rider_profile'), ('stored_uploads'), ('training_activities'), ('activity_samples'), ('rider_models'), ('power_bands'), ('rider_model_descent_limits'), ('local_credential')) AS expected_tables(table_name)";
+        command.CommandText = "SELECT array_agg(to_regclass(table_name)::text ORDER BY table_name) FROM (VALUES ('predictions'), ('rider_profile'), ('stored_uploads'), ('training_activities'), ('activity_samples'), ('rider_models'), ('power_bands'), ('rider_model_descent_limits'), ('local_credential'), ('garmin_connections'), ('garmin_activity_imports')) AS expected_tables(table_name)";
         await context.Database.OpenConnectionAsync();
         var table = await command.ExecuteScalarAsync();
 
-        Assert.Equal(new[] { "activity_samples", "local_credential", "power_bands", "predictions", "rider_model_descent_limits", "rider_models", "rider_profile", "stored_uploads", "training_activities" }, (string[]?)table);
+        Assert.Equal(new[] { "activity_samples", "garmin_activity_imports", "garmin_connections", "local_credential", "power_bands", "predictions", "rider_model_descent_limits", "rider_models", "rider_profile", "stored_uploads", "training_activities" }, (string[]?)table);
 
         var applied = await context.Database.GetAppliedMigrationsAsync();
         Assert.Contains("20260824200000_AddSequentialSimulationModel", applied);
+        Assert.Contains(applied, migration => migration.EndsWith("_AddGarminActivityImport", StringComparison.Ordinal));
+    }
+
+    // Break caught: the Garmin schema permits multiple connection rows, duplicate Garmin IDs, orphan links, or disconnect deletes retained evidence.
+    [Fact]
+    public async Task Garmin_migration_enforces_single_connection_primary_link_and_upload_cascade()
+    {
+        await using var database = new PostgreSqlBuilder("postgres:16-alpine").Build();
+        await database.StartAsync();
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseNpgsql(database.GetConnectionString()).Options;
+        await using var context = new RouteTimerDbContext(options);
+        await context.Database.MigrateAsync();
+
+        var now = new DateTimeOffset(2026, 8, 25, 13, 0, 0, TimeSpan.Zero);
+        var uploadId = Guid.NewGuid();
+        await context.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO garmin_connections
+                ("Id", "State", "GarminUserId", "DisplayName", "EncryptionVersion", "Nonce", "Ciphertext", "Tag", "LastValidatedAt", "UpdatedAt")
+            VALUES
+                (1, 'connected', '42', 'Jamie', 1, {new byte[12]}, {new byte[] { 1, 2, 3 }}, {new byte[16]}, {now}, {now});
+            INSERT INTO stored_uploads ("Id", "Kind", "FileName", "Content", "Sha256", "CreatedAt")
+            VALUES ({uploadId}, 'fit', 'garmin.fit', {new byte[] { 1, 2, 3 }}, {Enumerable.Repeat((byte)7, 32).ToArray()}, {now});
+            INSERT INTO garmin_activity_imports ("GarminActivityId", "UploadId", "ActivityName", "LinkedAt")
+            VALUES ('activity-1', {uploadId}, 'Safe ride', {now});
+            """);
+
+        var singletonViolation = await Assert.ThrowsAsync<PostgresException>(() => context.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO garmin_connections
+                ("Id", "State", "EncryptionVersion", "Nonce", "Ciphertext", "Tag", "UpdatedAt")
+            VALUES (2, 'connected', 1, {new byte[12]}, {new byte[] { 4 }}, {new byte[16]}, {now});
+            """));
+        Assert.Equal(PostgresErrorCodes.CheckViolation, singletonViolation.SqlState);
+
+        var duplicateViolation = await Assert.ThrowsAsync<PostgresException>(() => context.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO garmin_activity_imports ("GarminActivityId", "UploadId", "ActivityName", "LinkedAt")
+            VALUES ('activity-1', {uploadId}, 'Duplicate', {now});
+            """));
+        Assert.Equal(PostgresErrorCodes.UniqueViolation, duplicateViolation.SqlState);
+
+        await context.Database.ExecuteSqlRawAsync("DELETE FROM garmin_connections WHERE \"Id\" = 1");
+        Assert.Equal(1L, await ScalarAsync<long>(context, "SELECT COUNT(*) FROM garmin_activity_imports WHERE \"GarminActivityId\" = 'activity-1'"));
+
+        await context.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM stored_uploads WHERE \"Id\" = {uploadId}");
+        Assert.Equal(0L, await ScalarAsync<long>(context, "SELECT COUNT(*) FROM garmin_activity_imports WHERE \"GarminActivityId\" = 'activity-1'"));
+    }
+
+    // Break caught: entity mapping changes without a generated migration leave deployment schema behind the EF model.
+    [Fact]
+    public void Model_has_no_pending_changes()
+    {
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>()
+            .UseNpgsql("Host=localhost;Database=routetimer;Username=routetimer;Password=routetimer")
+            .Options;
+        using var context = new RouteTimerDbContext(options);
+
+        Assert.False(context.Database.HasPendingModelChanges());
     }
 
     // Break caught: EF InMemory ignores HasMaxLength/IsRequired and the singleton check constraint, so nothing

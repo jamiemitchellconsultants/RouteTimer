@@ -5,6 +5,23 @@ namespace RouteTimer.Client.Formatting;
 
 public static class RouteTimerText
 {
+    public static string GarminActivityType(string? value) => value switch
+    {
+        "road-cycling" => "Road cycling",
+        "gravel-cycling" => "Gravel cycling",
+        _ => Sentence(value)
+    };
+
+    public static string GarminImportOutcome(string? value) => value switch
+    {
+        "accepted" => "Download accepted",
+        "already-imported" => "Already imported",
+        "duplicate" => "Duplicate FIT",
+        "invalid-fit" => "Invalid FIT",
+        "download-failed" => "Garmin download failed",
+        _ => Sentence(value)
+    };
+
     public static string Sentence(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))

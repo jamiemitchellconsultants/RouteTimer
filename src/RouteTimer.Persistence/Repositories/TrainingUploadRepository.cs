@@ -10,6 +10,7 @@ public sealed class TrainingUploadRepository(RouteTimerDbContext context) : ITra
     public async Task<TrainingUploadAcceptance> AcceptAsync(
         StoredUpload upload,
         DateTimeOffset now,
+        GarminActivitySource? garminSource,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(upload);
@@ -19,32 +20,75 @@ public sealed class TrainingUploadRepository(RouteTimerDbContext context) : ITra
             ? await context.Database.BeginTransactionAsync(cancellationToken)
             : null;
 
-        var inserted = context.Database.IsRelational()
-            ? await InsertUploadIfAbsentAsync(upload, cancellationToken)
-            : await InsertUploadIfAbsentInMemoryAsync(upload, cancellationToken);
-
-        if (!inserted)
+        if (garminSource is not null)
         {
-            if (transaction is not null)
+            ArgumentException.ThrowIfNullOrWhiteSpace(garminSource.ActivityId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(garminSource.ActivityName);
+
+            if (context.Database.IsRelational())
             {
-                await transaction.RollbackAsync(cancellationToken);
+                await context.Database.ExecuteSqlInterpolatedAsync(
+                    $"SELECT pg_advisory_xact_lock(hashtext({garminSource.ActivityId}))",
+                    cancellationToken);
             }
 
-            return new TrainingUploadAcceptance(false, null, null);
+            var linkedUploadId = await context.GarminActivityImports
+                .AsNoTracking()
+                .Where(import => import.GarminActivityId == garminSource.ActivityId)
+                .Select(import => (Guid?)import.UploadId)
+                .SingleOrDefaultAsync(cancellationToken);
+            if (linkedUploadId is not null)
+            {
+                var linkedJobId = await FindParseJobIdAsync(linkedUploadId.Value, cancellationToken);
+                if (transaction is not null)
+                {
+                    await transaction.CommitAsync(cancellationToken);
+                }
+
+                return new TrainingUploadAcceptance(
+                    TrainingUploadAcceptanceOutcome.AlreadyImported,
+                    linkedUploadId.Value,
+                    linkedJobId);
+            }
         }
 
-        var jobId = Guid.NewGuid();
-        context.Jobs.Add(new AnalysisJobEntity
+        var insertedUploadId = context.Database.IsRelational()
+            ? await InsertUploadIfAbsentAsync(upload, cancellationToken)
+            : await InsertUploadIfAbsentInMemoryAsync(upload, cancellationToken);
+        var uploadId = insertedUploadId ?? await FindExistingUploadIdAsync(upload, cancellationToken);
+        Guid jobId;
+        var outcome = TrainingUploadAcceptanceOutcome.DuplicateHash;
+        if (insertedUploadId is not null)
         {
-            Id = jobId,
-            Type = JobType.ParseTraining.ToString(),
-            SubjectId = upload.Id,
-            State = JobState.Queued.ToString(),
-            ProgressPercent = 0,
-            ProgressStage = "queued",
-            CreatedAt = now,
-            UpdatedAt = now
-        });
+            outcome = TrainingUploadAcceptanceOutcome.Accepted;
+            jobId = Guid.NewGuid();
+            context.Jobs.Add(new AnalysisJobEntity
+            {
+                Id = jobId,
+                Type = JobType.ParseTraining.ToString(),
+                SubjectId = uploadId,
+                State = JobState.Queued.ToString(),
+                ProgressPercent = 0,
+                ProgressStage = "queued",
+                CreatedAt = now,
+                UpdatedAt = now
+            });
+        }
+        else
+        {
+            jobId = await FindParseJobIdAsync(uploadId, cancellationToken);
+        }
+
+        if (garminSource is not null)
+        {
+            context.GarminActivityImports.Add(new GarminActivityImportEntity
+            {
+                GarminActivityId = garminSource.ActivityId,
+                UploadId = uploadId,
+                ActivityName = garminSource.ActivityName,
+                LinkedAt = now
+            });
+        }
 
         await context.SaveChangesAsync(cancellationToken);
         if (transaction is not null)
@@ -52,10 +96,10 @@ public sealed class TrainingUploadRepository(RouteTimerDbContext context) : ITra
             await transaction.CommitAsync(cancellationToken);
         }
 
-        return new TrainingUploadAcceptance(true, upload.Id, jobId);
+        return new TrainingUploadAcceptance(outcome, uploadId, jobId);
     }
 
-    private async Task<bool> InsertUploadIfAbsentAsync(StoredUpload upload, CancellationToken cancellationToken)
+    private async Task<Guid?> InsertUploadIfAbsentAsync(StoredUpload upload, CancellationToken cancellationToken)
     {
         var insertedIds = await context.Database.SqlQuery<Guid>(
             $"""
@@ -65,17 +109,18 @@ public sealed class TrainingUploadRepository(RouteTimerDbContext context) : ITra
             RETURNING "Id" AS "Value"
             """).ToListAsync(cancellationToken);
 
-        return insertedIds.Count == 1;
+        var insertedId = insertedIds.SingleOrDefault();
+        return insertedId == Guid.Empty ? null : insertedId;
     }
 
-    private async Task<bool> InsertUploadIfAbsentInMemoryAsync(StoredUpload upload, CancellationToken cancellationToken)
+    private async Task<Guid?> InsertUploadIfAbsentInMemoryAsync(StoredUpload upload, CancellationToken cancellationToken)
     {
         var exists = await context.Uploads.AnyAsync(
             entity => entity.Kind == upload.Kind && entity.Sha256.SequenceEqual(upload.Sha256),
             cancellationToken);
         if (exists)
         {
-            return false;
+            return null;
         }
 
         context.Uploads.Add(new StoredUploadEntity
@@ -87,6 +132,33 @@ public sealed class TrainingUploadRepository(RouteTimerDbContext context) : ITra
             Sha256 = upload.Sha256,
             CreatedAt = upload.CreatedAt
         });
-        return true;
+        return upload.Id;
     }
+
+    private async Task<Guid> FindExistingUploadIdAsync(
+        StoredUpload upload,
+        CancellationToken cancellationToken)
+    {
+        if (context.Database.IsRelational())
+        {
+            return await context.Database.SqlQuery<Guid>(
+                $"""
+                SELECT "Id" AS "Value"
+                FROM stored_uploads
+                WHERE "Kind" = {upload.Kind} AND "Sha256" = {upload.Sha256}
+                """).SingleAsync(cancellationToken);
+        }
+
+        return await context.Uploads
+            .Where(entity => entity.Kind == upload.Kind && entity.Sha256.SequenceEqual(upload.Sha256))
+            .Select(entity => entity.Id)
+            .SingleAsync(cancellationToken);
+    }
+
+    private Task<Guid> FindParseJobIdAsync(Guid uploadId, CancellationToken cancellationToken) =>
+        context.Jobs
+            .AsNoTracking()
+            .Where(job => job.Type == JobType.ParseTraining.ToString() && job.SubjectId == uploadId)
+            .Select(job => job.Id)
+            .SingleAsync(cancellationToken);
 }

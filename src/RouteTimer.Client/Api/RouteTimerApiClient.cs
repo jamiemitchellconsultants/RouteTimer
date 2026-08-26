@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using RouteTimer.Contracts.Auth;
+using RouteTimer.Contracts.Garmin;
 using RouteTimer.Contracts.Jobs;
 using RouteTimer.Contracts.Models;
 using RouteTimer.Contracts.Predictions;
@@ -59,12 +60,39 @@ public sealed class RouteTimerApiClient(HttpClient httpClient) : IRouteTimerApiC
     public Task<JobResponse?> GetJobAsync(Guid id, CancellationToken ct) =>
         GetOptionalAsync<JobResponse>($"/api/jobs/{id}", ct);
 
+    public Task<GarminConnectionResponse> GetGarminConnectionAsync(CancellationToken ct) =>
+        GetRequiredAsync<GarminConnectionResponse>("/api/garmin/connection", ct);
+
+    public Task<GarminConnectionResponse> LoginGarminAsync(GarminLoginRequest request, CancellationToken ct) =>
+        SendJsonAsync<GarminConnectionResponse>(HttpMethod.Post, "/api/garmin/connection/login", request, ct);
+
+    public Task<GarminConnectionResponse> CompleteGarminMfaAsync(GarminMfaRequest request, CancellationToken ct) =>
+        SendJsonAsync<GarminConnectionResponse>(HttpMethod.Post, "/api/garmin/connection/mfa", request, ct);
+
+    public async Task DisconnectGarminAsync(CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Delete, "/api/garmin/connection");
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        await EnsureSuccessAsync(response, ct);
+    }
+
     public async Task LocalLogoutAsync(CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/logout");
         using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         await EnsureSuccessAsync(response, ct);
     }
+
+    public Task<GarminActivityPageResponse> GetGarminActivitiesAsync(string? cursor, CancellationToken ct)
+    {
+        var path = cursor is null
+            ? "/api/garmin/activities"
+            : $"/api/garmin/activities?cursor={Uri.EscapeDataString(cursor)}";
+        return GetRequiredAsync<GarminActivityPageResponse>(path, ct);
+    }
+
+    public Task<GarminImportBatchResponse> ImportGarminActivitiesAsync(GarminImportRequest request, CancellationToken ct) =>
+        SendJsonAsync<GarminImportBatchResponse>(HttpMethod.Post, "/api/garmin/activities/import", request, ct);
 
     public async Task<bool> SetupLocalCredentialAsync(string passphrase, CancellationToken ct)
     {

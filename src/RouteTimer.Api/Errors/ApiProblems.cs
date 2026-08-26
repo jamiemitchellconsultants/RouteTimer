@@ -27,6 +27,15 @@ public static class ApiProblems
     public static IResult PayloadTooLarge(string code, string detail) =>
         Create(StatusCodes.Status413PayloadTooLarge, code, detail);
 
+    public static IResult TooManyRequests(string code, string detail) =>
+        Create(StatusCodes.Status429TooManyRequests, code, detail);
+
+    public static IResult BadGateway(string code, string detail) =>
+        Create(StatusCodes.Status502BadGateway, code, detail);
+
+    public static IResult ServiceUnavailable(string code, string detail) =>
+        Create(StatusCodes.Status503ServiceUnavailable, code, detail);
+
     public static IResult InvalidProfile(ProfileValidationException exception)
     {
         ArgumentNullException.ThrowIfNull(exception);

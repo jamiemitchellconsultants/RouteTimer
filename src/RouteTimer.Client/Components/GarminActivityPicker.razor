@@ -1,0 +1,496 @@
+@implements IDisposable
+@using RouteTimer.Client.Api
+@using RouteTimer.Client.Formatting
+@using RouteTimer.Client.Jobs
+@using RouteTimer.Contracts.Errors
+@using RouteTimer.Contracts.Garmin
+@using RouteTimer.Contracts.Jobs
+@using RouteTimer.Contracts.Uploads
+@inject IRouteTimerApiClient Api
+@inject JobPoller JobPoller
+
+<section class="garmin-picker" aria-labelledby="garmin-picker-heading">
+    <div class="garmin-picker__heading">
+        <div>
+            <h3 id="garmin-picker-heading">Garmin activities</h3>
+            <p>Select up to @UploadLimits.MaximumTrainingFiles road or gravel activities to import.</p>
+        </div>
+        <p data-testid="garmin-selected-count">@selectedIds.Count of @UploadLimits.MaximumTrainingFiles selected</p>
+    </div>
+
+    @if (importProblem is not null || importFallbackProblem)
+    {
+        <div data-testid="garmin-import-error">
+            <ProblemMessage Problem="@importProblem" FallbackMessage="We could not import the selected Garmin activities." />
+        </div>
+    }
+
+    @if (pollingProblem is not null || pollingFallbackProblem)
+    {
+        <div data-testid="garmin-import-polling-error">
+            <ProblemMessage Problem="@pollingProblem" FallbackMessage="We could not check the Garmin import status." />
+            <button type="button"
+                    data-testid="garmin-import-polling-retry"
+                    class="garmin-picker__button garmin-picker__button--secondary"
+                    @onclick="RetryAcceptedJobPollingAsync"
+                    disabled="@isPollingAcceptedJobs">
+                Retry
+            </button>
+        </div>
+    }
+
+    @if (importResults.Count > 0)
+    {
+        <div data-testid="garmin-import-results" class="garmin-picker__results">
+            <h4>Import results</h4>
+            @foreach (var result in importResults)
+            {
+                <article class="garmin-picker__result" data-activity-id="@result.ActivityId">
+                    <p><strong>@(string.IsNullOrWhiteSpace(result.Name) ? "Garmin activity" : result.Name)</strong></p>
+                    <p>@RouteTimerText.GarminImportOutcome(result.Outcome)</p>
+                    @if (!string.IsNullOrWhiteSpace(result.ErrorCode))
+                    {
+                        <p>@result.ErrorCode</p>
+                    }
+                    @if (GetImportJob(result.JobId) is { } job)
+                    {
+                        <JobProgress Job="@job" />
+                    }
+                </article>
+            }
+        </div>
+    }
+
+    @if (isInitialLoading)
+    {
+        <p data-testid="garmin-activities-loading">Loading Garmin activities…</p>
+    }
+    else if (loadProblem is not null || loadFallbackProblem)
+    {
+        <div data-testid="garmin-activities-error" class="garmin-picker__error">
+            <ProblemMessage Problem="@loadProblem" FallbackMessage="We could not load Garmin activities." />
+            <button type="button"
+                    data-testid="garmin-activities-retry"
+                    class="garmin-picker__button garmin-picker__button--secondary"
+                    @onclick="RetryAsync"
+                    disabled="@isInitialLoading">
+                Retry
+            </button>
+        </div>
+    }
+    else if (activities.Count == 0)
+    {
+        <p data-testid="garmin-activities-empty">No road or gravel activities are available to import.</p>
+    }
+    else
+    {
+        <ul class="garmin-picker__activities">
+            @foreach (var activity in activities)
+            {
+                var selected = selectedIds.Contains(activity.ActivityId, StringComparer.Ordinal);
+                var selectionLimitReached = selectedIds.Count >= UploadLimits.MaximumTrainingFiles;
+                <li data-testid="garmin-activity-row"
+                    data-activity-id="@activity.ActivityId"
+                    class="garmin-picker__activity">
+                    <div class="garmin-picker__activity-heading">
+                        <div>
+                            <h4>@activity.Name</h4>
+                            <p>@RouteTimerFormat.Timestamp(activity.StartedAt)</p>
+                            <p>@RouteTimerText.GarminActivityType(activity.ActivityType)</p>
+                        </div>
+                        <div class="garmin-picker__selection">
+                            <input id="@($"garmin-activity-{activity.ActivityId}")"
+                                   type="checkbox"
+                                   data-testid="garmin-activity-select"
+                                   data-activity-id="@activity.ActivityId"
+                                   checked="@selected"
+                                   disabled="@(activity.AlreadyImported || isImporting || (selectionLimitReached && !selected))"
+                                   @onchange="@(args => SetSelected(activity.ActivityId, IsChecked(args.Value)))" />
+                            <label for="@($"garmin-activity-{activity.ActivityId}")">
+                                @(activity.AlreadyImported ? "Already imported" : "Select activity")
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="garmin-picker__metrics">
+                        @if (activity.DistanceMetres is not null)
+                        {
+                            <span>Distance: @RouteTimerFormat.Distance(activity.DistanceMetres)</span>
+                        }
+                        @if (activity.DurationSeconds is not null)
+                        {
+                            <span>Duration: @RouteTimerFormat.Duration(activity.DurationSeconds)</span>
+                        }
+                        @if (activity.AscentMetres is not null)
+                        {
+                            <span>Ascent: @RouteTimerFormat.Ascent(activity.AscentMetres)</span>
+                        }
+                        @if (activity.AveragePowerWatts is not null)
+                        {
+                            <span>Average power: @RouteTimerFormat.Power(activity.AveragePowerWatts)</span>
+                        }
+                    </div>
+                </li>
+            }
+        </ul>
+
+        <div class="garmin-picker__actions">
+            <button type="button"
+                    data-testid="garmin-import-selected"
+                    class="garmin-picker__button"
+                    @onclick="ImportAsync"
+                    disabled="@(isImporting || selectedIds.Count is < 1 or > UploadLimits.MaximumTrainingFiles)">
+                @(isImporting ? "Importing…" : "Import selected")
+            </button>
+
+            @if (!string.IsNullOrWhiteSpace(nextCursor))
+            {
+                <button type="button"
+                        data-testid="garmin-load-more"
+                        class="garmin-picker__button garmin-picker__button--secondary"
+                        @onclick="LoadMoreAsync"
+                        disabled="@(isLoadingMore || isImporting)">
+                    @(isLoadingMore ? "Loading…" : "Load more")
+                </button>
+            }
+        </div>
+    }
+</section>
+
+@code {
+    private readonly CancellationTokenSource componentCancellation = new();
+    private readonly List<string> selectedIds = [];
+    private readonly Dictionary<Guid, JobResponse> importJobs = [];
+    private readonly Queue<Guid> pendingAcceptedJobIds = new();
+    private readonly HashSet<Guid> knownAcceptedJobIds = [];
+    private IReadOnlyList<GarminActivitySummaryResponse> activities = [];
+    private IReadOnlyList<GarminImportResultResponse> importResults = [];
+    private string? nextCursor;
+    private ApiProblemException? loadProblem;
+    private ApiProblemException? importProblem;
+    private ApiProblemException? pollingProblem;
+    private bool loadFallbackProblem;
+    private bool importFallbackProblem;
+    private bool pollingFallbackProblem;
+    private bool isInitialLoading = true;
+    private bool isLoadingMore;
+    private bool isImporting;
+    private bool isPollingAcceptedJobs;
+    private bool hasCompletedAcceptedJobsAwaitingRefresh;
+
+    [Parameter]
+    public EventCallback<GarminImportBatchResponse> Imported { get; set; }
+
+    [Parameter]
+    public EventCallback AcceptedImportsCompleted { get; set; }
+
+    [Parameter]
+    public EventCallback ReconnectRequired { get; set; }
+
+    protected override Task OnInitializedAsync() => LoadFirstPageAsync();
+
+    public void Dispose()
+    {
+        componentCancellation.Cancel();
+        componentCancellation.Dispose();
+    }
+
+    private Task RetryAsync() => LoadFirstPageAsync();
+
+    private async Task LoadFirstPageAsync(bool showLoading = true)
+    {
+        if (showLoading)
+        {
+            isInitialLoading = true;
+        }
+
+        try
+        {
+            var page = await Api.GetGarminActivitiesAsync(null, componentCancellation.Token);
+            activities = page.Activities
+                .OrderByDescending(activity => activity.StartedAt)
+                .ToArray();
+            nextCursor = page.NextCursor;
+            ClearLoadProblem();
+        }
+        catch (ApiProblemException apiProblem)
+        {
+            loadProblem = apiProblem;
+            loadFallbackProblem = false;
+            await NotifyReconnectRequiredAsync(apiProblem);
+        }
+        catch (HttpRequestException)
+        {
+            loadProblem = null;
+            loadFallbackProblem = true;
+        }
+        catch (OperationCanceledException) when (componentCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (!componentCancellation.IsCancellationRequested)
+            {
+                isInitialLoading = false;
+            }
+        }
+    }
+
+    private async Task LoadMoreAsync()
+    {
+        if (isLoadingMore || isImporting || string.IsNullOrWhiteSpace(nextCursor))
+        {
+            return;
+        }
+
+        isLoadingMore = true;
+        var cursor = nextCursor;
+
+        try
+        {
+            var page = await Api.GetGarminActivitiesAsync(cursor, componentCancellation.Token);
+            activities = activities
+                .Concat(page.Activities)
+                .GroupBy(activity => activity.ActivityId, StringComparer.Ordinal)
+                .Select(group => group.Last())
+                .OrderByDescending(activity => activity.StartedAt)
+                .ToArray();
+            nextCursor = page.NextCursor;
+            ClearLoadProblem();
+        }
+        catch (ApiProblemException apiProblem)
+        {
+            loadProblem = apiProblem;
+            loadFallbackProblem = false;
+            await NotifyReconnectRequiredAsync(apiProblem);
+        }
+        catch (HttpRequestException)
+        {
+            loadProblem = null;
+            loadFallbackProblem = true;
+        }
+        catch (OperationCanceledException) when (componentCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (!componentCancellation.IsCancellationRequested)
+            {
+                isLoadingMore = false;
+            }
+        }
+    }
+
+    private void SetSelected(string activityId, bool selected)
+    {
+        if (selected)
+        {
+            if (selectedIds.Count < UploadLimits.MaximumTrainingFiles
+                && !selectedIds.Contains(activityId, StringComparer.Ordinal))
+            {
+                selectedIds.Add(activityId);
+            }
+
+            return;
+        }
+
+        selectedIds.RemoveAll(id => id.Equals(activityId, StringComparison.Ordinal));
+    }
+
+    private async Task ImportAsync()
+    {
+        if (isImporting || selectedIds.Count is < 1 or > UploadLimits.MaximumTrainingFiles)
+        {
+            return;
+        }
+
+        isImporting = true;
+        importProblem = null;
+        importFallbackProblem = false;
+
+        try
+        {
+            var response = await Api.ImportGarminActivitiesAsync(
+                new GarminImportRequest(selectedIds.ToArray()),
+                componentCancellation.Token);
+            importResults = response.Activities.ToArray();
+            selectedIds.Clear();
+
+            await LoadFirstPageAsync(showLoading: false);
+            await Imported.InvokeAsync(response);
+
+            var acceptedJobs = response.Activities
+                .Where(result => result.Outcome.Equals("accepted", StringComparison.OrdinalIgnoreCase)
+                    && result.JobId is not null)
+                .Select(result => result.JobId!.Value)
+                .Distinct()
+                .ToArray();
+
+            if (acceptedJobs.Length > 0)
+            {
+                EnqueueAcceptedJobs(acceptedJobs);
+                _ = StartAcceptedJobPollingAsync();
+            }
+        }
+        catch (ApiProblemException apiProblem)
+        {
+            importProblem = apiProblem;
+            await NotifyReconnectRequiredAsync(apiProblem);
+        }
+        catch (HttpRequestException)
+        {
+            importFallbackProblem = true;
+        }
+        catch (OperationCanceledException) when (componentCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (!componentCancellation.IsCancellationRequested)
+            {
+                isImporting = false;
+            }
+        }
+    }
+
+    private async Task StartAcceptedJobPollingAsync()
+    {
+        await Task.Yield();
+
+        if (isPollingAcceptedJobs || pendingAcceptedJobIds.Count == 0)
+        {
+            return;
+        }
+
+        isPollingAcceptedJobs = true;
+        ClearPollingProblem();
+
+        try
+        {
+            while (true)
+            {
+                while (pendingAcceptedJobIds.TryDequeue(out var jobId))
+                {
+                    try
+                    {
+                        await PollAcceptedJobAsync(jobId);
+                        hasCompletedAcceptedJobsAwaitingRefresh = true;
+                    }
+                    catch (OperationCanceledException) when (componentCancellation.IsCancellationRequested)
+                    {
+                        return;
+                    }
+                    catch (ApiProblemException apiProblem)
+                    {
+                        RequeueAcceptedJobFirst(jobId);
+                        pollingProblem = apiProblem;
+                        pollingFallbackProblem = false;
+                        return;
+                    }
+                    catch (HttpRequestException)
+                    {
+                        RequeueAcceptedJobFirst(jobId);
+                        pollingProblem = null;
+                        pollingFallbackProblem = true;
+                        return;
+                    }
+                    catch (Exception) when (!componentCancellation.IsCancellationRequested)
+                    {
+                        RequeueAcceptedJobFirst(jobId);
+                        pollingProblem = null;
+                        pollingFallbackProblem = true;
+                        return;
+                    }
+                }
+
+                if (hasCompletedAcceptedJobsAwaitingRefresh)
+                {
+                    hasCompletedAcceptedJobsAwaitingRefresh = false;
+                    await AcceptedImportsCompleted.InvokeAsync();
+                }
+
+                if (pendingAcceptedJobIds.Count == 0)
+                {
+                    break;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (componentCancellation.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            if (!componentCancellation.IsCancellationRequested)
+            {
+                isPollingAcceptedJobs = false;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
+
+    private Task RetryAcceptedJobPollingAsync() => StartAcceptedJobPollingAsync();
+
+    private void EnqueueAcceptedJobs(IEnumerable<Guid> jobIds)
+    {
+        foreach (var jobId in jobIds)
+        {
+            if (knownAcceptedJobIds.Add(jobId))
+            {
+                pendingAcceptedJobIds.Enqueue(jobId);
+            }
+        }
+    }
+
+    private void RequeueAcceptedJobFirst(Guid jobId)
+    {
+        var waitingJobIds = pendingAcceptedJobIds.ToArray();
+        pendingAcceptedJobIds.Clear();
+        pendingAcceptedJobIds.Enqueue(jobId);
+
+        foreach (var waitingJobId in waitingJobIds)
+        {
+            pendingAcceptedJobIds.Enqueue(waitingJobId);
+        }
+    }
+
+    private async Task PollAcceptedJobAsync(Guid jobId)
+    {
+        await JobPoller.PollAsync(
+            jobId,
+            async job =>
+            {
+                importJobs[jobId] = job;
+                await InvokeAsync(StateHasChanged);
+            },
+            componentCancellation.Token);
+    }
+
+    private JobResponse? GetImportJob(Guid? jobId) =>
+        jobId is not null && importJobs.TryGetValue(jobId.Value, out var job)
+            ? job
+            : null;
+
+    private void ClearLoadProblem()
+    {
+        loadProblem = null;
+        loadFallbackProblem = false;
+    }
+
+    private void ClearPollingProblem()
+    {
+        pollingProblem = null;
+        pollingFallbackProblem = false;
+    }
+
+    private Task NotifyReconnectRequiredAsync(ApiProblemException apiProblem) =>
+        apiProblem.Code.Equals(ErrorCodes.GarminReconnectRequired, StringComparison.Ordinal)
+            ? ReconnectRequired.InvokeAsync()
+            : Task.CompletedTask;
+
+    private static bool IsChecked(object? value) => value is bool selected
+        ? selected
+        : bool.TryParse(value?.ToString(), out var parsed) && parsed;
+}
