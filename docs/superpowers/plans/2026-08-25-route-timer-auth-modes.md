@@ -2805,12 +2805,16 @@ In `deploy/README.md`, replace steps 1 and 2 with:
 ```
 
 **Amendment after review:** the first draft of this step listed `ROUTETIMER_HOSTNAME` alongside the
-two variables Compose actually reads with a `:?` fail-fast guard, implying the same. It never was
-one — `docker-compose.yml` has no reference to it at all, before or after this task. The variable
-is only a placeholder the operator substitutes by hand into the realm JSON and sets in the shared
-ingress's own environment. Telling the operator to "set it in the deployment environment" let steps
-1-3 all succeed with it unset; the mistake only surfaced at step 4, when Caddy validation failed on
-an empty site address. The corrected steps above say where it actually applies.
+two variables Compose actually reads with a `:?` fail-fast guard, implying the same. It *was* one
+— `docker-compose.yml` guarded it as a build arg with `${ROUTETIMER_HOSTNAME:?set
+ROUTETIMER_HOSTNAME}` until this very task removed it, which is precisely what made this step
+stale. Removing that guard removed the only fail-fast check on the hostname, so steps 1-3 now all
+succeed with it unset and the mistake surfaces only at step 4, when Caddy validation fails on an
+empty site address. The variable is only a placeholder the operator substitutes by hand into the
+realm JSON and sets in the shared ingress's own environment; the corrected steps above say so. The
+general lesson: deleting a `:?` interpolation silently deletes a fail-fast check, so any
+documentation that leaned on that check has to be re-verified in the same commit, not assumed to
+still hold.
 
 - [ ] **Step 4: Verify the image builds without the arguments**
 
