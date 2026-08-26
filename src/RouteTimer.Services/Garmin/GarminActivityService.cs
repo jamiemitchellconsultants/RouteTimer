@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using Microsoft.Extensions.Logging;
 using RouteTimer.Services.Persistence;
 using RouteTimer.Services.Training;
 
@@ -35,7 +36,8 @@ public sealed class GarminActivityService(
     IGarminTokenProtector protector,
     GarminOperationGate gate,
     TrainingUploadService uploads,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    ILogger<GarminActivityService> logger)
 {
     private const int MaximumImportCount = 10;
     private const int MaximumActivityIdLength = 64;
@@ -161,10 +163,23 @@ public sealed class GarminActivityService(
 
             var summary = summaryResult.Activity;
             var safeName = SafeDisplayName(summary.Name, activityId);
+
+            // Deliberately not re-checking summary.ActivityType here: Garmin's list endpoint (which
+            // already filtered to road/gravel cycling to offer this activity for import) and its
+            // single-activity detail endpoint are separate backend services that can disagree on an
+            // activity's type for reasons unrelated to anything the rider did -- confirmed directly
+            // against a real account, where an activity the list reported as road_biking came back
+            // with a different, unmapped type from the detail endpoint days later. Re-validating type
+            // here would reject an activity the rider already deliberately selected from that
+            // filtered list, on the word of a second Garmin service that isn't more authoritative
+            // than the first. The adapter mirrors this: get_activity (used only here) no longer
+            // requires a recognised type; list_activities still does.
             if (summary.ActivityId.Length is < 1 or > MaximumActivityIdLength ||
-                !string.Equals(summary.ActivityId, activityId, StringComparison.Ordinal) ||
-                summary.ActivityType is not ("road-cycling" or "gravel-cycling"))
+                !string.Equals(summary.ActivityId, activityId, StringComparison.Ordinal))
             {
+                logger.LogWarning(
+                    "Garmin activity summary returned a different activity than requested: requestedId={RequestedId} returnedId={ReturnedId}",
+                    activityId, summary.ActivityId);
                 results.Add(InvalidResult(activityId, safeName, "garmin-response-invalid"));
                 continue;
             }

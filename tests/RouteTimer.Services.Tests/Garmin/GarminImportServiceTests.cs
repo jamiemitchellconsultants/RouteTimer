@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Extensions.Logging.Abstractions;
 using RouteTimer.Services.Garmin;
 using RouteTimer.Services.Persistence;
 using RouteTimer.Services.Training;
@@ -95,16 +96,13 @@ public sealed class GarminImportServiceTests
         Assert.Empty(adapter.Operations);
     }
 
-    // Break caught: a selected ID can be used as an arbitrary download proxy when Garmin returns another ID or disallowed type.
-    [Theory]
-    [InlineData("different", "road-cycling")]
-    [InlineData("123", "indoor-cycling")]
-    [InlineData("123", "Road-Cycling")]
-    public async Task ImportAsync_revalidates_the_exact_summary_id_and_allowed_type(string returnedId, string activityType)
+    // Break caught: a selected ID can be used as an arbitrary download proxy when Garmin returns another ID.
+    [Fact]
+    public async Task ImportAsync_revalidates_the_exact_summary_id()
     {
         var adapter = new FakeAdapterClient();
         adapter.ActivityResults["123"] = new GarminAdapterActivityResult(
-            Activity(returnedId, "Unsafe selection", activityType),
+            Activity("different", "Unsafe selection", "road-cycling"),
             "summary-token");
         var service = Service(adapter);
 
@@ -115,6 +113,30 @@ public sealed class GarminImportServiceTests
         Assert.Null(result.UploadId);
         Assert.Null(result.JobId);
         Assert.Equal(["summary:123"], adapter.Operations);
+    }
+
+    // Garmin's list endpoint (which already filtered to road/gravel cycling before offering this
+    // activity for import) and its single-activity summary endpoint are separate backend services
+    // that can disagree on an activity's type -- observed directly against a real account. The
+    // summary's own reported type is deliberately not re-checked, so a disagreement here must not
+    // block an import the rider already deliberately selected from that filtered list.
+    [Theory]
+    [InlineData("indoor-cycling")]
+    [InlineData("Road-Cycling")]
+    public async Task ImportAsync_does_not_reject_a_summary_type_disagreeing_with_the_list(string activityType)
+    {
+        var adapter = new FakeAdapterClient();
+        adapter.ActivityResults["123"] = new GarminAdapterActivityResult(
+            Activity("123", "Road ride", activityType),
+            "summary-token");
+        adapter.AddDownload("123", [1, 2, 3]);
+        var service = Service(adapter);
+
+        var result = Assert.Single(await service.ImportAsync(["123"], CancellationToken.None));
+
+        Assert.Equal("accepted", result.Outcome);
+        Assert.Null(result.ErrorCode);
+        Assert.Equal(["summary:123", "download:123"], adapter.Operations);
     }
 
     // Break caught: an exact but oversized adapter ID reaches the 64-character database column and aborts the batch.
@@ -252,7 +274,8 @@ public sealed class GarminImportServiceTests
             connections.Protector,
             new GarminOperationGate(),
             new TrainingUploadService(uploadRepository, new FixedTimeProvider(Now)),
-            new FixedTimeProvider(Now));
+            new FixedTimeProvider(Now),
+            NullLogger<GarminActivityService>.Instance);
     }
 
     private static FakeConnectionRepository ConnectedRepository(string tokenJson)

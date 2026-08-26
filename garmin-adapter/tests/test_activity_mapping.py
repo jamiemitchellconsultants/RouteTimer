@@ -42,6 +42,28 @@ def test_map_activity_accepts_only_road_and_gravel() -> None:
         )
 
 
+def test_map_activity_with_permissive_type_still_maps_an_unrecognised_type() -> None:
+    # get_activity (the single-activity summary/download path) calls this with
+    # require_known_type=False: Garmin's list and single-activity detail endpoints are separate
+    # backend services that can disagree on an activity's type for the same activity, and rejecting
+    # an already-listed, already-selected activity on the word of the second, less authoritative
+    # opinion breaks a legitimate import. list_activities always uses the default (True) and must
+    # keep excluding unrecognised types -- that's what decides what's offered for import at all.
+    mapped = _map_activity(
+        {
+            "activityId": 300,
+            "activityName": "Disagreeing detail endpoint",
+            "startTimeGMT": "2026-08-23 08:00:00",
+            "activityType": {"typeKey": "indoor_cycling"},
+        },
+        require_known_type=False,
+    )
+
+    assert mapped is not None
+    assert mapped.activity_id == "300"
+    assert mapped.activity_type == "indoor_cycling"
+
+
 def test_map_activity_normalizes_stable_fields_and_nonfinite_metrics() -> None:
     activity = _map_activity(
         {
