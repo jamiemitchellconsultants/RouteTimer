@@ -155,12 +155,12 @@ public static class AuthEndpoints
     {
         if (attempts.IsLockedOut(out var retryAfter))
         {
-            context.Response.Headers.RetryAfter =
-                ((int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+            var lockoutSeconds = (int)Math.Ceiling(retryAfter.TotalSeconds);
+            context.Response.Headers.RetryAfter = lockoutSeconds.ToString(CultureInfo.InvariantCulture);
             return ApiProblems.Create(
                 StatusCodes.Status429TooManyRequests,
                 ErrorCodes.LocalCredentialLockedOut,
-                "Too many failed sign-in attempts. Wait for the lockout to expire before trying again.");
+                $"Too many failed sign-in attempts. Wait {lockoutSeconds} seconds before trying again.");
         }
 
         var verification = await credentials.VerifyAsync(request.Passphrase, cancellationToken);

@@ -1,0 +1,9 @@
+.local-signin {
+    display: grid;
+    gap: 0.8rem;
+    max-width: 24rem;
+}
+
+.local-signin__error {
+    color: #9a3412;
+}

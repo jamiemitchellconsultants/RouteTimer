@@ -7,10 +7,16 @@
 @inject IRouteTimerApiClient Api
 @inject ClientAuthConfig AuthConfig
 @inject NavigationManager Navigation
-@inject IServiceProvider Services
 @attribute [AllowAnonymous]
 
 <PageTitle>@Title | RouteTimer</PageTitle>
+
+@if (!AuthConfig.IsLocal)
+{
+    <p>This installation does not use a local passphrase.</p>
+}
+else
+{
 
 <h1>@Title</h1>
 
@@ -33,7 +39,7 @@ else
            type="password"
            autocomplete="@(AuthConfig.SetupRequired ? "new-password" : "current-password")"
            value="@passphrase"
-           @onchange="@(args => passphrase = args.Value?.ToString() ?? string.Empty)" />
+           @oninput="@(args => passphrase = args.Value?.ToString() ?? string.Empty)" />
 
     @if (AuthConfig.SetupRequired)
     {
@@ -43,18 +49,19 @@ else
                type="password"
                autocomplete="new-password"
                value="@confirmation"
-               @onchange="@(args => confirmation = args.Value?.ToString() ?? string.Empty)" />
+               @oninput="@(args => confirmation = args.Value?.ToString() ?? string.Empty)" />
     }
 
     @if (error is not null)
     {
-        <p data-testid="local-signin-error" class="local-signin__error">@error</p>
+        <p data-testid="local-signin-error" class="local-signin__error" role="alert">@error</p>
     }
 
     <button data-testid="local-signin-submit" type="submit" disabled="@isSubmitting">
         @(isSubmitting ? "Working…" : Title)
     </button>
 </form>
+}
 
 @code {
     private string passphrase = string.Empty;
@@ -72,6 +79,12 @@ else
         }
 
         error = null;
+
+        if (string.IsNullOrEmpty(passphrase))
+        {
+            error = "Enter a passphrase.";
+            return;
+        }
 
         if (AuthConfig.SetupRequired && !string.Equals(passphrase, confirmation, StringComparison.Ordinal))
         {
@@ -91,23 +104,23 @@ else
                 await Api.LocalLoginAsync(passphrase, CancellationToken.None);
             }
 
-            if (Services.GetService(typeof(LocalAuthenticationStateProvider)) is LocalAuthenticationStateProvider provider)
-            {
-                provider.NotifySessionChanged();
-            }
-
+            // Left disabled through the reload rather than re-enabled in a finally: forceLoad starts
+            // a navigation and returns while the current document stays interactive, and a stray
+            // click in that window would double-POST -- harmless for login, but a second setup call
+            // gets 409 and flashes "already configured" at the rider an instant before the page
+            // replaces itself.
             Navigation.NavigateTo("/", forceLoad: true);
         }
         catch (ApiProblemException problem)
         {
-            error = problem.Detail;
+            passphrase = confirmation = string.Empty;
+            error = problem.Detail ?? problem.Title;
+            isSubmitting = false;
         }
         catch (HttpRequestException)
         {
+            passphrase = confirmation = string.Empty;
             error = "RouteTimer could not be reached. Check that the container is still running.";
-        }
-        finally
-        {
             isSubmitting = false;
         }
     }
