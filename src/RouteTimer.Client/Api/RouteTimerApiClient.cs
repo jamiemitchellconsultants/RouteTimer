@@ -8,6 +8,7 @@ using RouteTimer.Contracts.Models;
 using RouteTimer.Contracts.Predictions;
 using RouteTimer.Contracts.Profile;
 using RouteTimer.Contracts.Routes;
+using RouteTimer.Contracts.Settings;
 using RouteTimer.Contracts.Training;
 
 namespace RouteTimer.Client.Api;
@@ -115,6 +116,27 @@ public sealed class RouteTimerApiClient(HttpClient httpClient) : IRouteTimerApiC
 
     public Task<ShortLinkResponse> ResolveShortLinkAsync(string code, CancellationToken ct) =>
         GetRequiredAsync<ShortLinkResponse>($"/api/routes/short-links/{Uri.EscapeDataString(code)}", ct);
+
+    public Task<GoogleMapsKeyStatusResponse> GetGoogleMapsKeyStatusAsync(CancellationToken ct) =>
+        GetRequiredAsync<GoogleMapsKeyStatusResponse>("/api/settings/google-maps-key", ct);
+
+    public async Task SaveGoogleMapsKeyAsync(SaveGoogleMapsKeyRequest request, CancellationToken ct)
+    {
+        using var content = JsonContent.Create(request, options: JsonOptions);
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Put, "/api/settings/google-maps-key") { Content = content };
+        using var response = await httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, ct);
+        await EnsureSuccessAsync(response, ct);
+    }
+
+    public async Task DeleteGoogleMapsKeyAsync(CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Delete, "/api/settings/google-maps-key");
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        await EnsureSuccessAsync(response, ct);
+    }
+
+    public Task<GoogleMapsKeyResponse> UseGoogleMapsKeyAsync(CancellationToken ct) =>
+        SendAsync<GoogleMapsKeyResponse>(HttpMethod.Post, "/api/settings/google-maps-key/use", content: null, ct);
 
     private async Task<T> GetRequiredAsync<T>(string path, CancellationToken ct) =>
         await SendAsync<T>(HttpMethod.Get, path, content: null, ct);

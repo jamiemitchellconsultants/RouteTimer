@@ -5,6 +5,7 @@ using RouteTimer.Contracts.Models;
 using RouteTimer.Contracts.Predictions;
 using RouteTimer.Contracts.Profile;
 using RouteTimer.Contracts.Routes;
+using RouteTimer.Contracts.Settings;
 using RouteTimer.Contracts.Training;
 
 namespace RouteTimer.Client.Tests.Fakes;
@@ -35,6 +36,10 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
     public Func<string, CancellationToken, Task<bool>>? OnSetupLocalCredentialAsync { get; set; }
     public Func<string, CancellationToken, Task<bool>>? OnLocalLoginAsync { get; set; }
     public Func<string, CancellationToken, Task<ShortLinkResponse>>? OnResolveShortLinkAsync { get; set; }
+    public Func<CancellationToken, Task<GoogleMapsKeyStatusResponse>>? OnGetGoogleMapsKeyStatusAsync { get; set; }
+    public Func<SaveGoogleMapsKeyRequest, CancellationToken, Task>? OnSaveGoogleMapsKeyAsync { get; set; }
+    public Func<CancellationToken, Task>? OnDeleteGoogleMapsKeyAsync { get; set; }
+    public Func<CancellationToken, Task<GoogleMapsKeyResponse>>? OnUseGoogleMapsKeyAsync { get; set; }
 
     public Queue<JobResponse?> Jobs { get; } = new();
 
@@ -249,6 +254,26 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
     public Task<ShortLinkResponse> ResolveShortLinkAsync(string code, CancellationToken ct) =>
         OnResolveShortLinkAsync is not null
             ? OnResolveShortLinkAsync(code, ct)
+            : throw new NotSupportedException();
+
+    public Task<GoogleMapsKeyStatusResponse> GetGoogleMapsKeyStatusAsync(CancellationToken ct) =>
+        OnGetGoogleMapsKeyStatusAsync is not null
+            ? OnGetGoogleMapsKeyStatusAsync(ct)
+            : throw new NotSupportedException();
+
+    public Task SaveGoogleMapsKeyAsync(SaveGoogleMapsKeyRequest request, CancellationToken ct) =>
+        OnSaveGoogleMapsKeyAsync is not null
+            ? OnSaveGoogleMapsKeyAsync(request, ct)
+            : throw new NotSupportedException();
+
+    public Task DeleteGoogleMapsKeyAsync(CancellationToken ct) =>
+        OnDeleteGoogleMapsKeyAsync is not null
+            ? OnDeleteGoogleMapsKeyAsync(ct)
+            : Task.CompletedTask;
+
+    public Task<GoogleMapsKeyResponse> UseGoogleMapsKeyAsync(CancellationToken ct) =>
+        OnUseGoogleMapsKeyAsync is not null
+            ? OnUseGoogleMapsKeyAsync(ct)
             : throw new NotSupportedException();
 
     private static GarminConnectionResponse NotConnected() =>
