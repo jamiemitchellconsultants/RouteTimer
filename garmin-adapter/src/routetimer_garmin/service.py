@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from io import BytesIO
 from typing import Protocol
@@ -9,6 +10,8 @@ from routetimer_garmin.challenges import ChallengeStore, PendingChallenge
 from routetimer_garmin.errors import AdapterError
 from routetimer_garmin.facade import CompletedLogin, GarminFacade
 from routetimer_garmin.models import AdapterActivity, AdapterActivityPage
+
+logger = logging.getLogger(__name__)
 
 
 PAGE_SIZE = 50
@@ -113,17 +116,28 @@ class GarminService:
         if activity is None:
             raise AdapterError("activity-not-allowed", 422)
         if activity.activity_id != activity_id:
+            # Not the raw Garmin payload, just the two IDs that decide this branch -- but worth
+            # keeping: this endpoint has already shown its own inconsistency once (see
+            # download_fit's comment), so if this genuinely-not-redundant check ever fires, this
+            # is what tells us whether it's Garmin's detail endpoint again or something else.
+            logger.warning(
+                "activity_summary id mismatch: requested=%r returned=%r", activity_id, activity.activity_id
+            )
             raise AdapterError("response-invalid", 502)
         return ActivitySummaryResult(activity, session.dump_tokens())
 
     async def download_fit(self, token_json: str, activity_id: str) -> FitDownloadResult:
         activity_id = _canonical_activity_id(activity_id)
         session = self._facade.from_tokens(token_json)
-        activity = session.get_activity(activity_id)
-        if activity is None:
-            raise AdapterError("activity-not-allowed", 422)
-        if activity.activity_id != activity_id:
-            raise AdapterError("response-invalid", 502)
+        # No get_activity re-check here (there used to be one): RouteTimer's API always calls
+        # activity_summary for this exact activity_id, on this exact token, immediately before
+        # calling this -- see GarminActivityService.ImportAsync. Re-fetching from Garmin's
+        # single-activity detail endpoint a second time added nothing but a second independent
+        # chance to hit its own inconsistency: confirmed directly against a real account, this
+        # endpoint returned different data for the same activity_id between two calls moments
+        # apart within the same import, intermittently rejecting an activity_summary call had just
+        # accepted. download_original below fetches by the exact ID Garmin was asked for; there is
+        # no path through it that could return a different activity's bytes for that ID.
         content = _read_single_fit(session.download_original(activity_id))
         return FitDownloadResult(content, f"{activity_id}.fit", session.dump_tokens())
 
