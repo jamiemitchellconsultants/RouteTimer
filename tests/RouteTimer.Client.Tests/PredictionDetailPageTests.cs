@@ -230,4 +230,88 @@ public sealed class PredictionDetailPageTests : BunitContext
             Assert.Contains("prediction-detail-unavailable", alert.TextContent, StringComparison.Ordinal);
         });
     }
+
+    [Fact]
+    public void Offers_to_send_a_completed_prediction_to_garmin()
+    {
+        var predictionId = Guid.NewGuid();
+        api.OnGetPredictionAsync = (_, _) => Task.FromResult<PredictionDetailResponse?>(CompletedDetail(predictionId));
+        api.OnCreateGarminCourseAsync = (_, _, _) => Task.FromResult(
+            new GarminCourseResponse(4242, "Kingston to Dorking", "https://connect.garmin.com/modern/course/4242"));
+
+        var cut = Render<PredictionDetail>(parameters => parameters.Add(page => page.Id, predictionId));
+
+        cut.WaitForElement("[data-testid=prediction-send-to-garmin]").Click();
+
+        cut.WaitForAssertion(() => Assert.Equal(
+            "https://connect.garmin.com/modern/course/4242",
+            cut.Find("[data-testid=prediction-garmin-course-link]").GetAttribute("href")));
+    }
+
+    [Fact]
+    public void Links_to_an_already_pushed_course_instead_of_offering_to_push_again()
+    {
+        var predictionId = Guid.NewGuid();
+        var detail = CompletedDetail(predictionId);
+        api.OnGetPredictionAsync = (_, _) => Task.FromResult<PredictionDetailResponse?>(
+            detail with
+            {
+                Summary = detail.Summary with
+                {
+                    GarminCourseId = 4242,
+                    GarminCourseUploadedAt = DateTimeOffset.UnixEpoch
+                }
+            });
+
+        var cut = Render<PredictionDetail>(parameters => parameters.Add(page => page.Id, predictionId));
+
+        cut.WaitForAssertion(() =>
+        {
+            cut.Find("[data-testid=prediction-garmin-course-link]");
+            Assert.Empty(cut.FindAll("[data-testid=prediction-send-to-garmin]"));
+            cut.Find("[data-testid=prediction-send-to-garmin-again]");
+        });
+    }
+
+    [Fact]
+    public void Confirms_before_pushing_a_second_time()
+    {
+        var predictionId = Guid.NewGuid();
+        var pushes = 0;
+        var detail = CompletedDetail(predictionId);
+        api.OnGetPredictionAsync = (_, _) => Task.FromResult<PredictionDetailResponse?>(
+            detail with
+            {
+                Summary = detail.Summary with { GarminCourseId = 4242 }
+            });
+        api.OnCreateGarminCourseAsync = (_, _, _) =>
+        {
+            pushes++;
+            return Task.FromResult(new GarminCourseResponse(4243, "R", "https://connect.garmin.com/modern/course/4243"));
+        };
+
+        var cut = Render<PredictionDetail>(parameters => parameters.Add(page => page.Id, predictionId));
+
+        cut.WaitForElement("[data-testid=prediction-send-to-garmin-again]").Click();
+        Assert.Equal(0, pushes);
+
+        cut.Find("[data-testid=prediction-send-to-garmin-confirm]").Click();
+        cut.WaitForAssertion(() => Assert.Equal(1, pushes));
+    }
+
+    private static PredictionDetailResponse CompletedDetail(Guid predictionId)
+    {
+        var modelId = Guid.NewGuid();
+        return new PredictionDetailResponse(
+            new PredictionSummaryResponse(
+                predictionId, "Succeeded", 54321, 987, 5460, 8.56, 248, "Medium",
+                ["temperature-estimated"], modelId, "v1.0.0", true, "Validated", 0.082, 0.156,
+                71.3, 8.4, "dry-road", "calm", "temperate", true,
+                DateTimeOffset.Parse("2026-08-25T08:30:00Z", CultureInfo.InvariantCulture),
+                DateTimeOffset.Parse("2026-08-25T10:01:00Z", CultureInfo.InvariantCulture)),
+            [
+                new PredictionSegmentResponse(1, 51.5, -0.11, 126, 500, 500, 0.02, 0.001, 246, 8.2, 60, 60, "Medium"),
+                new PredictionSegmentResponse(2, 51.51, -0.12, 132, 1000, 500, 0.03, 0.001, 250, 8.9, 62, 122, "High")
+            ]);
+    }
 }

@@ -36,6 +36,7 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
     public Func<string, CancellationToken, Task<bool>>? OnSetupLocalCredentialAsync { get; set; }
     public Func<string, CancellationToken, Task<bool>>? OnLocalLoginAsync { get; set; }
     public Func<string, CancellationToken, Task<ShortLinkResponse>>? OnResolveShortLinkAsync { get; set; }
+    public Func<Guid, CreateGarminCourseRequest, CancellationToken, Task<GarminCourseResponse>>? OnCreateGarminCourseAsync { get; set; }
     public Func<CancellationToken, Task<GoogleMapsKeyStatusResponse>>? OnGetGoogleMapsKeyStatusAsync { get; set; }
     public Func<SaveGoogleMapsKeyRequest, CancellationToken, Task>? OnSaveGoogleMapsKeyAsync { get; set; }
     public Func<CancellationToken, Task>? OnDeleteGoogleMapsKeyAsync { get; set; }
@@ -254,6 +255,11 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
     public Task<ShortLinkResponse> ResolveShortLinkAsync(string code, CancellationToken ct) =>
         OnResolveShortLinkAsync is not null
             ? OnResolveShortLinkAsync(code, ct)
+            : throw new NotSupportedException();
+
+    public Task<GarminCourseResponse> CreateGarminCourseAsync(Guid predictionId, CreateGarminCourseRequest request, CancellationToken ct) =>
+        OnCreateGarminCourseAsync is not null
+            ? OnCreateGarminCourseAsync(predictionId, request, ct)
             : throw new NotSupportedException();
 
     public Task<GoogleMapsKeyStatusResponse> GetGoogleMapsKeyStatusAsync(CancellationToken ct) =>

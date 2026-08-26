@@ -42,6 +42,62 @@ else
                    class="predictions-button predictions-button--secondary"
                    href="@($"/api/predictions/{Id}/gpx?timed=true")">Download GPX with predicted times</a>
             </div>
+
+            <div class="prediction-detail-actions">
+                <label>
+                    Garmin activity type
+                    <select data-testid="prediction-garmin-activity-type" @bind="garminActivityType">
+                        <option value="road_biking">Road cycling</option>
+                        <option value="cycling">Cycling</option>
+                        <option value="gravel_cycling">Gravel</option>
+                        <option value="mountain_biking">Mountain biking</option>
+                    </select>
+                </label>
+
+                @if (prediction!.Summary.GarminCourseId is { } courseId)
+                {
+                    <a data-testid="prediction-garmin-course-link"
+                       class="predictions-button predictions-button--secondary"
+                       href="@($"https://connect.garmin.com/modern/course/{courseId}")"
+                       target="_blank" rel="noopener noreferrer">View on Garmin Connect</a>
+
+                    @if (!confirmingGarminResend)
+                    {
+                        <button type="button" data-testid="prediction-send-to-garmin-again"
+                                class="predictions-button predictions-button--secondary"
+                                @onclick="() => confirmingGarminResend = true"
+                                disabled="@sendingToGarmin">Send to Garmin again</button>
+                    }
+                    else
+                    {
+                        <p>Sending again creates a second course on Garmin Connect. Continue?</p>
+                        <button type="button" data-testid="prediction-send-to-garmin-confirm"
+                                class="predictions-button predictions-button--danger"
+                                @onclick="SendToGarminAsync"
+                                disabled="@sendingToGarmin">Confirm</button>
+                        <button type="button" data-testid="prediction-send-to-garmin-cancel"
+                                class="predictions-button predictions-button--secondary"
+                                @onclick="() => confirmingGarminResend = false"
+                                disabled="@sendingToGarmin">Cancel</button>
+                    }
+                }
+                else
+                {
+                    <button type="button" data-testid="prediction-send-to-garmin"
+                            class="predictions-button predictions-button--secondary"
+                            @onclick="SendToGarminAsync"
+                            disabled="@sendingToGarmin">
+                        @(sendingToGarmin ? "Sending…" : "Send to Garmin")
+                    </button>
+                }
+
+                @if (garminCourseProblem is not null || garminCourseFallbackProblem)
+                {
+                    <div data-testid="prediction-garmin-course-error">
+                        <ProblemMessage Problem="@garminCourseProblem" FallbackMessage="We could not send this prediction to Garmin." />
+                    </div>
+                }
+            </div>
         }
 
         <dl data-testid="prediction-detail-summary" class="prediction-detail-grid">
@@ -196,6 +252,11 @@ else
     private bool isLoading = true;
     private bool segmentsReceivedOutOfOrder;
     private bool visualizationReady;
+    private string garminActivityType = "road_biking";
+    private bool sendingToGarmin;
+    private bool confirmingGarminResend;
+    private ApiProblemException? garminCourseProblem;
+    private bool garminCourseFallbackProblem;
 
     [Parameter]
     public Guid Id { get; set; }
@@ -249,6 +310,55 @@ else
     {
         pageCancellation.Cancel();
         pageCancellation.Dispose();
+    }
+
+    private async Task SendToGarminAsync()
+    {
+        if (sendingToGarmin || prediction is null)
+        {
+            return;
+        }
+
+        sendingToGarmin = true;
+        garminCourseProblem = null;
+        garminCourseFallbackProblem = false;
+
+        try
+        {
+            var created = await Api.CreateGarminCourseAsync(
+                Id,
+                new CreateGarminCourseRequest(null, garminActivityType),
+                pageCancellation.Token);
+
+            prediction = prediction with
+            {
+                Summary = prediction.Summary with
+                {
+                    GarminCourseId = created.CourseId,
+                    GarminCourseUploadedAt = DateTimeOffset.UtcNow
+                }
+            };
+            confirmingGarminResend = false;
+        }
+        catch (ApiProblemException apiProblem)
+        {
+            garminCourseProblem = apiProblem;
+        }
+        catch (HttpRequestException)
+        {
+            garminCourseFallbackProblem = true;
+        }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (!pageCancellation.IsCancellationRequested)
+            {
+                sendingToGarmin = false;
+            }
+        }
     }
 
     private static string DisplayBoolean(bool value) => value ? "Yes" : "No";

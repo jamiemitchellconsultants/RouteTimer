@@ -114,6 +114,9 @@ public sealed class RouteTimerApiClient(HttpClient httpClient) : IRouteTimerApiC
         return true;
     }
 
+    public Task<GarminCourseResponse> CreateGarminCourseAsync(Guid predictionId, CreateGarminCourseRequest request, CancellationToken ct) =>
+        SendJsonAsync<GarminCourseResponse>(HttpMethod.Post, $"/api/predictions/{predictionId}/garmin-course", request, ct);
+
     public Task<ShortLinkResponse> ResolveShortLinkAsync(string code, CancellationToken ct) =>
         GetRequiredAsync<ShortLinkResponse>($"/api/routes/short-links/{Uri.EscapeDataString(code)}", ct);
 
