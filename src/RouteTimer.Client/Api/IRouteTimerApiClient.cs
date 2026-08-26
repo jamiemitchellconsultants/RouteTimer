@@ -3,6 +3,7 @@ using RouteTimer.Contracts.Jobs;
 using RouteTimer.Contracts.Models;
 using RouteTimer.Contracts.Predictions;
 using RouteTimer.Contracts.Profile;
+using RouteTimer.Contracts.Routes;
 using RouteTimer.Contracts.Training;
 
 namespace RouteTimer.Client.Api;
@@ -31,4 +32,5 @@ public interface IRouteTimerApiClient
     Task LocalLogoutAsync(CancellationToken ct);
     Task<bool> SetupLocalCredentialAsync(string passphrase, CancellationToken ct);
     Task<bool> LocalLoginAsync(string passphrase, CancellationToken ct);
+    Task<ShortLinkResponse> ResolveShortLinkAsync(string code, CancellationToken ct);
 }

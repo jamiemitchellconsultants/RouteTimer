@@ -7,6 +7,7 @@ using RouteTimer.Contracts.Jobs;
 using RouteTimer.Contracts.Models;
 using RouteTimer.Contracts.Predictions;
 using RouteTimer.Contracts.Profile;
+using RouteTimer.Contracts.Routes;
 using RouteTimer.Contracts.Training;
 
 namespace RouteTimer.Client.Api;
@@ -111,6 +112,9 @@ public sealed class RouteTimerApiClient(HttpClient httpClient) : IRouteTimerApiC
         await EnsureSuccessAsync(response, ct);
         return true;
     }
+
+    public Task<ShortLinkResponse> ResolveShortLinkAsync(string code, CancellationToken ct) =>
+        GetRequiredAsync<ShortLinkResponse>($"/api/routes/short-links/{Uri.EscapeDataString(code)}", ct);
 
     private async Task<T> GetRequiredAsync<T>(string path, CancellationToken ct) =>
         await SendAsync<T>(HttpMethod.Get, path, content: null, ct);

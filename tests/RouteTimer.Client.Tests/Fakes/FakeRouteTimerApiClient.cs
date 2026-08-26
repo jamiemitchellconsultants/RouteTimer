@@ -4,6 +4,7 @@ using RouteTimer.Contracts.Jobs;
 using RouteTimer.Contracts.Models;
 using RouteTimer.Contracts.Predictions;
 using RouteTimer.Contracts.Profile;
+using RouteTimer.Contracts.Routes;
 using RouteTimer.Contracts.Training;
 
 namespace RouteTimer.Client.Tests.Fakes;
@@ -33,6 +34,7 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
     public Func<CancellationToken, Task>? OnLocalLogoutAsync { get; set; }
     public Func<string, CancellationToken, Task<bool>>? OnSetupLocalCredentialAsync { get; set; }
     public Func<string, CancellationToken, Task<bool>>? OnLocalLoginAsync { get; set; }
+    public Func<string, CancellationToken, Task<ShortLinkResponse>>? OnResolveShortLinkAsync { get; set; }
 
     public Queue<JobResponse?> Jobs { get; } = new();
 
@@ -243,6 +245,11 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
             ? OnLocalLoginAsync(passphrase, ct)
             : throw new NotSupportedException();
     }
+
+    public Task<ShortLinkResponse> ResolveShortLinkAsync(string code, CancellationToken ct) =>
+        OnResolveShortLinkAsync is not null
+            ? OnResolveShortLinkAsync(code, ct)
+            : throw new NotSupportedException();
 
     private static GarminConnectionResponse NotConnected() =>
         new("not-connected", null, null, null);
