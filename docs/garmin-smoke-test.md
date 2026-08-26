@@ -12,7 +12,7 @@ This is an opt-in manual release check against a real personal Garmin Connect ac
 
 1. Deploy RouteTimer and the private adapter by following [`deploy/README.md`](../deploy/README.md).
 2. Use a rider account with access to at least one recent road-cycling or gravel-cycling activity. To exercise pagination, the Garmin account needs more than 50 activities.
-3. Confirm the Garmin adapter has no published host port and that only RouteTimer is exposed through Caddy.
+3. Confirm the Garmin adapter has no published host port and that only RouteTimer is exposed through Caddy. In rendered Compose configuration, confirm only the adapter joins `garmin-egress`, while RouteTimer-to-adapter traffic remains on the internal `routetimer-private` network.
 4. Record only pass/fail outcomes and safe activity metadata needed for the release check.
 
 ## Login and MFA

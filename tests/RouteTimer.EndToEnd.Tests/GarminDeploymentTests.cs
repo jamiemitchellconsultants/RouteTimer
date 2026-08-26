@@ -1,7 +1,15 @@
+using System.Diagnostics;
+using System.Text.Json;
+
 namespace RouteTimer.EndToEnd.Tests;
 
 public sealed class GarminDeploymentTests
 {
+    private const string AdapterServiceName = "routetimer-garmin-adapter";
+    private const string EgressNetworkName = "garmin-egress";
+    private const string PrivateNetworkName = "routetimer-private";
+    private static readonly Lazy<JsonDocument> ComposeConfig = new(RenderComposeConfig);
+
     [Fact]
     public void Adapter_image_uses_Python_3_12_and_runs_as_a_non_root_user()
     {
@@ -23,54 +31,160 @@ public sealed class GarminDeploymentTests
 
         Assert.True(File.Exists(dockerIgnorePath), "The Garmin adapter .dockerignore is required.");
 
-        var dockerIgnore = File.ReadAllText(dockerIgnorePath);
-        Assert.Contains(".venv", dockerIgnore, StringComparison.Ordinal);
-        Assert.Contains("dist", dockerIgnore, StringComparison.Ordinal);
-        Assert.Contains("__pycache__", dockerIgnore, StringComparison.Ordinal);
-        Assert.Contains(".pytest_cache", dockerIgnore, StringComparison.Ordinal);
-        Assert.Contains(".mypy_cache", dockerIgnore, StringComparison.Ordinal);
-        Assert.Contains(".ruff_cache", dockerIgnore, StringComparison.Ordinal);
+        var ignoredEntries = File.ReadAllLines(dockerIgnorePath)
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0 && !line.StartsWith('#'))
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.Contains(".venv", ignoredEntries);
+        Assert.Contains("dist", ignoredEntries);
+        Assert.Contains("__pycache__", ignoredEntries);
+        Assert.Contains(".pytest_cache", ignoredEntries);
+        Assert.Contains(".mypy_cache", ignoredEntries);
+        Assert.Contains(".ruff_cache", ignoredEntries);
     }
 
     [Fact]
-    public void Compose_keeps_the_Garmin_adapter_private_and_gives_it_no_database_or_key()
+    public void Compose_hardens_the_adapter_without_exposing_ports_or_secrets()
     {
-        var compose = File.ReadAllText(FindRepositoryFile("docker-compose.yml"));
+        var adapter = Service(AdapterServiceName);
 
-        Assert.Contains("  routetimer-garmin-adapter:", compose, StringComparison.Ordinal);
+        AssertMissing(adapter, "ports");
+        AssertMissing(adapter, "environment");
+        AssertMissing(adapter, "env_file");
+        AssertMissing(adapter, "secrets");
+        AssertMissing(adapter, "volumes");
+        AssertMissing(adapter, "privileged");
+        AssertMissing(adapter, "network_mode");
+        Assert.True(adapter.GetProperty("read_only").GetBoolean());
+        Assert.Contains(
+            "no-new-privileges:true",
+            adapter.GetProperty("security_opt").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains(
+            "/tmp:size=16m,mode=1777",
+            adapter.GetProperty("tmpfs").EnumerateArray().Select(item => item.GetString()));
+    }
 
-        var adapterBlock = Between(compose, "  routetimer-garmin-adapter:", "  routetimer:");
-        Assert.DoesNotContain("ports:", adapterBlock, StringComparison.Ordinal);
-        Assert.DoesNotContain("ConnectionStrings__RouteTimer", adapterBlock, StringComparison.Ordinal);
-        Assert.DoesNotContain("Garmin__TokenEncryptionKey", adapterBlock, StringComparison.Ordinal);
-        Assert.DoesNotContain("volumes:", adapterBlock, StringComparison.Ordinal);
-        Assert.Contains("routetimer-private", adapterBlock, StringComparison.Ordinal);
-        Assert.Contains("read_only: true", adapterBlock, StringComparison.Ordinal);
-        Assert.Contains("/tmp:size=16m,mode=1777", adapterBlock, StringComparison.Ordinal);
-        Assert.Contains("no-new-privileges:true", adapterBlock, StringComparison.Ordinal);
-        Assert.Contains("healthcheck:", adapterBlock, StringComparison.Ordinal);
+    [Fact]
+    public void Compose_healthcheck_calls_the_adapter_health_endpoint()
+    {
+        var healthcheck = Service(AdapterServiceName).GetProperty("healthcheck");
+        var command = healthcheck.GetProperty("test")
+            .EnumerateArray()
+            .Select(item => item.GetString()!)
+            .ToArray();
+
+        Assert.Equal(
+            [
+                "CMD",
+                "python",
+                "-c",
+                "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health', timeout=3)",
+            ],
+            command);
+    }
+
+    [Fact]
+    public void Compose_gives_only_the_adapter_private_API_and_non_internal_egress_networks()
+    {
+        var config = ComposeConfig.Value.RootElement;
+        var networks = config.GetProperty("networks");
+
+        Assert.True(networks.GetProperty(PrivateNetworkName).GetProperty("internal").GetBoolean());
+        Assert.True(
+            networks.TryGetProperty(EgressNetworkName, out var egress),
+            "The Garmin adapter requires a dedicated egress network.");
+        Assert.False(egress.TryGetProperty("internal", out var internalValue) && internalValue.GetBoolean());
+        Assert.False(egress.TryGetProperty("external", out var externalValue) && externalValue.GetBoolean());
+
+        var adapterNetworks = NetworkNames(Service(AdapterServiceName));
+        Assert.Equal(
+            [EgressNetworkName, PrivateNetworkName],
+            adapterNetworks.Order(StringComparer.Ordinal));
+
+        foreach (var service in config.GetProperty("services").EnumerateObject())
+        {
+            if (service.NameEquals(AdapterServiceName))
+            {
+                continue;
+            }
+
+            Assert.DoesNotContain(EgressNetworkName, NetworkNames(service.Value));
+        }
     }
 
     [Fact]
     public void Compose_routes_RouteTimer_to_the_healthy_internal_adapter()
     {
-        var compose = File.ReadAllText(FindRepositoryFile("docker-compose.yml"));
+        var routeTimer = Service("routetimer");
+        var adapterDependency = routeTimer.GetProperty("depends_on").GetProperty(AdapterServiceName);
+        var environment = routeTimer.GetProperty("environment");
 
-        var routeTimerBlock = Between(compose, "  routetimer:", "volumes:");
-        Assert.Contains("routetimer-garmin-adapter:", routeTimerBlock, StringComparison.Ordinal);
-        Assert.Contains("condition: service_healthy", routeTimerBlock, StringComparison.Ordinal);
-        Assert.Contains(
-            "GarminAdapter__BaseUrl: http://routetimer-garmin-adapter:8081",
-            routeTimerBlock,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "Garmin__TokenEncryptionKey: ${ROUTETIMER_GARMIN_TOKEN_KEY:?set ROUTETIMER_GARMIN_TOKEN_KEY}",
-            routeTimerBlock,
-            StringComparison.Ordinal);
-        Assert.Contains("routetimer-private:\n    internal: true", compose, StringComparison.Ordinal);
+        Assert.Equal("service_healthy", adapterDependency.GetProperty("condition").GetString());
+        Assert.Equal(
+            "http://routetimer-garmin-adapter:8081",
+            environment.GetProperty("GarminAdapter__BaseUrl").GetString());
+        Assert.Equal(
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            environment.GetProperty("Garmin__TokenEncryptionKey").GetString());
+        Assert.Contains(PrivateNetworkName, NetworkNames(routeTimer));
     }
 
-    private static string FindRepositoryFile(params string[] relativePath)
+    private static JsonElement Service(string name) =>
+        ComposeConfig.Value.RootElement.GetProperty("services").GetProperty(name);
+
+    private static HashSet<string> NetworkNames(JsonElement service) =>
+        service.GetProperty("networks")
+            .EnumerateObject()
+            .Select(network => network.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+    private static void AssertMissing(JsonElement element, string propertyName) =>
+        Assert.False(
+            element.TryGetProperty(propertyName, out _),
+            $"Rendered Compose property '{propertyName}' must be absent.");
+
+    private static JsonDocument RenderComposeConfig()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var startInfo = new ProcessStartInfo("docker")
+        {
+            WorkingDirectory = repositoryRoot,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add("compose");
+        startInfo.ArgumentList.Add("--file");
+        startInfo.ArgumentList.Add(Path.Combine(repositoryRoot, "docker-compose.yml"));
+        startInfo.ArgumentList.Add("config");
+        startInfo.ArgumentList.Add("--format");
+        startInfo.ArgumentList.Add("json");
+        startInfo.Environment["ROUTETIMER_DB_PASSWORD"] = "test";
+        startInfo.Environment["KEYCLOAK_AUTHORITY"] = "https://keycloak.invalid/realms/routetimer";
+        startInfo.Environment["ROUTETIMER_HOSTNAME"] = "routetimer.invalid";
+        startInfo.Environment["ROUTETIMER_GARMIN_TOKEN_KEY"] =
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not start docker compose config.");
+        var standardOutput = process.StandardOutput.ReadToEndAsync();
+        var standardError = process.StandardError.ReadToEndAsync();
+
+        if (!process.WaitForExit(30_000))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new TimeoutException("docker compose config did not finish within 30 seconds.");
+        }
+
+        var output = standardOutput.GetAwaiter().GetResult();
+        var error = standardError.GetAwaiter().GetResult();
+        Assert.True(process.ExitCode == 0, $"docker compose config failed: {error}");
+
+        return JsonDocument.Parse(output);
+    }
+
+    private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
 
@@ -78,7 +192,7 @@ public sealed class GarminDeploymentTests
         {
             if (File.Exists(Path.Combine(directory.FullName, "RouteTimer.slnx")))
             {
-                return Path.Combine([directory.FullName, .. relativePath]);
+                return directory.FullName;
             }
 
             directory = directory.Parent;
@@ -87,14 +201,6 @@ public sealed class GarminDeploymentTests
         throw new DirectoryNotFoundException("Could not find the RouteTimer repository root.");
     }
 
-    private static string Between(string source, string start, string end)
-    {
-        var startIndex = source.IndexOf(start, StringComparison.Ordinal);
-        Assert.True(startIndex >= 0, $"Expected to find start marker '{start}'.");
-
-        var endIndex = source.IndexOf(end, startIndex + start.Length, StringComparison.Ordinal);
-        Assert.True(endIndex >= 0, $"Expected to find end marker '{end}'.");
-
-        return source[startIndex..endIndex];
-    }
+    private static string FindRepositoryFile(params string[] relativePath) =>
+        Path.Combine([FindRepositoryRoot(), .. relativePath]);
 }

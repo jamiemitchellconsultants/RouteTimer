@@ -32,6 +32,7 @@ services:
       - no-new-privileges:true
     networks:
       - routetimer-private
+      - garmin-egress
 
   routetimer:
     build:
@@ -61,6 +62,8 @@ volumes:
 networks:
   routetimer-private:
     internal: true
+  garmin-egress:
+    driver: bridge
   mcp-public:
     external: true
     name: mcp-public
