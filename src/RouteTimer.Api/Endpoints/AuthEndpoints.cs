@@ -115,16 +115,26 @@ public static class AuthEndpoints
     {
         context.Response.Headers.CacheControl = "no-store";
 
-        if (!await credentials.VerifyAsync(request.Passphrase, cancellationToken))
-        {
-            return ApiProblems.Create(
-                StatusCodes.Status401Unauthorized,
-                ErrorCodes.LocalCredentialRejected,
-                "That passphrase was not recognised.");
-        }
+        var verification = await credentials.VerifyAsync(request.Passphrase, cancellationToken);
 
-        await SignInAsync(context);
-        return TypedResults.Ok(new AuthSessionResponse(true));
+        // Rejected and NotConfigured deliberately produce an identical response. The distinction
+        // exists only so lockout counts genuine guesses against a real credential, and must not be
+        // observable to the caller.
+        switch (verification)
+        {
+            case LocalCredentialVerificationResult.Succeeded:
+                await SignInAsync(context);
+                return TypedResults.Ok(new AuthSessionResponse(true));
+            case LocalCredentialVerificationResult.Rejected:
+            case LocalCredentialVerificationResult.NotConfigured:
+                return ApiProblems.Create(
+                    StatusCodes.Status401Unauthorized,
+                    ErrorCodes.LocalCredentialRejected,
+                    "That passphrase was not recognised.");
+            default:
+                throw new InvalidOperationException(
+                    $"Unhandled {nameof(LocalCredentialVerificationResult)} value: {verification}.");
+        }
     }
 
     private static async Task<IResult> LogoutAsync(HttpContext context)

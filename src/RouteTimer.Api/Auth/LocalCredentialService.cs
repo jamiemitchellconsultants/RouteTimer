@@ -28,6 +28,24 @@ public enum LocalCredentialSetupResult
 }
 
 /// <summary>
+/// The outcome of checking a passphrase against the stored credential. Kept as three distinct
+/// values rather than a bool specifically so callers -- namely the login endpoint's lockout
+/// tracking -- can tell a wrong-passphrase attempt against a real credential
+/// (<see cref="Rejected"/>) apart from a probe made before any credential has ever been set up, or
+/// against a corrupt stored row (<see cref="NotConfigured"/>, in both cases: neither represents a
+/// usable credential to guess against). Conflating the two would let anonymous pre-setup traffic
+/// trip a lockout meant for guessing attempts, locking the rider out of their own first genuine
+/// sign-in. The two must still look identical to the HTTP caller: both map to the same 401
+/// response, with the same error code and message.
+/// </summary>
+public enum LocalCredentialVerificationResult
+{
+    Succeeded,
+    Rejected,
+    NotConfigured
+}
+
+/// <summary>
 /// Owns the local-mode passphrase. Hashing uses the framework's <see cref="PasswordHasher{TUser}"/>,
 /// which is available from the ASP.NET Core shared framework and carries its own versioned format,
 /// so no hashing scheme is written here.
@@ -87,16 +105,24 @@ public sealed class LocalCredentialService(ILocalCredentialRepository credential
         return created ? LocalCredentialSetupResult.Configured : LocalCredentialSetupResult.AlreadyConfigured;
     }
 
-    public async Task<bool> VerifyAsync(string passphrase, CancellationToken cancellationToken)
+    public async Task<LocalCredentialVerificationResult> VerifyAsync(string passphrase, CancellationToken cancellationToken)
     {
         var storedHash = await credentials.GetAsync(cancellationToken);
         // Returns early without hashing when no credential exists. This leaks first-run state by
         // timing, which is not a secret: /api/auth/config publishes setupRequired to anonymous
         // callers by design. The comparison that must be constant-time -- correct versus incorrect
-        // passphrase -- is, inside the framework's verifier.
-        if (storedHash is null || string.IsNullOrEmpty(passphrase))
+        // passphrase -- is, inside the framework's verifier, and only runs once a credential
+        // actually exists.
+        if (storedHash is null)
         {
-            return false;
+            return LocalCredentialVerificationResult.NotConfigured;
+        }
+
+        // A credential does exist here, so an empty/missing passphrase is a wrong guess against a
+        // real credential, not a first-run probe -- it must count as Rejected, not NotConfigured.
+        if (string.IsNullOrEmpty(passphrase))
+        {
+            return LocalCredentialVerificationResult.Rejected;
         }
 
         PasswordVerificationResult outcome;
@@ -107,25 +133,33 @@ public sealed class LocalCredentialService(ILocalCredentialRepository credential
         catch (FormatException)
         {
             // The stored value is not a hash this hasher wrote -- most likely a hand-edited row.
-            // Treat it as no usable credential rather than a server error; recovery is deleting the row.
-            return false;
+            // Treat it as no usable credential rather than a server error or a wrong-guess lockout
+            // hit; recovery is deleting the row, same as if none had ever been set.
+            return LocalCredentialVerificationResult.NotConfigured;
         }
 
-        if (outcome == PasswordVerificationResult.SuccessRehashNeeded)
+        // Deliberately exhaustive rather than a catch-all default: see LocalCredentialSetupResult's
+        // switch in AuthEndpoints.SetupAsync for why a default here would be a fail-open trap.
+        switch (outcome)
         {
-            try
-            {
-                await credentials.SetAsync(Hasher.HashPassword(HashSubject, passphrase), cancellationToken);
-            }
-            catch (Exception exception)
-            {
-                // The passphrase is correct. Failing to upgrade the stored hash must not deny the login.
-                logger.LogWarning(exception, "Could not upgrade the stored passphrase hash; the existing hash remains valid.");
-            }
+            case PasswordVerificationResult.Success:
+                return LocalCredentialVerificationResult.Succeeded;
+            case PasswordVerificationResult.SuccessRehashNeeded:
+                try
+                {
+                    await credentials.SetAsync(Hasher.HashPassword(HashSubject, passphrase), cancellationToken);
+                }
+                catch (Exception exception)
+                {
+                    // The passphrase is correct. Failing to upgrade the stored hash must not deny the login.
+                    logger.LogWarning(exception, "Could not upgrade the stored passphrase hash; the existing hash remains valid.");
+                }
 
-            return true;
+                return LocalCredentialVerificationResult.Succeeded;
+            case PasswordVerificationResult.Failed:
+                return LocalCredentialVerificationResult.Rejected;
+            default:
+                throw new InvalidOperationException($"Unhandled {nameof(PasswordVerificationResult)} value: {outcome}.");
         }
-
-        return outcome == PasswordVerificationResult.Success;
     }
 }

@@ -32,8 +32,8 @@ public sealed class LocalCredentialServiceTests
 
         Assert.Equal(LocalCredentialSetupResult.AlreadyConfigured, result);
         Assert.Equal(storedAfterFirstSetup, repository.Stored);
-        Assert.True(await service.VerifyAsync("correct horse battery staple", CancellationToken.None));
-        Assert.False(await service.VerifyAsync("a different passphrase", CancellationToken.None));
+        Assert.Equal(LocalCredentialVerificationResult.Succeeded, await service.VerifyAsync("correct horse battery staple", CancellationToken.None));
+        Assert.Equal(LocalCredentialVerificationResult.Rejected, await service.VerifyAsync("a different passphrase", CancellationToken.None));
     }
 
     [Fact]
@@ -119,16 +119,18 @@ public sealed class LocalCredentialServiceTests
         var service = new LocalCredentialService(new InMemoryLocalCredentialRepository(), NullLogger<LocalCredentialService>.Instance);
         await service.SetupAsync("correct horse battery staple", CancellationToken.None);
 
-        Assert.True(await service.VerifyAsync("correct horse battery staple", CancellationToken.None));
-        Assert.False(await service.VerifyAsync("wrong passphrase entirely", CancellationToken.None));
+        Assert.Equal(LocalCredentialVerificationResult.Succeeded, await service.VerifyAsync("correct horse battery staple", CancellationToken.None));
+        Assert.Equal(LocalCredentialVerificationResult.Rejected, await service.VerifyAsync("wrong passphrase entirely", CancellationToken.None));
     }
 
     [Fact]
-    public async Task Verify_fails_when_no_credential_has_been_configured()
+    public async Task Verify_reports_not_configured_before_first_run_setup()
     {
         var service = new LocalCredentialService(new InMemoryLocalCredentialRepository(), NullLogger<LocalCredentialService>.Instance);
 
-        Assert.False(await service.VerifyAsync("anything at all", CancellationToken.None));
+        // Not Rejected: there is nothing to guess against, so a pre-setup probe must not be able to
+        // spend the rider's lockout budget before they have ever set a passphrase.
+        Assert.Equal(LocalCredentialVerificationResult.NotConfigured, await service.VerifyAsync("anything at all", CancellationToken.None));
     }
 
     [Fact]
@@ -137,7 +139,10 @@ public sealed class LocalCredentialServiceTests
         var service = new LocalCredentialService(new InMemoryLocalCredentialRepository(), NullLogger<LocalCredentialService>.Instance);
         await service.SetupAsync("correct horse battery staple", CancellationToken.None);
 
-        Assert.False(await service.VerifyAsync(null!, CancellationToken.None));
+        Assert.Equal(LocalCredentialVerificationResult.Rejected, await service.VerifyAsync(null!, CancellationToken.None));
+
+        // A credential does exist here, so an empty attempt is a wrong guess rather than a
+        // pre-setup probe. The distinction drives lockout accounting.
     }
 
     [Fact]
@@ -147,7 +152,7 @@ public sealed class LocalCredentialServiceTests
         await repository.SetAsync("not-base64!!", CancellationToken.None);
         var service = new LocalCredentialService(repository, NullLogger<LocalCredentialService>.Instance);
 
-        Assert.False(await service.VerifyAsync("correct horse battery staple", CancellationToken.None));
+        Assert.Equal(LocalCredentialVerificationResult.NotConfigured, await service.VerifyAsync("correct horse battery staple", CancellationToken.None));
     }
 
     [Fact]
@@ -185,9 +190,9 @@ public sealed class LocalCredentialServiceTests
         var before = repository.Stored;
         var service = new LocalCredentialService(repository, NullLogger<LocalCredentialService>.Instance);
 
-        Assert.True(await service.VerifyAsync("correct horse battery staple", CancellationToken.None));
+        Assert.Equal(LocalCredentialVerificationResult.Succeeded, await service.VerifyAsync("correct horse battery staple", CancellationToken.None));
         Assert.NotEqual(before, repository.Stored);
-        Assert.True(await service.VerifyAsync("correct horse battery staple", CancellationToken.None));
+        Assert.Equal(LocalCredentialVerificationResult.Succeeded, await service.VerifyAsync("correct horse battery staple", CancellationToken.None));
     }
 
     [Fact]
@@ -199,7 +204,7 @@ public sealed class LocalCredentialServiceTests
             legacy.HashPassword(new object(), "correct horse battery staple"));
         var service = new LocalCredentialService(repository, NullLogger<LocalCredentialService>.Instance);
 
-        Assert.True(await service.VerifyAsync("correct horse battery staple", CancellationToken.None));
+        Assert.Equal(LocalCredentialVerificationResult.Succeeded, await service.VerifyAsync("correct horse battery staple", CancellationToken.None));
     }
 
     private sealed class InMemoryLocalCredentialRepository : ILocalCredentialRepository
