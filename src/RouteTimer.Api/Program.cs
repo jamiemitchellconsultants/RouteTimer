@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
 using RouteTimer.Api;
 using RouteTimer.Api.Auth;
+using RouteTimer.Api.Health;
 using RouteTimer.Contracts.Errors;
 using RouteTimer.Api.Endpoints;
 using RouteTimer.Api.Security;
@@ -28,8 +29,10 @@ using RouteTimer.Services.Validation;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.AddSingleton(new MigrationState(builder.Configuration.GetValue("Database:ApplyMigrations", false)));
 builder.Services.AddHealthChecks()
-    .AddDbContextCheck<RouteTimerDbContext>("database", tags: ["ready"]);
+    .AddDbContextCheck<RouteTimerDbContext>("database", tags: ["ready"])
+    .AddCheck<MigrationsReadyHealthCheck>("migrations", tags: ["ready"]);
 var connectionString = builder.Configuration.GetConnectionString("RouteTimer")
     ?? "Host=localhost;Database=routetimer;Username=routetimer;Password=routetimer";
 builder.Services.AddDbContext<RouteTimerDbContext>(options => options.UseNpgsql(connectionString));

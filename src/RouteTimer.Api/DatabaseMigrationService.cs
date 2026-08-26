@@ -1,9 +1,13 @@
 using Microsoft.EntityFrameworkCore;
+using RouteTimer.Api.Health;
 using RouteTimer.Persistence;
 
 namespace RouteTimer.Api;
 
-public sealed class DatabaseMigrationService(IServiceProvider services, ILogger<DatabaseMigrationService> logger) : IHostedService
+public sealed class DatabaseMigrationService(
+    IServiceProvider services,
+    ILogger<DatabaseMigrationService> logger,
+    MigrationState migrationState) : IHostedService
 {
     private const long MigrationLockId = 7_290_101;
 
@@ -13,6 +17,7 @@ public sealed class DatabaseMigrationService(IServiceProvider services, ILogger<
         var database = scope.ServiceProvider.GetRequiredService<RouteTimerDbContext>();
         if (!database.Database.IsRelational())
         {
+            migrationState.MarkCompleted();
             return;
         }
 
@@ -21,6 +26,7 @@ public sealed class DatabaseMigrationService(IServiceProvider services, ILogger<
         {
             await database.Database.ExecuteSqlRawAsync($"SELECT pg_advisory_lock({MigrationLockId})", cancellationToken);
             await database.Database.MigrateAsync(cancellationToken);
+            migrationState.MarkCompleted();
             logger.LogInformation("RouteTimer database migrations completed.");
         }
         finally
