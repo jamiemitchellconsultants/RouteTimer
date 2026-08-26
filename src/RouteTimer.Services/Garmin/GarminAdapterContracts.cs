@@ -8,6 +8,7 @@ public interface IGarminAdapterClient
     Task<GarminAdapterActivityPage> GetActivitiesAsync(string tokenJson, int offset, CancellationToken cancellationToken);
     Task<GarminAdapterActivityResult> GetActivityAsync(string tokenJson, string activityId, CancellationToken cancellationToken);
     Task<GarminAdapterFitDownload> DownloadFitAsync(string tokenJson, string activityId, CancellationToken cancellationToken);
+    Task<GarminAdapterCourse> CreateCourseAsync(string tokenJson, GarminCourseRequest request, CancellationToken cancellationToken);
     Task ClearChallengesAsync(CancellationToken cancellationToken);
 }
 
@@ -42,6 +43,17 @@ public sealed record GarminAdapterFitDownload(string FileName, Stream Content, s
     public ValueTask DisposeAsync() => Content.DisposeAsync();
 }
 
+public sealed record GarminCourseRequest(
+    string FileName,
+    string CourseName,
+    string ActivityType,
+    string? Description,
+    double ElevationGainMetres,
+    double ElevationLossMetres,
+    byte[] Gpx);
+
+public sealed record GarminAdapterCourse(long CourseId, string CourseName, string TokenJson);
+
 public enum GarminAdapterError
 {
     CredentialsRejected,
@@ -54,7 +66,8 @@ public enum GarminAdapterError
     ResponseInvalid,
     RequestInvalid,
     ActivityNotAllowed,
-    FitTooLarge
+    FitTooLarge,
+    CourseRejected
 }
 
 public sealed class GarminAdapterException(GarminAdapterError error, string message) : Exception(message)

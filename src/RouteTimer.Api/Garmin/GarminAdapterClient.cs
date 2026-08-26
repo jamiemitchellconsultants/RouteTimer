@@ -88,6 +88,55 @@ public sealed class GarminAdapterClient(HttpClient httpClient) : IGarminAdapterC
         }
     }
 
+    public async Task<GarminAdapterCourse> CreateCourseAsync(string tokenJson, GarminCourseRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var payload = JsonSerializer.Serialize(
+            new
+            {
+                token = tokenJson,
+                fileName = request.FileName,
+                courseName = request.CourseName,
+                activityType = request.ActivityType,
+                description = request.Description,
+                elevationGainMetres = request.ElevationGainMetres,
+                elevationLossMetres = request.ElevationLossMetres
+            },
+            JsonOptions);
+
+        using var content = new MultipartFormDataContent
+        {
+            { new StringContent(payload, Encoding.UTF8, "application/json"), "payload" }
+        };
+        var fileContent = new ByteArrayContent(request.Gpx);
+        fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/gpx+xml");
+        content.Add(fileContent, "file", request.FileName);
+
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/v1/courses") { Content = content };
+        using var response = await SendAsync(httpRequest, HttpCompletionOption.ResponseContentRead, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+
+        try
+        {
+            var result = await response.Content.ReadFromJsonAsync<GarminAdapterCourse>(JsonOptions, cancellationToken);
+            if (result is null || result.CourseId <= 0 || string.IsNullOrWhiteSpace(result.CourseName) || string.IsNullOrWhiteSpace(result.TokenJson))
+            {
+                throw ResponseInvalid();
+            }
+
+            return result;
+        }
+        catch (GarminAdapterException)
+        {
+            throw;
+        }
+        catch (JsonException)
+        {
+            throw ResponseInvalid();
+        }
+    }
+
     private async Task<T> SendJsonAsync<T>(
         HttpMethod method,
         string path,
@@ -272,6 +321,7 @@ public sealed class GarminAdapterClient(HttpClient httpClient) : IGarminAdapterC
             "request-invalid" => RequestInvalid(),
             "activity-not-allowed" => new(GarminAdapterError.ActivityNotAllowed, "The Garmin activity is not available."),
             "fit-too-large" => new(GarminAdapterError.FitTooLarge, "The Garmin FIT file is too large."),
+            "course-rejected" => new(GarminAdapterError.CourseRejected, "Garmin rejected the course."),
             _ => ResponseInvalid()
         };
 

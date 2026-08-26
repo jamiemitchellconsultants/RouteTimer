@@ -639,5 +639,8 @@ public sealed class GarminConnectionServiceTests
             ClearOperations++;
             return ClearException is null ? Task.CompletedTask : Task.FromException(ClearException);
         }
+
+        public Task<GarminAdapterCourse> CreateCourseAsync(string tokenJson, GarminCourseRequest request, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 }
