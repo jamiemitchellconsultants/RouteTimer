@@ -1,5 +1,5 @@
-# Copy this file to C:\mcp-host\caddy\conf.d\routetimer.caddy, set the hostname,
-# then validate and reload the shared Caddy ingress.
-{$ROUTETIMER_HOSTNAME} {
+# Copy this file to C:\mcp-host\caddy\conf.d\routetimer.caddy, replace routetimer.example.com
+# with the real hostname, then validate and reload the shared Caddy ingress.
+routetimer.example.com {
     reverse_proxy routetimer:8080
 }

@@ -12,6 +12,31 @@
 
 ---
 
+## Amendments recorded during execution
+
+This plan was written against `main` before [PR #13](https://github.com/jamiemitchellconsultants/RouteTimer/pull/13)
+(Garmin activity import) merged. Two consequences turned out to touch nearly every task, so they're
+recorded once here rather than in each task individually — later tasks' commands and this
+document's own verification steps were written and run with both already accounted for; only
+Task 10 Step 5 needed a correction after the fact (see the amendment there).
+
+**A third container, `routetimer-garmin-adapter`, is now part of both deployment models, not just
+the homelab one this plan assumed already had it wired up.** It's an internal-only Python service
+with no host port that RouteTimer's API calls to talk to Garmin Connect. `deploy/docker-compose.yml`
+(homelab) already included it when this plan started executing; `deploy/docker-compose.local.yml`
+(Task 2) needed it added from scratch, mirrored from the homelab shape (`read_only`, `tmpfs`,
+`no-new-privileges`, its own `garmin-egress` bridge network). It also requires a new
+`Garmin:TokenEncryptionKey` secret — a real one, unlike the local model's fixed Postgres password:
+it encrypts the rider's actual Garmin OAuth tokens at rest, so a fixed value would be a genuine
+security regression, not a convenience tradeoff. `run.sh`/`run.ps1` (Task 3) generate one on first
+run and persist it to a git-ignored `deploy/.env.local`.
+
+**Every `docker compose` command against the local model needs `--env-file deploy/.env.local`,
+including ones that only touch `routetimer-db`.** Compose interpolates every service's environment
+before running any command at all, so the local model's required `GARMIN_TOKEN_ENCRYPTION_KEY` has
+to resolve even for a database-only `exec` — caught when `deploy/backup.sh`/`restore.sh` (Task 6)
+failed against a fully healthy stack until this was added.
+
 ## Two things this plan corrects that the spec did not anticipate
 
 Both were found by running commands, not by reading further — record them here so a future
@@ -1465,21 +1490,34 @@ that as a manual step for a human running `RUNBOOK.md` Steps 4–5 themselves.
 
 - [ ] **Step 5: Verify readiness stays unhealthy while migrations are incomplete**
 
+> **Amendment after execution:** this step's original text claimed the container recovers to
+> `healthy` on its own, reasoning that EF Core migrations are idempotent against a stale history
+> row. That's wrong, verified by actually running it: the `AddGarminActivityImport` migration's
+> `Up()` is a plain `CREATE TABLE garmin_activity_imports`, with no `IF NOT EXISTS` guard. Deleting
+> only the history row leaves the table itself in place, so EF Core's re-run fails with
+> `42P07: relation "garmin_activity_imports" already exists` and the container stays in `starting`
+> forever — it does not recover, and no later restart fixes it. That failure is exactly correct
+> behavior for a readiness check (fail closed on a genuinely broken migration state rather than
+> report healthy), so the corrected step below verifies the failure stays visible, not that it
+> heals itself. A real corrupted migration history has no automatic fix; recovery is restoring
+> the pre-corruption backup via `deploy/restore.sh`, which Task 6 already verified works.
+
 ```bash
-docker compose -f deploy/docker-compose.local.yml exec -T routetimer-db \
+docker compose -f deploy/docker-compose.local.yml --env-file deploy/.env.local exec -T routetimer-db \
     psql -U routetimer -d routetimer -c "DELETE FROM \"__EFMigrationsHistory\" WHERE \"MigrationId\" = (SELECT \"MigrationId\" FROM \"__EFMigrationsHistory\" ORDER BY \"MigrationId\" DESC LIMIT 1);"
-docker compose -f deploy/docker-compose.local.yml restart routetimer
+docker compose -f deploy/docker-compose.local.yml --env-file deploy/.env.local restart routetimer
 sleep 5
-docker inspect --format '{{.State.Health.Status}}' $(docker compose -f deploy/docker-compose.local.yml ps -q routetimer)
+docker inspect --format '{{.State.Health.Status}}' $(docker compose -f deploy/docker-compose.local.yml --env-file deploy/.env.local ps -q routetimer)
 sleep 30
-docker inspect --format '{{.State.Health.Status}}' $(docker compose -f deploy/docker-compose.local.yml ps -q routetimer)
+docker inspect --format '{{.State.Health.Status}}' $(docker compose -f deploy/docker-compose.local.yml --env-file deploy/.env.local ps -q routetimer)
+docker logs $(docker compose -f deploy/docker-compose.local.yml --env-file deploy/.env.local ps -q routetimer) --tail 10
 ```
 
-Expected: the first health status check may print `starting` or `unhealthy`; by the second check,
-`healthy` — `DatabaseMigrationService` re-applies the deleted migration record on restart (EF Core
-migrations are idempotent against a stale history row) and readiness recovers once that completes.
-This is a deliberately destructive-looking but fully recoverable check against a throwaway
-Compose volume — do not run it against a deployment holding real data.
+Expected: `starting` both times — it never reaches `healthy` — and the log tail shows
+`InvalidOperationException`/`PostgresException` around the migration, not a clean startup message.
+This is a throwaway Compose volume purely to prove the failure mode; tear it down completely
+afterward (`down -v`) rather than trying to recover it in place — do not run this against a
+deployment holding real data.
 
 - [ ] **Step 6: Backup/restore round trip, once more, against this clean-slate instance**
 

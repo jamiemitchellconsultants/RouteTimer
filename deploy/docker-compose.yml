@@ -17,8 +17,7 @@ services:
       - routetimer-private
 
   routetimer-garmin-adapter:
-    build:
-      context: ./garmin-adapter
+    image: ghcr.io/jamiemitchellconsultants/routetimer-garmin-adapter:${ROUTETIMER_IMAGE_TAG:-latest}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health', timeout=3)"]
@@ -35,8 +34,7 @@ services:
       - garmin-egress
 
   routetimer:
-    build:
-      context: .
+    image: ghcr.io/jamiemitchellconsultants/routetimer:${ROUTETIMER_IMAGE_TAG:-latest}
     restart: unless-stopped
     depends_on:
       routetimer-db:
@@ -50,6 +48,12 @@ services:
       Keycloak__Authority: ${KEYCLOAK_AUTHORITY:?set KEYCLOAK_AUTHORITY}
       GarminAdapter__BaseUrl: http://routetimer-garmin-adapter:8081
       Garmin__TokenEncryptionKey: ${ROUTETIMER_GARMIN_TOKEN_KEY:?set ROUTETIMER_GARMIN_TOKEN_KEY}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
     networks:
       - routetimer-private
       - mcp-public
