@@ -22,9 +22,16 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
     public Func<Guid, CancellationToken, Task<PredictionDetailResponse?>>? OnGetPredictionAsync { get; set; }
     public Func<Guid, CancellationToken, Task<bool>>? OnDeletePredictionAsync { get; set; }
 
+    public Func<CancellationToken, Task>? OnLocalLogoutAsync { get; set; }
+    public Func<string, CancellationToken, Task<bool>>? OnSetupLocalCredentialAsync { get; set; }
+    public Func<string, CancellationToken, Task<bool>>? OnLocalLoginAsync { get; set; }
+
     public Queue<JobResponse?> Jobs { get; } = new();
 
     public List<(Guid JobId, CancellationToken CancellationToken)> RequestedJobs { get; } = [];
+    public List<CancellationToken> LocalLogouts { get; } = [];
+    public List<(string Passphrase, CancellationToken CancellationToken)> SetupLocalCredentials { get; } = [];
+    public List<(string Passphrase, CancellationToken CancellationToken)> LocalLogins { get; } = [];
     public List<CancellationToken> RequestedProfiles { get; } = [];
     public List<(UpdateProfileRequest Request, CancellationToken CancellationToken)> UpdatedProfiles { get; } = [];
     public List<CancellationToken> RequestedTrainingActivities { get; } = [];
@@ -144,5 +151,29 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
         }
 
         return Task.FromResult(Jobs.Dequeue());
+    }
+
+    public Task LocalLogoutAsync(CancellationToken ct)
+    {
+        LocalLogouts.Add(ct);
+        return OnLocalLogoutAsync is not null
+            ? OnLocalLogoutAsync(ct)
+            : Task.CompletedTask;
+    }
+
+    public Task<bool> SetupLocalCredentialAsync(string passphrase, CancellationToken ct)
+    {
+        SetupLocalCredentials.Add((passphrase, ct));
+        return OnSetupLocalCredentialAsync is not null
+            ? OnSetupLocalCredentialAsync(passphrase, ct)
+            : throw new NotSupportedException();
+    }
+
+    public Task<bool> LocalLoginAsync(string passphrase, CancellationToken ct)
+    {
+        LocalLogins.Add((passphrase, ct));
+        return OnLocalLoginAsync is not null
+            ? OnLocalLoginAsync(passphrase, ct)
+            : throw new NotSupportedException();
     }
 }

@@ -18,6 +18,9 @@ public static class ApiProblems
     public static IResult Conflict(string code, string detail) =>
         Create(StatusCodes.Status409Conflict, code, detail);
 
+    public static IResult Forbidden(string code, string detail) =>
+        Create(StatusCodes.Status403Forbidden, code, detail);
+
     public static IResult NotFound(string code, string detail) =>
         Create(StatusCodes.Status404NotFound, code, detail);
 

@@ -17,6 +17,7 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
     public DbSet<RiderModelEntity> RiderModels => Set<RiderModelEntity>();
     public DbSet<PowerBandEntity> PowerBands => Set<PowerBandEntity>();
     public DbSet<RiderModelDescentLimitEntity> RiderModelDescentLimits => Set<RiderModelDescentLimitEntity>();
+    public DbSet<LocalCredentialEntity> LocalCredentials => Set<LocalCredentialEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -177,6 +178,15 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
             .WithOne(entity => entity.Model)
             .HasForeignKey(entity => entity.ModelId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        var localCredential = modelBuilder.Entity<LocalCredentialEntity>();
+        localCredential.ToTable("local_credential", table => table.HasCheckConstraint(
+            "CK_local_credential_singleton", "\"Id\" = 1"));
+        localCredential.HasKey(entity => entity.Id);
+        localCredential.Property(entity => entity.Id).ValueGeneratedNever();
+        localCredential.Property(entity => entity.PasswordHash).HasMaxLength(256).IsRequired();
+        localCredential.Property(entity => entity.CreatedAt).HasColumnType("timestamp with time zone");
+        localCredential.Property(entity => entity.UpdatedAt).HasColumnType("timestamp with time zone");
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new();

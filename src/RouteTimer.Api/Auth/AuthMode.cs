@@ -1,0 +1,47 @@
+namespace RouteTimer.Api.Auth;
+
+/// <summary>How a request is authenticated. Selected per deployment; there is no default.</summary>
+public enum AuthMode
+{
+    /// <summary>Single-rider passphrase held by this deployment, used for local installations.</summary>
+    Local,
+
+    /// <summary>Bearer tokens issued by an external Keycloak realm.</summary>
+    Keycloak
+}
+
+public static class AuthModeResolver
+{
+    public const string ConfigurationKey = "Auth:Mode";
+
+    /// <summary>
+    /// Reads the deployment's authentication mode. There is deliberately no default: a deployment
+    /// that does not state what it is must not start, because guessing wrong in either direction is
+    /// worse than refusing to run.
+    /// </summary>
+    public static AuthMode Resolve(IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        // Matched by name rather than parsed. Enum.TryParse would accept "0" and "1" -- which are
+        // defined values, so Enum.IsDefined does not catch them -- and it bitwise-ORs comma-separated
+        // lists on any enum, Flags or not. Either would silently pick a mode the operator did not ask
+        // for, which is the exact failure this setting exists to prevent.
+        var configured = configuration[ConfigurationKey]?.Trim();
+        if (string.Equals(configured, nameof(AuthMode.Local), StringComparison.OrdinalIgnoreCase))
+        {
+            return AuthMode.Local;
+        }
+
+        if (string.Equals(configured, nameof(AuthMode.Keycloak), StringComparison.OrdinalIgnoreCase))
+        {
+            return AuthMode.Keycloak;
+        }
+
+        throw new InvalidOperationException(
+            $"{ConfigurationKey} must be set to either 'Local' or 'Keycloak'. " +
+            $"The configured value was {(string.IsNullOrWhiteSpace(configured) ? "not set" : $"'{configured}'")}. " +
+            "Local mode authenticates with a passphrase set on first use; Keycloak mode authenticates " +
+            "bearer tokens from the authority in Keycloak:Authority.");
+    }
+}

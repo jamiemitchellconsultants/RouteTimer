@@ -21,4 +21,7 @@ public interface IRouteTimerApiClient
     Task<PredictionDetailResponse?> GetPredictionAsync(Guid id, CancellationToken ct);
     Task<bool> DeletePredictionAsync(Guid id, CancellationToken ct);
     Task<JobResponse?> GetJobAsync(Guid id, CancellationToken ct);
+    Task LocalLogoutAsync(CancellationToken ct);
+    Task<bool> SetupLocalCredentialAsync(string passphrase, CancellationToken ct);
+    Task<bool> LocalLoginAsync(string passphrase, CancellationToken ct);
 }
