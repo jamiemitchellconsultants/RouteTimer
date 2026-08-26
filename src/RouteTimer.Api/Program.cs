@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Threading.RateLimiting;
 using RouteTimer.Contracts.Errors;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -165,46 +166,65 @@ builder.Services.AddAuthorizationBuilder().SetDefaultPolicy(riderPolicy).SetFall
 builder.Services.Configure<FormOptions>(options => options.MultipartBodyLengthLimit = UploadLimits.MaximumTrainingRequestBytes);
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = UploadLimits.MaximumTrainingRequestBytes);
 
+builder.Services.AddSingleton<LoginAttemptTracker>();
 builder.Services.AddRateLimiter(options =>
 {
-    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-
-    // A bare 429 leaves the client unable to tell "locked out" from "passphrase wrong", so the
-    // rejection carries the same problem shape as every other failure here.
+    // OnRejected owns the status: it writes the response itself, so setting RejectionStatusCode
+    // here as well would be dead configuration that a future reader would expect to be load-bearing.
     options.OnRejected = async (context, cancellationToken) =>
     {
         context.HttpContext.Response.Headers.CacheControl = "no-store";
+        var detail = "Too many requests. Wait before trying again.";
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+        {
+            var seconds = (int)Math.Ceiling(retryAfter.TotalSeconds);
+            context.HttpContext.Response.Headers.RetryAfter = seconds.ToString(CultureInfo.InvariantCulture);
+            detail = $"Too many requests. Wait {seconds} seconds before trying again.";
+        }
+
         await Results.Problem(
                 statusCode: StatusCodes.Status429TooManyRequests,
-                detail: "Too many attempts. Wait a minute before trying again.",
-                extensions: new Dictionary<string, object?> { ["code"] = ErrorCodes.LocalCredentialLockedOut })
+                detail: detail,
+                extensions: new Dictionary<string, object?> { ["code"] = ErrorCodes.RequestRateExceeded })
             .ExecuteAsync(context.HttpContext);
     };
 
-    // Both partitions use a constant key rather than the remote address. This is a single-rider
-    // deployment bound to loopback, so every request already reports 127.0.0.1 and a per-address
-    // partition would add nothing -- but if a reverse proxy is ever put in front with forwarded
-    // headers enabled, RemoteIpAddress becomes caller-controllable and a per-address partition
-    // would hand out a fresh bucket per request, defeating the limiter entirely. A global limit is
-    // the intended semantics: there is exactly one legitimate user.
-    options.AddPolicy(AuthEndpoints.LoginRateLimitPolicy, _ =>
-        RateLimitPartition.GetFixedWindowLimiter("auth-login", _ => new FixedWindowRateLimiterOptions
-        {
-            PermitLimit = 5,
-            Window = TimeSpan.FromMinutes(1),
-            QueueLimit = 0
-        }));
+    // A flood guard on the PBKDF2 work, not the lockout. Lockout is outcome-driven inside the login
+    // handler, because middleware consumes its permit before the endpoint runs and so cannot tell a
+    // wrong guess from a probe made before any credential exists.
+    options.AddPolicy(AuthEndpoints.LoginRateLimitPolicy, context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            AuthRateLimitPartition(context, authMode),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            }));
 
-    // 60 a minute is far above a real page load, which calls each of these about once, and far
-    // below what a loop would need to make the anonymous database read on /api/auth/config matter.
-    options.AddPolicy(AuthEndpoints.AuthRateLimitPolicy, _ =>
-        RateLimitPartition.GetFixedWindowLimiter("auth-general", _ => new FixedWindowRateLimiterOptions
-        {
-            PermitLimit = 60,
-            Window = TimeSpan.FromMinutes(1),
-            QueueLimit = 0
-        }));
+    // Generous: a real client calls these about once per page load, so the ceiling only has to stop
+    // a loop. /api/auth/config reads the database on every anonymous call, so it must not be
+    // unbounded.
+    options.AddPolicy(AuthEndpoints.AuthRateLimitPolicy, context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            AuthRateLimitPartition(context, authMode),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 120,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            }));
 });
+
+// Local mode is one rider on one machine, so a single global bucket is the intended semantics --
+// and deliberately not the remote address, which is identical for every loopback request and
+// becomes caller-controllable the moment a proxy sets X-Forwarded-For. Keycloak mode is the shared
+// public deployment, where a global bucket would let one browser's page loads lock out everyone
+// else, so partition per connection there instead.
+static string AuthRateLimitPartition(HttpContext context, AuthMode mode) =>
+    mode == AuthMode.Local
+        ? "local"
+        : context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
 var app = builder.Build();
 

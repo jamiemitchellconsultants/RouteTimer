@@ -24,5 +24,6 @@ public static class ErrorCodes
     public const string LocalCredentialTooLong = "local-credential-too-long";
     public const string LocalCredentialRejected = "local-credential-rejected";
     public const string LocalCredentialLockedOut = "local-credential-locked-out";
+    public const string RequestRateExceeded = "request-rate-exceeded";
     public const string CrossSiteRequestRejected = "cross-site-request-rejected";
 }

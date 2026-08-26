@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Mvc;
@@ -54,8 +55,9 @@ public static class AuthEndpoints
             // after any .NET major-version upgrade rather than assuming it still holds.
             routes.MapPost("/api/auth/setup", SetupAsync).AllowAnonymous().WithMetadata(new RequestSizeLimitAttribute(4096))
                 .RequireRateLimiting(AuthRateLimitPolicy);
-            // Login carries the strict budget: it is the only endpoint here that both does PBKDF2
-            // work per request and is worth guessing at.
+            // The middleware policy here is only a flood guard on PBKDF2 work. Lockout proper is
+            // outcome-driven inside the handler, because middleware consumes a permit before the
+            // endpoint runs and so cannot tell a wrong guess from a pre-setup probe.
             routes.MapPost("/api/auth/login", LoginAsync).AllowAnonymous().WithMetadata(new RequestSizeLimitAttribute(4096))
                 .RequireRateLimiting(LoginRateLimitPolicy);
             // LogoutAsync's single-HttpContext-parameter shape matches RequestDelegate closely
@@ -125,10 +127,21 @@ public static class AuthEndpoints
     private static async Task<IResult> LoginAsync(
         LocalLoginRequest request,
         LocalCredentialService credentials,
+        LoginAttemptTracker attempts,
         HttpContext context,
         CancellationToken cancellationToken)
     {
         context.Response.Headers.CacheControl = "no-store";
+
+        if (attempts.IsLockedOut(out var retryAfter))
+        {
+            context.Response.Headers.RetryAfter =
+                ((int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+            return ApiProblems.Create(
+                StatusCodes.Status429TooManyRequests,
+                ErrorCodes.LocalCredentialLockedOut,
+                "Too many failed sign-in attempts. Wait for the lockout to expire before trying again.");
+        }
 
         var verification = await credentials.VerifyAsync(request.Passphrase, cancellationToken);
 
@@ -138,9 +151,17 @@ public static class AuthEndpoints
         switch (verification)
         {
             case LocalCredentialVerificationResult.Succeeded:
+                attempts.Reset();
                 await SignInAsync(context);
                 return TypedResults.Ok(new AuthSessionResponse(true));
             case LocalCredentialVerificationResult.Rejected:
+                // Only a wrong guess against a real credential counts. NotConfigured falls through
+                // without recording, so probes made before first-run setup cannot spend the budget.
+                attempts.RecordFailure();
+                return ApiProblems.Create(
+                    StatusCodes.Status401Unauthorized,
+                    ErrorCodes.LocalCredentialRejected,
+                    "That passphrase was not recognised.");
             case LocalCredentialVerificationResult.NotConfigured:
                 return ApiProblems.Create(
                     StatusCodes.Status401Unauthorized,

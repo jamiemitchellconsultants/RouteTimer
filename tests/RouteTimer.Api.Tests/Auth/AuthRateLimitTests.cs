@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Net.Http.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using RouteTimer.Api.Auth;
 using RouteTimer.Contracts.Auth;
 using RouteTimer.Contracts.Errors;
 using RouteTimer.Services.Persistence;
@@ -14,14 +15,16 @@ public sealed class AuthRateLimitTests
     private const string Passphrase = "correct horse battery staple";
 
     [Fact]
-    public async Task Repeated_failed_logins_are_locked_out_with_a_problem_response()
+    public async Task Repeated_wrong_guesses_are_locked_out_with_a_problem_response()
     {
-        await using var app = LocalApp("an-existing-hash");
+        await using var app = LocalApp(null);
         using var client = app.CreateClient();
+        await client.PostAsJsonAsync("/api/auth/setup", new SetLocalCredentialRequest(Passphrase), CancellationToken.None);
+        await client.PostAsync("/api/auth/logout", content: null, CancellationToken.None);
 
         var statuses = new List<HttpStatusCode>();
         HttpResponseMessage? lockedOut = null;
-        for (var attempt = 0; attempt < 12; attempt++)
+        for (var attempt = 0; attempt < LoginAttemptTracker.MaximumFailuresPerWindow + 2; attempt++)
         {
             var response = await client.PostAsJsonAsync(
                 "/api/auth/login",
@@ -93,9 +96,9 @@ public sealed class AuthRateLimitTests
         await client.PostAsJsonAsync("/api/auth/setup", new SetLocalCredentialRequest(Passphrase), CancellationToken.None);
         await client.PostAsync("/api/auth/logout", content: null, CancellationToken.None);
 
-        for (var attempt = 0; attempt < 6; attempt++)
+        for (var attempt = 0; attempt < LoginAttemptTracker.MaximumFailuresPerWindow; attempt++)
         {
-            using var wrong = await client.PostAsJsonAsync(
+            using var _ = await client.PostAsJsonAsync(
                 "/api/auth/login",
                 new LocalLoginRequest("wrong passphrase entirely"),
                 CancellationToken.None);
@@ -106,11 +109,84 @@ public sealed class AuthRateLimitTests
             new LocalLoginRequest(Passphrase),
             CancellationToken.None);
 
-        // Deliberate, not an oversight. A lockout that the attacker can step around by guessing
-        // correctly is not a lockout, and on a loopback-bound single-rider install the legitimate
-        // rider and the only possible attacker are the same local user. The cost is that a rider
-        // who mistypes six times waits out the remainder of a one-minute window.
+        // Deliberate. A lockout an attacker steps around by eventually guessing correctly is not a
+        // lockout, and on a single-rider install the rider and the only plausible local attacker are
+        // the same principal. The cost is that a rider who mistypes ten times waits out the window.
         Assert.Equal(HttpStatusCode.TooManyRequests, correct.StatusCode);
+    }
+
+    [Fact]
+    public async Task Probes_made_before_first_run_setup_do_not_consume_the_lockout_budget()
+    {
+        await using var app = LocalApp(null);
+        using var client = app.CreateClient();
+
+        // The failure this whole enum conversion exists to prevent: anonymous traffic burning the
+        // budget before a passphrase is ever set, locking the rider out of their first sign-in.
+        for (var attempt = 0; attempt < LoginAttemptTracker.MaximumFailuresPerWindow + 5; attempt++)
+        {
+            using var probe = await client.PostAsJsonAsync(
+                "/api/auth/login",
+                new LocalLoginRequest("anything at all"),
+                CancellationToken.None);
+            Assert.Equal(HttpStatusCode.Unauthorized, probe.StatusCode);
+        }
+
+        using var setup = await client.PostAsJsonAsync(
+            "/api/auth/setup",
+            new SetLocalCredentialRequest(Passphrase),
+            CancellationToken.None);
+        Assert.Equal(HttpStatusCode.OK, setup.StatusCode);
+
+        await client.PostAsync("/api/auth/logout", content: null, CancellationToken.None);
+
+        using var login = await client.PostAsJsonAsync(
+            "/api/auth/login",
+            new LocalLoginRequest(Passphrase),
+            CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_corrupt_stored_hash_does_not_consume_the_lockout_budget_either()
+    {
+        // "an-existing-hash" is not valid base64, so verification takes the corrupt-row path.
+        await using var app = LocalApp("an-existing-hash");
+        using var client = app.CreateClient();
+
+        for (var attempt = 0; attempt < LoginAttemptTracker.MaximumFailuresPerWindow + 2; attempt++)
+        {
+            using var probe = await client.PostAsJsonAsync(
+                "/api/auth/login",
+                new LocalLoginRequest("anything at all"),
+                CancellationToken.None);
+            Assert.Equal(HttpStatusCode.Unauthorized, probe.StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task The_generous_policy_eventually_rejects_and_is_shared_across_its_endpoints()
+    {
+        await using var app = LocalApp(null);
+        using var client = app.CreateClient();
+
+        HttpStatusCode? rejected = null;
+        for (var attempt = 0; attempt < 200 && rejected is null; attempt++)
+        {
+            using var response = await client.GetAsync("/api/auth/session", CancellationToken.None);
+            if (response.StatusCode != HttpStatusCode.OK)
+            {
+                rejected = response.StatusCode;
+            }
+        }
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, rejected);
+
+        // Same budget, different endpoint: proves the policy is genuinely attached to its siblings
+        // rather than only to the one the loop hit.
+        using var logout = await client.PostAsync("/api/auth/logout", content: null, CancellationToken.None);
+        Assert.Equal(HttpStatusCode.TooManyRequests, logout.StatusCode);
     }
 
     private static RouteTimerApiFactory LocalApp(string? initialHash) =>
