@@ -1,3 +1,5 @@
+using System.Threading.RateLimiting;
+using RouteTimer.Contracts.Errors;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -163,6 +165,47 @@ builder.Services.AddAuthorizationBuilder().SetDefaultPolicy(riderPolicy).SetFall
 builder.Services.Configure<FormOptions>(options => options.MultipartBodyLengthLimit = UploadLimits.MaximumTrainingRequestBytes);
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = UploadLimits.MaximumTrainingRequestBytes);
 
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    // A bare 429 leaves the client unable to tell "locked out" from "passphrase wrong", so the
+    // rejection carries the same problem shape as every other failure here.
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        context.HttpContext.Response.Headers.CacheControl = "no-store";
+        await Results.Problem(
+                statusCode: StatusCodes.Status429TooManyRequests,
+                detail: "Too many attempts. Wait a minute before trying again.",
+                extensions: new Dictionary<string, object?> { ["code"] = ErrorCodes.LocalCredentialLockedOut })
+            .ExecuteAsync(context.HttpContext);
+    };
+
+    // Both partitions use a constant key rather than the remote address. This is a single-rider
+    // deployment bound to loopback, so every request already reports 127.0.0.1 and a per-address
+    // partition would add nothing -- but if a reverse proxy is ever put in front with forwarded
+    // headers enabled, RemoteIpAddress becomes caller-controllable and a per-address partition
+    // would hand out a fresh bucket per request, defeating the limiter entirely. A global limit is
+    // the intended semantics: there is exactly one legitimate user.
+    options.AddPolicy(AuthEndpoints.LoginRateLimitPolicy, _ =>
+        RateLimitPartition.GetFixedWindowLimiter("auth-login", _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 5,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0
+        }));
+
+    // 60 a minute is far above a real page load, which calls each of these about once, and far
+    // below what a loop would need to make the anonymous database read on /api/auth/config matter.
+    options.AddPolicy(AuthEndpoints.AuthRateLimitPolicy, _ =>
+        RateLimitPartition.GetFixedWindowLimiter("auth-general", _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 60,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0
+        }));
+});
+
 var app = builder.Build();
 
 // Despite being registered first, this does NOT run before authentication/authorization: when
@@ -174,6 +217,7 @@ var app = builder.Build();
 // cookie, which is what SameSite=Strict alone fails to stop -- passes authentication/authorization
 // (the cookie is genuine) and is still rejected 403 here, before the endpoint runs.
 app.UseSameOriginEnforcement();
+app.UseRateLimiter();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.MapHealthChecks("/health/live", new HealthCheckOptions

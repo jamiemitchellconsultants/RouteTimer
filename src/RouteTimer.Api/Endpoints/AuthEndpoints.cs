@@ -11,19 +11,29 @@ namespace RouteTimer.Api.Endpoints;
 
 public static class AuthEndpoints
 {
+    /// <summary>Strict budget for the one endpoint that a guessing attack would target.</summary>
+    public const string LoginRateLimitPolicy = "auth-login";
+
+    /// <summary>
+    /// Generous ceiling for the remaining auth endpoints. They are anonymous and /api/auth/config
+    /// reads the database, so they should not be unbounded -- but a real client calls each about
+    /// once per page load, so the limit only has to stop a loop.
+    /// </summary>
+    public const string AuthRateLimitPolicy = "auth-general";
+
     public static IEndpointRouteBuilder MapAuthEndpoints(this IEndpointRouteBuilder routes, AuthMode mode)
     {
         routes.MapGet("/api/auth/config", (HttpContext context, IConfiguration configuration, LocalCredentialService credentials, CancellationToken cancellationToken) =>
         {
             context.Response.Headers.CacheControl = "no-store";
             return GetConfigAsync(mode, configuration, credentials, cancellationToken);
-        }).AllowAnonymous();
+        }).AllowAnonymous().RequireRateLimiting(AuthRateLimitPolicy);
 
         routes.MapGet("/api/auth/session", (HttpContext context) =>
         {
             context.Response.Headers.CacheControl = "no-store";
             return TypedResults.Ok(new AuthSessionResponse(context.User.Identity?.IsAuthenticated == true));
-        }).AllowAnonymous();
+        }).AllowAnonymous().RequireRateLimiting(AuthRateLimitPolicy);
 
         if (mode == AuthMode.Local)
         {
@@ -42,13 +52,18 @@ public static class AuthEndpoints
             // metadata to a real Kestrel server automatically. That is framework behaviour, not
             // something this codebase controls, and CI does not exercise it -- re-run the probe
             // after any .NET major-version upgrade rather than assuming it still holds.
-            routes.MapPost("/api/auth/setup", SetupAsync).AllowAnonymous().WithMetadata(new RequestSizeLimitAttribute(4096));
-            routes.MapPost("/api/auth/login", LoginAsync).AllowAnonymous().WithMetadata(new RequestSizeLimitAttribute(4096));
+            routes.MapPost("/api/auth/setup", SetupAsync).AllowAnonymous().WithMetadata(new RequestSizeLimitAttribute(4096))
+                .RequireRateLimiting(AuthRateLimitPolicy);
+            // Login carries the strict budget: it is the only endpoint here that both does PBKDF2
+            // work per request and is worth guessing at.
+            routes.MapPost("/api/auth/login", LoginAsync).AllowAnonymous().WithMetadata(new RequestSizeLimitAttribute(4096))
+                .RequireRateLimiting(LoginRateLimitPolicy);
             // LogoutAsync's single-HttpContext-parameter shape matches RequestDelegate closely
             // enough that ASP0016 assumes it might be bound as one (which would discard the
             // IResult and never write the response body). The explicit Delegate cast disambiguates:
             // this is a route handler, not a RequestDelegate.
-            routes.MapPost("/api/auth/logout", (Delegate)LogoutAsync).AllowAnonymous().WithMetadata(new RequestSizeLimitAttribute(4096));
+            routes.MapPost("/api/auth/logout", (Delegate)LogoutAsync).AllowAnonymous().WithMetadata(new RequestSizeLimitAttribute(4096))
+                .RequireRateLimiting(AuthRateLimitPolicy);
         }
 
         return routes;
