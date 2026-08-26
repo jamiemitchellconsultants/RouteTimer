@@ -1,4 +1,5 @@
 @page "/training/{Id:guid}"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize]
 @implements IDisposable
 @using RouteTimer.Client.Api
 @using RouteTimer.Client.Components

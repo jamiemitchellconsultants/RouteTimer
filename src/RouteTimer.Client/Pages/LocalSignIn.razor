@@ -1,0 +1,114 @@
+@page "/signin"
+@layout RouteTimer.Client.Layout.MainLayout
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using RouteTimer.Client.Api
+@using RouteTimer.Client.Auth
+@inject IRouteTimerApiClient Api
+@inject ClientAuthConfig AuthConfig
+@inject NavigationManager Navigation
+@inject IServiceProvider Services
+@attribute [AllowAnonymous]
+
+<PageTitle>@Title | RouteTimer</PageTitle>
+
+<h1>@Title</h1>
+
+@if (AuthConfig.SetupRequired)
+{
+    <p>
+        This installation has no passphrase yet. Choose a passphrase to protect your training data.
+        It is stored on this machine only, and there is no way to recover it — write it down somewhere safe.
+    </p>
+}
+else
+{
+    <p>Enter the passphrase you chose when you first set up this installation.</p>
+}
+
+<form class="local-signin" @onsubmit="SubmitAsync" @onsubmit:preventDefault>
+    <label for="local-signin-passphrase">Passphrase</label>
+    <input id="local-signin-passphrase"
+           data-testid="local-signin-passphrase"
+           type="password"
+           autocomplete="@(AuthConfig.SetupRequired ? "new-password" : "current-password")"
+           value="@passphrase"
+           @onchange="@(args => passphrase = args.Value?.ToString() ?? string.Empty)" />
+
+    @if (AuthConfig.SetupRequired)
+    {
+        <label for="local-signin-confirm">Confirm passphrase</label>
+        <input id="local-signin-confirm"
+               data-testid="local-signin-confirm"
+               type="password"
+               autocomplete="new-password"
+               value="@confirmation"
+               @onchange="@(args => confirmation = args.Value?.ToString() ?? string.Empty)" />
+    }
+
+    @if (error is not null)
+    {
+        <p data-testid="local-signin-error" class="local-signin__error">@error</p>
+    }
+
+    <button data-testid="local-signin-submit" type="submit" disabled="@isSubmitting">
+        @(isSubmitting ? "Working…" : Title)
+    </button>
+</form>
+
+@code {
+    private string passphrase = string.Empty;
+    private string confirmation = string.Empty;
+    private string? error;
+    private bool isSubmitting;
+
+    private string Title => AuthConfig.SetupRequired ? "Choose a passphrase" : "Sign in";
+
+    private async Task SubmitAsync()
+    {
+        if (isSubmitting)
+        {
+            return;
+        }
+
+        error = null;
+
+        if (AuthConfig.SetupRequired && !string.Equals(passphrase, confirmation, StringComparison.Ordinal))
+        {
+            error = "The two passphrases do not match.";
+            return;
+        }
+
+        isSubmitting = true;
+        try
+        {
+            if (AuthConfig.SetupRequired)
+            {
+                await Api.SetupLocalCredentialAsync(passphrase, CancellationToken.None);
+            }
+            else
+            {
+                await Api.LocalLoginAsync(passphrase, CancellationToken.None);
+            }
+
+            if (Services.GetService(typeof(LocalAuthenticationStateProvider)) is LocalAuthenticationStateProvider provider)
+            {
+                provider.NotifySessionChanged();
+            }
+
+            Navigation.NavigateTo("/", forceLoad: true);
+        }
+        catch (ApiProblemException problem)
+        {
+            error = problem.Detail;
+        }
+        catch (HttpRequestException)
+        {
+            error = "RouteTimer could not be reached. Check that the container is still running.";
+        }
+        finally
+        {
+            isSubmitting = false;
+        }
+    }
+}

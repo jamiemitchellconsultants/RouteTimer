@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using RouteTimer.Contracts.Auth;
 using RouteTimer.Contracts.Jobs;
 using RouteTimer.Contracts.Models;
 using RouteTimer.Contracts.Predictions;
@@ -63,6 +64,24 @@ public sealed class RouteTimerApiClient(HttpClient httpClient) : IRouteTimerApiC
         using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/logout");
         using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         await EnsureSuccessAsync(response, ct);
+    }
+
+    public async Task<bool> SetupLocalCredentialAsync(string passphrase, CancellationToken ct)
+    {
+        using var content = JsonContent.Create(new SetLocalCredentialRequest(passphrase), options: JsonOptions);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/setup") { Content = content };
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        await EnsureSuccessAsync(response, ct);
+        return true;
+    }
+
+    public async Task<bool> LocalLoginAsync(string passphrase, CancellationToken ct)
+    {
+        using var content = JsonContent.Create(new LocalLoginRequest(passphrase), options: JsonOptions);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/login") { Content = content };
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        await EnsureSuccessAsync(response, ct);
+        return true;
     }
 
     private async Task<T> GetRequiredAsync<T>(string path, CancellationToken ct) =>
