@@ -1,0 +1,196 @@
+@using RouteTimer.Client.Formatting
+@using RouteTimer.Client.RouteBuilder
+@using RouteTimer.Client.RoutePacer
+@using RouteTimer.Contracts.Predictions
+@implements IDisposable
+@implements IAsyncDisposable
+@inject PaceTrackerQrInterop Qr
+@inject BrowserInterop Browser
+@inject TimeProvider Time
+
+<div class="pacetracker-handoff" data-testid="prediction-pacetracker-handoff">
+    @if (hasExpired)
+    {
+        <p data-testid="pacetracker-expired">
+            This code has expired. PaceTracker links last ten minutes, so create a new one when you
+            are ready to scan it.
+        </p>
+        <button type="button"
+                class="predictions-button predictions-button--secondary"
+                data-testid="pacetracker-recreate"
+                @onclick="OnRecreate">Create a new code</button>
+    }
+    else
+    {
+        <p data-testid="pacetracker-instruction">
+            Scan this code with your phone's camera to open this route in PaceTracker.
+        </p>
+        <div class="pacetracker-handoff__code" data-testid="pacetracker-qr" @ref="qrElement"></div>
+        <p data-testid="pacetracker-expiry">
+            This code stops working at @RouteTimerFormat.Timestamp(Handoff.ExpiresAt)
+            (@Handoff.ExpiresAt.ToUniversalTime().ToString("HH:mm 'UTC'")).
+        </p>
+        <p class="pacetracker-handoff__privacy">
+            The route is held on the PaceTracker relay in readable form until it is opened, or for
+            ten minutes at most.
+        </p>
+    }
+
+    <div class="pacetracker-handoff__actions">
+        <button type="button"
+                class="predictions-button predictions-button--secondary"
+                data-testid="pacetracker-copy"
+                disabled="@hasExpired"
+                @onclick="CopyAsync">@(copied ? "Link copied" : "Copy link")</button>
+        @if (!hasExpired)
+        {
+            <a class="predictions-button predictions-button--secondary"
+               data-testid="pacetracker-open-here"
+               href="@Handoff.Url"
+               target="_blank"
+               rel="noopener noreferrer">Open on this device</a>
+        }
+        <button type="button"
+                class="predictions-button predictions-button--secondary"
+                data-testid="pacetracker-close"
+                @onclick="OnClose">Close</button>
+    </div>
+
+    <p class="pacetracker-handoff__fallback">
+        No phone to hand?
+        <a data-testid="pacetracker-manual-download" href="@TimedGpxDownloadUrl">Download the timed GPX</a>
+        and transfer it yourself.
+    </p>
+</div>
+
+@code {
+    private ElementReference qrElement;
+    private RoutePacerHandoffResponse? rendered;
+    private CancellationTokenSource? expiryCancellation;
+    private bool hasExpired;
+    private bool copied;
+
+    [Parameter, EditorRequired]
+    public RoutePacerHandoffResponse Handoff { get; set; } = default!;
+
+    /// <summary>
+    /// Supplied by the page from the server's status response rather than read out of
+    /// <see cref="Handoff"/>: the QR module checks the link against this, so a link that does not
+    /// match the origin the client was told to expect is never turned into a scannable code.
+    /// </summary>
+    [Parameter, EditorRequired]
+    public string RoutePacerOrigin { get; set; } = string.Empty;
+
+    [Parameter, EditorRequired]
+    public string TimedGpxDownloadUrl { get; set; } = string.Empty;
+
+    [Parameter]
+    public EventCallback OnRecreate { get; set; }
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        if (rendered is not null && rendered.Url == Handoff.Url && rendered.ExpiresAt == Handoff.ExpiresAt)
+        {
+            return;
+        }
+
+        copied = false;
+        hasExpired = Time.GetUtcNow() >= Handoff.ExpiresAt;
+        ScheduleExpiry();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (hasExpired
+            || (rendered is not null && rendered.Url == Handoff.Url && rendered.ExpiresAt == Handoff.ExpiresAt))
+        {
+            return;
+        }
+
+        var current = Handoff;
+        try
+        {
+            // Cleared first: a replacement code must not appear alongside the superseded one, which
+            // a rider could still scan into a payload that is about to be consumed or expire.
+            await Qr.ClearAsync(qrElement);
+            await Qr.RenderAsync(qrElement, current.Url, RoutePacerOrigin, Time.GetUtcNow(), current.ExpiresAt);
+            rendered = current;
+        }
+        catch (JSException)
+        {
+            // The module refused the link -- wrong origin, wrong path, or already expired. Showing
+            // the expired state is the honest outcome: there is no code to scan either way.
+            rendered = current;
+            hasExpired = true;
+            StateHasChanged();
+        }
+    }
+
+    // One scheduled transition against the injected TimeProvider, rather than a polling timer: the
+    // component needs to flip to expired exactly once, and a test needs to reach that state without
+    // waiting ten real minutes.
+    private void ScheduleExpiry()
+    {
+        expiryCancellation?.Cancel();
+        expiryCancellation?.Dispose();
+        expiryCancellation = null;
+
+        if (hasExpired)
+        {
+            return;
+        }
+
+        var remaining = Handoff.ExpiresAt - Time.GetUtcNow();
+        var cancellation = new CancellationTokenSource();
+        expiryCancellation = cancellation;
+        _ = ExpireAfterAsync(remaining, cancellation.Token);
+    }
+
+    private async Task ExpireAfterAsync(TimeSpan remaining, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(remaining, Time, cancellationToken);
+            await InvokeAsync(() =>
+            {
+                hasExpired = true;
+                StateHasChanged();
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            // Replaced or disposed.
+        }
+        catch (ObjectDisposedException)
+        {
+            // The renderer went away between the delay completing and the update running.
+        }
+    }
+
+    private async Task CopyAsync()
+    {
+        if (hasExpired)
+        {
+            return;
+        }
+
+        await Browser.CopyToClipboardAsync(Handoff.Url);
+        copied = true;
+    }
+
+    public void Dispose()
+    {
+        expiryCancellation?.Cancel();
+        expiryCancellation?.Dispose();
+        expiryCancellation = null;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Dispose();
+        await Qr.DisposeAsync();
+    }
+}
