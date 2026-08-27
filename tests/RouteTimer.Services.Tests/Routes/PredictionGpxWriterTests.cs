@@ -39,8 +39,24 @@ public sealed class PredictionGpxWriterTests
             Segment(0, 51.4085000, -0.3064000, 12.4, 0),
             Segment(1, 51.4090000, -0.3070000, 15.0, 90)), timed: true);
 
-        Assert.Contains("<time>2026-08-26T08:00:00Z</time>", gpx, StringComparison.Ordinal);
-        Assert.Contains("<time>2026-08-26T08:01:30Z</time>", gpx, StringComparison.Ordinal);
+        Assert.Contains("<time>2026-08-26T08:00:00.000Z</time>", gpx, StringComparison.Ordinal);
+        Assert.Contains("<time>2026-08-26T08:01:30.000Z</time>", gpx, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Does_not_duplicate_timestamps_for_sub_second_segments()
+    {
+        var gpx = PredictionGpxWriter.Write(Source(
+            Segment(0, 51.4085000, -0.3064000, 12.4, 0),
+            Segment(1, 51.4086000, -0.3065000, 12.6, 0.4),
+            Segment(2, 51.4087000, -0.3066000, 12.8, 0.8)), timed: true);
+
+        var times = gpx.Split('\n')
+            .Where(line => line.Contains("<time>", StringComparison.Ordinal))
+            .Skip(1) // metadata/time
+            .ToList();
+
+        Assert.Equal(times.Count, times.Distinct(StringComparer.Ordinal).Count());
     }
 
     [Fact]

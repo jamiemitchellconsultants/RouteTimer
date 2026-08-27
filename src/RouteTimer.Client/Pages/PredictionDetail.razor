@@ -42,6 +42,11 @@ else
                    class="predictions-button predictions-button--secondary"
                    href="@($"/api/predictions/{Id}/gpx?timed=true")">Download GPX with predicted times</a>
             </div>
+            <p>
+                If Garmin Connect rejects a manually uploaded GPX file, try uploading it as an
+                activity instead of a course, then save that activity as a course — this works
+                around upload errors some GPX importers report for course uploads.
+            </p>
 
             <div class="prediction-detail-actions">
                 <label>
