@@ -163,3 +163,46 @@ relay, which riders see as an error rather than as a feature that is simply not 
 
 Neither secret needs to be removed to disable the feature, but rotate the upload credential if the
 reason for the rollback was a suspected leak.
+
+## 9. Readiness gate — current status: **NO-GO**
+
+Checked 2026-08-28 against RouteTimer commit on `feat/open-in-pacetracker` and the RoutePacer
+working tree. **Do not enable in production until the blocking item below is resolved.**
+
+### Blocking: RoutePacer rejects the contract's `src` value
+
+Both specs freeze the first query key as `src=rt`, and both repositories' canonicalizers sign the
+literal `rt` as the first canonical line — those agree. But RoutePacer's invocation parser requires
+the *query parameter* to equal `RouteTimer`:
+
+```
+src/RoutePacer.App/Invocation/InvocationParser.cs
+    values["src"] != "RouteTimer"   // rejects the contract's src=rt
+```
+
+Every link RouteTimer produces would be refused as `Invalid invocation query` before its signature
+is ever checked. RoutePacer's own `InvocationCanonicalizer` uses `rt`, so the parser contradicts
+the format it verifies against — the defect is internal to RoutePacer and the fix belongs there,
+not here. RouteTimer emits what both specs and the shared canonical form require.
+
+### Verified as agreeing
+
+- Canonical byte sequence: `rt\n1\n{payload}\n{name}\n{unix-ms}`, no trailing newline.
+- Query key set and order: `src`, `v`, `payload`, `name`, `ts`, `sig`, each once.
+- Payload URL shape: HTTPS, same origin, `/api/handoffs/{43-char base64url}`, no query or fragment.
+- Signature encoding: 64-byte IEEE-P1363, unpadded base64url, rejected if either differs.
+- RouteTimer's interop fixture is internally consistent — its recorded signature verifies against
+  its own public key over its own canonical bytes.
+
+### Not yet run
+
+RoutePacer holds no mirrored copy of
+`tests/RouteTimer.Services.Tests/RoutePacer/Fixtures/routepacer-contract-v1.json`, so the
+byte-for-byte fixture comparison and the mutated-field rejection tests are outstanding. Steps 2 and
+3 of the readiness gate — the production-like private-to-public flow on a real phone, the
+single-use `404` on second fetch, the ten-minute expiry check, and the log inspection — need a
+deployed relay and have not been performed.
+
+Record only aggregate status, tested commit identifiers, origins, and timestamps when this gate is
+re-run. Never the fixture private key, production secrets, live tokens, signed URLs, route names,
+or GPX content.
