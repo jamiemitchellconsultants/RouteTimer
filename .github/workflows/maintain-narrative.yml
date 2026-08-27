@@ -1,0 +1,22 @@
+name: Maintain project narrative
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  maintain:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: jamiemitchellconsultants/Narrative@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          required-label: narrative-required
