@@ -9,6 +9,7 @@ using RouteTimer.Client.Api;
 using RouteTimer.Client.Auth;
 using RouteTimer.Client.Jobs;
 using RouteTimer.Client.Logging;
+using RouteTimer.Client.RoutePacer;
 using RouteTimer.Client.RouteBuilder;
 using RouteTimer.Client;
 using RouteTimer.Contracts.Auth;
@@ -63,6 +64,7 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<ActionLog>();
 builder.Services.AddScoped<DirectionsInterop>();
 builder.Services.AddScoped<BrowserInterop>();
+builder.Services.AddScoped<PaceTrackerQrInterop>();
 builder.Services.AddScoped<ShortLinkClient>();
 
 await builder.Build().RunAsync();

@@ -4,10 +4,14 @@
   "type": "module",
   "scripts": {
     "build:vendor": "node scripts/build-vendor.mjs",
-    "test": "node --test wwwroot/js/route-visualization.test.mjs"
+    "test": "node --test wwwroot/js/route-visualization.test.mjs wwwroot/js/pace-tracker-qr.test.mjs"
   },
   "dependencies": {
     "chart.js": "4.5.1",
-    "leaflet": "1.9.4"
+    "leaflet": "1.9.4",
+    "qrcode": "1.5.4"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.9"
   }
 }
