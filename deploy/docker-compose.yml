@@ -51,6 +51,22 @@ services:
       # Optional, unlike the Garmin key above: RouteTimer starts fine without it, and saving a
       # Google Maps API key is simply unavailable until this is set.
       GoogleMaps__KeyEncryptionKey: ${ROUTETIMER_GOOGLE_MAPS_KEY_ENCRYPTION_KEY:-}
+      # "Open in PaceTracker". Off unless deliberately enabled, and both values below are
+      # deliberately plain :- expansions rather than :? guards: with the feature disabled an empty
+      # expansion is correct, and with it enabled the application's own startup validation rejects
+      # the empty value and stops the container. That keeps "enabled but unconfigured" a startup
+      # failure rather than a rider-facing one.
+      #
+      # Both live in an untracked, permission-restricted deploy/.env -- never in this file. The PEM
+      # is multi-line, so write it in .env with single quotes around the whole value, opening the
+      # quote before the PEM's first BEGIN line and closing it after its last END line, with the
+      # base64 body in between exactly as generated. No placeholder is shown here on purpose:
+      # tracked files hold no key material, real or example.
+      #
+      # See docs/routepacer-handoff.md for key generation and the deployment order.
+      RoutePacerHandoff__Enabled: ${ROUTEPACER_HANDOFF_ENABLED:-false}
+      RoutePacerHandoff__RelayUploadKey: ${ROUTEPACER_RELAY_UPLOAD_KEY:-}
+      RoutePacerHandoff__SigningPrivateKeyPem: ${ROUTEPACER_SIGNING_PRIVATE_KEY_PEM:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
       interval: 10s

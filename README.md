@@ -34,7 +34,10 @@ presentation only.
    time, with a map and elevation/gradient/power/speed profiles.
 3. **Take the result with you.** Download a completed prediction as a GPX file — plain, or with
    predicted times stamped on each point — or send it directly to Garmin Connect as a course if you
-   have a Garmin account connected.
+   have a Garmin account connected. Where the deployment enables it, "Open in PaceTracker" shows a
+   QR code you scan with your phone to open the route in PaceTracker directly; the code works for
+   ten minutes and once only. Downloading the timed GPX and transferring it yourself does the same
+   job without a relay, and stays available whether or not that integration is switched on.
 
 Connecting Garmin is optional throughout; everything above works from manually uploaded FIT and GPX
 files alone.
