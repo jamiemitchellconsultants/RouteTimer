@@ -178,6 +178,24 @@ builder.Services.AddHttpClient<IRoutePacerRelayClient, RoutePacerRelayClient>((s
     UseCookies = false
 })
 .RedactLoggedHeaders(["Authorization"]);
+builder.Services.AddSingleton(sp =>
+{
+    var options = sp.GetRequiredService<IOptions<RoutePacerHandoffOptions>>().Value;
+    return new RoutePacerHandoffConfiguration(
+        options.Enabled,
+        new Uri(options.RoutePacerBaseUrl, UriKind.Absolute));
+});
+// A disabled deployment configures no key, so there is nothing to import -- but the container
+// must still build. The disabled signer throws if it is ever reached, which the handoff service's
+// enabled-first check makes unreachable.
+builder.Services.AddSingleton<IRoutePacerInvocationSigner>(sp =>
+{
+    var options = sp.GetRequiredService<IOptions<RoutePacerHandoffOptions>>().Value;
+    return options.Enabled
+        ? EcdsaRoutePacerInvocationSigner.FromPem(options.SigningPrivateKeyPem)
+        : new DisabledRoutePacerInvocationSigner();
+});
+builder.Services.AddScoped<RoutePacerHandoffService>();
 
 builder.Services.AddSingleton<IGpxRouteParser, GpxRouteParser>();
 builder.Services.AddSingleton<IRouteProcessor>(_ => new RouteProcessor(RouteProcessingOptions.Default));
@@ -411,6 +429,7 @@ app.MapModelsEndpoints();
 app.MapPredictionEndpoints();
 app.MapJobEndpoints();
 app.MapGarminEndpoints();
+app.MapRoutePacerEndpoints();
 app.MapRouteEndpoints();
 app.MapSettingsEndpoints();
 app.MapAuthEndpoints(authMode);
