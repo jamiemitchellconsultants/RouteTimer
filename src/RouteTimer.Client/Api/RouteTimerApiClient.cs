@@ -141,6 +141,18 @@ public sealed class RouteTimerApiClient(HttpClient httpClient) : IRouteTimerApiC
     public Task<GoogleMapsKeyResponse> UseGoogleMapsKeyAsync(CancellationToken ct) =>
         SendAsync<GoogleMapsKeyResponse>(HttpMethod.Post, "/api/settings/google-maps-key/use", content: null, ct);
 
+    public Task<RoutePacerStatusResponse> GetRoutePacerStatusAsync(CancellationToken ct) =>
+        GetRequiredAsync<RoutePacerStatusResponse>("/api/routepacer/status", ct);
+
+    // No request body: the prediction id in the path is the whole request, and the server owns
+    // every other input -- the GPX, the relay origin, and the signing key.
+    public Task<RoutePacerHandoffResponse> CreateRoutePacerHandoffAsync(Guid predictionId, CancellationToken ct) =>
+        SendAsync<RoutePacerHandoffResponse>(
+            HttpMethod.Post,
+            $"/api/predictions/{predictionId}/routepacer-handoff",
+            content: null,
+            ct);
+
     private async Task<T> GetRequiredAsync<T>(string path, CancellationToken ct) =>
         await SendAsync<T>(HttpMethod.Get, path, content: null, ct);
 

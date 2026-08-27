@@ -546,6 +546,66 @@ public sealed class RouteTimerApiClientTests
         Assert.Equal("correct horse battery staple", payload?.Passphrase);
     }
 
+    [Fact]
+    public async Task GetRoutePacerStatusAsync_gets_the_status_endpoint()
+    {
+        HttpRequestMessage? captured = null;
+        var client = CreateApiClient((request, _) =>
+        {
+            captured = request;
+            return Task.FromResult(JsonResponse(new RoutePacerStatusResponse(true, "https://pacetracking.tqaentry.com")));
+        });
+
+        var status = await client.GetRoutePacerStatusAsync(CancellationToken.None);
+
+        Assert.Equal(HttpMethod.Get, captured!.Method);
+        Assert.Equal("/api/routepacer/status", captured.RequestUri!.AbsolutePath);
+        Assert.True(status.Enabled);
+        Assert.Equal("https://pacetracking.tqaentry.com", status.RoutePacerOrigin);
+    }
+
+    [Fact]
+    public async Task CreateRoutePacerHandoffAsync_posts_an_empty_body_to_the_prediction()
+    {
+        var predictionId = Guid.Parse("2f1a5b7c-0d3e-4f10-9a2b-3c4d5e6f7a8b");
+        var expiresAt = DateTimeOffset.Parse("2026-08-27T12:10:00Z", CultureInfo.InvariantCulture);
+        HttpRequestMessage? captured = null;
+        var client = CreateApiClient((request, _) =>
+        {
+            captured = request;
+            return Task.FromResult(JsonResponse(new RoutePacerHandoffResponse("https://pacetracking.tqaentry.com/open?src=rt", expiresAt)));
+        });
+
+        var handoff = await client.CreateRoutePacerHandoffAsync(predictionId, CancellationToken.None);
+
+        Assert.Equal(HttpMethod.Post, captured!.Method);
+        Assert.Equal($"/api/predictions/{predictionId}/routepacer-handoff", captured.RequestUri!.AbsolutePath);
+        Assert.Null(captured.Content);
+        Assert.Equal("https://pacetracking.tqaentry.com/open?src=rt", handoff.Url);
+        Assert.Equal(expiresAt, handoff.ExpiresAt);
+    }
+
+    // Both operations must go through the shared failure path, or the prediction page would have
+    // to handle a raw HttpRequestException it has no message for.
+    [Fact]
+    public async Task RoutePacer_operations_surface_problem_details_as_ApiProblemException()
+    {
+        var client = CreateApiClient((_, _) => Task.FromResult(ProblemResponse(
+            HttpStatusCode.ServiceUnavailable,
+            """
+            {"status":503,"title":"Unavailable","detail":"The PaceTracker relay is busy.","code":"routepacer-relay-rate-limited"}
+            """)));
+
+        var status = await Assert.ThrowsAsync<ApiProblemException>(
+            () => client.GetRoutePacerStatusAsync(CancellationToken.None));
+        var handoff = await Assert.ThrowsAsync<ApiProblemException>(
+            () => client.CreateRoutePacerHandoffAsync(Guid.NewGuid(), CancellationToken.None));
+
+        Assert.Equal("routepacer-relay-rate-limited", status.Code);
+        Assert.Equal("routepacer-relay-rate-limited", handoff.Code);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, handoff.StatusCode);
+    }
+
     private static RouteTimerApiClient CreateApiClient(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler) =>
         new(new HttpClient(new DelegateHandler(handler)) { BaseAddress = new Uri("https://example.test", UriKind.Absolute) });
 
