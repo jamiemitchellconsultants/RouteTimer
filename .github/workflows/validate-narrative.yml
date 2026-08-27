@@ -1,0 +1,21 @@
+name: Validate project narrative
+
+on:
+  pull_request:
+    paths:
+      - ".project-narrative.json"
+      - "narrative/**"
+      - "Narrative.md"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate fragments and compiled narrative
+        uses: jamiemitchellconsultants/Narrative@main
+        with:
+          mode: check
