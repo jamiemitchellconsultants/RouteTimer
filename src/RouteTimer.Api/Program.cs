@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.StaticFiles;
+using Microsoft.Extensions.Options;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
 using RouteTimer.Api;
@@ -14,6 +15,7 @@ using RouteTimer.Api.Routing;
 using RouteTimer.Contracts.Errors;
 using RouteTimer.Api.Endpoints;
 using RouteTimer.Api.Garmin;
+using RouteTimer.Api.RoutePacer;
 using RouteTimer.Api.Security;
 using RouteTimer.Api.Workers;
 using RouteTimer.Contracts.Uploads;
@@ -31,6 +33,7 @@ using RouteTimer.Services.Security;
 using RouteTimer.Services.Settings;
 using RouteTimer.Services.Training;
 using RouteTimer.Services.Jobs;
+using RouteTimer.Services.RoutePacer;
 using RouteTimer.Services.Routes;
 using RouteTimer.Services.Validation;
 
@@ -151,6 +154,30 @@ builder.Services.AddHttpClient<ShortLinkResolutionService>(client =>
     AllowAutoRedirect = false,
     UseCookies = false
 });
+
+// Fail closed at startup rather than on a rider's first handoff: an enabled deployment whose
+// secrets expanded to empty strings -- the exact shape a missing .env produces -- must not boot.
+builder.Services.AddOptions<RoutePacerHandoffOptions>()
+    .Bind(builder.Configuration.GetSection(RoutePacerHandoffOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<RoutePacerHandoffOptions>, RoutePacerHandoffOptionsValidator>();
+// Resolved eagerly through IOptions so the typed relay client -- which takes the settled options
+// rather than a monitor -- gets a value that has already been through ValidateOnStart.
+builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<RoutePacerHandoffOptions>>().Value);
+builder.Services.AddHttpClient<IRoutePacerRelayClient, RoutePacerRelayClient>((sp, client) =>
+{
+    var options = sp.GetRequiredService<IOptions<RoutePacerHandoffOptions>>().Value;
+    client.BaseAddress = new Uri(options.RoutePacerBaseUrl, UriKind.Absolute);
+    client.Timeout = TimeSpan.FromSeconds(30);
+})
+.ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    // Redirects are off so the bearer upload credential can never be replayed to another host,
+    // and cookies are off because nothing about this outbound call is a session.
+    AllowAutoRedirect = false,
+    UseCookies = false
+})
+.RedactLoggedHeaders(["Authorization"]);
 
 builder.Services.AddSingleton<IGpxRouteParser, GpxRouteParser>();
 builder.Services.AddSingleton<IRouteProcessor>(_ => new RouteProcessor(RouteProcessingOptions.Default));
