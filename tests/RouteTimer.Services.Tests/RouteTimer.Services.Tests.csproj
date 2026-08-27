@@ -20,6 +20,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Update="RoutePacer/Fixtures/routepacer-contract-v1.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\RouteTimer.Services\RouteTimer.Services.csproj" />
   </ItemGroup>
 
