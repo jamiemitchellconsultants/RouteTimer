@@ -9,6 +9,7 @@ This document records what was asked, what was decided, why, and what followed.
 | # | Date | Title | Kind | Decision summary |
 |---|---|---|---|---|
 | [1](#entry-plan-private-to-phone-pacetracker-relay-handoff) | 2026-08-27 | Plan private-to-phone PaceTracker relay handoff | product | Use a public, same-origin RoutePacer handoff relay. Private RouteTimer generates the timed GPX and uploads it outbound over HTTPS using a server-side relay credential. |
+| [2](#entry-docs-add-pacing-strategy-implementation-plans) | 2026-08-27 | docs: add pacing strategy implementation plans | product | Document five strategy designs in-repo: 1. Segment-Specific Gains 2. Normalized Power / IF Target 3. Time Target Mode 4. RPE / Zone Shift 5. |
 
 ---
 
@@ -33,3 +34,31 @@ Rejected alternatives are a public RouteTimer payload endpoint, LAN/private-netw
 RouteTimer remains private and gains no anonymous endpoint, inbound port, public hostname, or CORS policy. RoutePacer must gain a public ASP.NET Core/PostgreSQL relay, upload authentication, atomic one-time consumption, retention cleanup, privacy disclosure, deployment controls, and updated Contract v1 intake. The two repositories coordinate through a frozen HTTP contract and shared valid/tampered fixtures.
 
 The relay can read route/location data during the ten-minute window, so logs and backups must exclude payload contents, credentials, tokens, signed URLs, route names, and invocation queries. Rollout requires configuring a shared relay upload credential plus RouteTimer's private signing key and RoutePacer's corresponding public JWK before enabling either side.
+
+---
+
+<a id="entry-docs-add-pacing-strategy-implementation-plans"></a>
+
+## Entry 2 — 2026-08-27 — docs: add pacing strategy implementation plans
+
+*Kind: product. Status: accepted.*
+
+## Context
+
+RouteTimer needs an implementation-ready plan for expanding route prediction beyond baseline power-model simulation into explicit pacing modes. We needed a structured decision record covering how each strategy fits the existing prediction pipeline (`PredictionSubmissionService` → `PredictionJobHandler` → `RoutePredictor`), what persistence and contract changes are required, and how to roll these changes out safely without destabilizing current behavior.
+
+## Decision
+
+Document five strategy designs in-repo:
+
+1. Segment-Specific Gains
+2. Normalized Power / IF Target
+3. Time Target Mode
+4. RPE / Zone Shift
+5. Variable Match-Burning
+
+Plus one cross-cutting rollout document that defines shared infrastructure (strategy union/contracts, adjusted-segment persistence, handler abstraction, feature flags), migration sequencing, and recommended delivery order.
+
+## Consequences
+
+The repo now has a concrete, reviewable blueprint for staged implementation, including explicit trade-offs and edge-case handling before code execution begins. This improves delivery alignment across backend/API/UI workstreams and reduces design drift, but it also establishes architecture expectations (strategy metadata persistence, adjusted result shape, and shared strategy plumbing) that implementation PRs must now follow or consciously revise through a new narrative correction path.
