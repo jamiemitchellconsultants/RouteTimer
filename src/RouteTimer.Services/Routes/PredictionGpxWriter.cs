@@ -71,7 +71,7 @@ public static partial class PredictionGpxWriter
                 // activity rather than a route, so the variant Garmin receives carries none.
                 if (timed)
                 {
-                    writer.WriteElementString("time", Namespace, Instant(source.StartAt + segment.CumulativeMovingTime));
+                    writer.WriteElementString("time", Namespace, PreciseInstant(source.StartAt + segment.CumulativeMovingTime));
                 }
 
                 writer.WriteEndElement();
@@ -99,4 +99,10 @@ public static partial class PredictionGpxWriter
 
     private static string Instant(DateTimeOffset value) =>
         value.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
+
+    // Whole-second precision collapses consecutive trkpt timestamps to the same value whenever a
+    // rider covers a sample in under a second (dense input points at riding speed), and Garmin
+    // Connect rejects a track with duplicate/non-increasing times with a generic upload error.
+    private static string PreciseInstant(DateTimeOffset value) =>
+        value.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture);
 }
