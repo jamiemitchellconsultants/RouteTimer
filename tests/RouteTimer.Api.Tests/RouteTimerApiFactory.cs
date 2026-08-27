@@ -39,7 +39,10 @@ public sealed class RouteTimerApiFactory(
             // Unlike the Garmin key, Program tolerates this being absent -- key storage just
             // reports unavailable. Set by default so ordinary tests get working storage, and
             // unset via WithSetting(..., null) to exercise the unavailable path specifically.
-            ["GoogleMaps:KeyEncryptionKey"] = DefaultGoogleMapsKeyEncryptionKey
+            ["GoogleMaps:KeyEncryptionKey"] = DefaultGoogleMapsKeyEncryptionKey,
+            // Disabled by default, exactly as tracked appsettings ship it: a test host that has
+            // not deliberately opted in must never hold a signing key or an upload credential.
+            ["RoutePacerHandoff:Enabled"] = "false"
         };
 
     /// <summary>

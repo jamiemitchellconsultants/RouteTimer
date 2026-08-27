@@ -44,4 +44,10 @@ public static class ErrorCodes
     public const string GoogleMapsKeyStorageUnavailable = "google-maps-key-storage-unavailable";
     public const string PredictionNotComplete = "prediction-not-complete";
     public const string GarminCourseRejected = "garmin-course-rejected";
+    public const string RoutePacerHandoffDisabled = "routepacer-handoff-disabled";
+    public const string RoutePacerRelayAuthenticationFailed = "routepacer-relay-authentication-failed";
+    public const string RoutePacerPayloadTooLarge = "routepacer-payload-too-large";
+    public const string RoutePacerRelayRejectedPayload = "routepacer-relay-rejected-payload";
+    public const string RoutePacerRelayRateLimited = "routepacer-relay-rate-limited";
+    public const string RoutePacerRelayUnavailable = "routepacer-relay-unavailable";
 }
