@@ -160,6 +160,31 @@ feature can stop working with no warning; downloading the GPX and importing it m
 
 ---
 
+## Sending a prediction to your phone
+
+If whoever runs your RouteTimer has switched it on, a completed prediction also offers **Open in
+PaceTracker**. Click it and a QR code appears; point your phone's camera at it and PaceTracker
+opens with the route and its predicted pacing already loaded.
+
+Two things about that code are deliberate, and both are visible on screen:
+
+- **It lasts ten minutes.** After that it stops working and the panel offers to make you a new one.
+- **It works once.** Once your phone has fetched the route, the same code will not fetch it again.
+
+To make that work, RouteTimer uploads the route to a public PaceTracker relay and shows you a link
+to it. For those ten minutes the route — including where you start and finish — is readable by
+whoever runs that relay. It is not end-to-end encrypted, and nothing about it is stored longer.
+
+If you would rather not do that, you do not have to: **Download GPX with predicted times** gives
+you the identical file, and you can move it to your phone yourself by AirDrop, Nearby Share, or
+any cloud folder. That path never touches a relay and is always available. The handoff panel links
+to it directly, which is also the answer if the relay is down or the code has expired.
+
+If the button isn't there at all, the integration isn't enabled on your RouteTimer — see
+[`docs/routepacer-handoff.md`](docs/routepacer-handoff.md).
+
+---
+
 ## Contributing a change
 
 The repository is public: fork it, make your change, and open a pull request.
@@ -280,6 +305,46 @@ Garmin and Google Maps encryption keys so a reconnect or re-entering the map key
 docker compose -f deploy/docker-compose.local.yml --env-file deploy/.env.local down -v
 ./run.sh
 ```
+
+---
+
+### "Open in PaceTracker" doesn't appear
+
+The integration is off, or RouteTimer could not read its own handoff status. Both fail the same way
+on purpose: the button hides rather than appearing and then failing. Check that
+`ROUTEPACER_HANDOFF_ENABLED` is `true` in `deploy/.env` and that the container actually started —
+with the feature enabled and a secret missing, RouteTimer refuses to boot rather than run broken.
+The prediction also needs a finished route; a prediction with no segments has nothing to send.
+
+### The code fails with a relay authentication error
+
+RouteTimer's upload credential was rejected by the relay. Re-provision
+`ROUTEPACER_RELAY_UPLOAD_KEY` from RoutePacer and restart RouteTimer. Do not paste the value into a
+terminal, an issue, or a log bundle while diagnosing.
+
+### The code fails with "the relay is busy"
+
+The relay is rate limiting uploads. Wait and retry; the message carries a retry delay when the relay
+supplies one. Meanwhile the timed GPX download works normally.
+
+### The code fails with "the relay is unavailable"
+
+The relay is down, unreachable, or answered with something outside its contract. Check the relay's
+own health. Riders can use the timed GPX download in the meantime, and no route data was left
+anywhere by the failed attempt.
+
+### The QR code has expired
+
+Expected after ten minutes. Click **Create a new code**. If codes seem to expire immediately,
+suspect clock skew: RouteTimer rejects a relay expiry more than ten minutes and thirty seconds
+ahead, so a host clock well out of step with the relay's will fail every handoff. Check NTP on
+both hosts.
+
+### PaceTracker says the link is invalid
+
+The signature did not verify, which almost always means RoutePacer holds the wrong public key.
+Re-export the public JWK from the deployed signing key and compare it with what RoutePacer has.
+Never print or copy the private key while checking this — the public half is all that is needed.
 
 ---
 
