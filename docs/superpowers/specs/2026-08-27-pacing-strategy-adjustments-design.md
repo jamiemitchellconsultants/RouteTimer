@@ -1,7 +1,7 @@
 # Pacing Strategy Adjustments Design
 
 **Date:** 2026-08-27
-**Status:** Approved in conversational design review; awaiting review of this written specification
+**Status:** Approved
 
 ## Purpose
 
