@@ -21,4 +21,8 @@
     <InternalsVisibleTo Include="RouteTimer.Client.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Remove="wwwroot/js/**/*.test.mjs" />
+  </ItemGroup>
+
 </Project>
