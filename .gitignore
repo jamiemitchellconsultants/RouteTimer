@@ -8,6 +8,11 @@ TestResults/
 .env
 .env.*
 !.env.example
+# Private key material. Section 4 of docs/routepacer-handoff.md has the operator generate a
+# P-256 signing key on the deployment host; this repository is public, so an un-ignored .pem in
+# the working tree is one `git add -A` away from publishing it.
+*.pem
+*.jwk
 node_modules/
 wwwroot/vendor/
 src/RouteTimer.Client/wwwroot/vendor/
