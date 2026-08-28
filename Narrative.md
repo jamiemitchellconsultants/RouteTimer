@@ -10,6 +10,7 @@ This document records what was asked, what was decided, why, and what followed.
 |---|---|---|---|---|
 | [1](#entry-plan-private-to-phone-pacetracker-relay-handoff) | 2026-08-27 | Plan private-to-phone PaceTracker relay handoff | product | Use a public, same-origin RoutePacer handoff relay. Private RouteTimer generates the timed GPX and uploads it outbound over HTTPS using a server-side relay credential. |
 | [2](#entry-docs-add-pacing-strategy-implementation-plans) | 2026-08-27 | docs: add pacing strategy implementation plans | product | Document five strategy designs in-repo: 1. Segment-Specific Gains 2. Normalized Power / IF Target 3. Time Target Mode 4. RPE / Zone Shift 5. |
+| [3](#entry-correct-pacing-strategies-to-append-only-adjustments) | 2026-08-27 | Correct pacing strategies to append-only adjustments | correction | Keep each prediction as an immutable baseline and model pacing strategies as multiple append-only child adjustments created only after the baseline succeeds. |
 
 ---
 
@@ -62,3 +63,44 @@ Plus one cross-cutting rollout document that defines shared infrastructure (stra
 ## Consequences
 
 The repo now has a concrete, reviewable blueprint for staged implementation, including explicit trade-offs and edge-case handling before code execution begins. This improves delivery alignment across backend/API/UI workstreams and reduces design drift, but it also establishes architecture expectations (strategy metadata persistence, adjusted result shape, and shared strategy plumbing) that implementation PRs must now follow or consciously revise through a new narrative correction path.
+
+---
+
+<a id="entry-correct-pacing-strategies-to-append-only-adjustments"></a>
+
+## Entry 3 — 2026-08-27 — Correct pacing strategies to append-only adjustments
+
+*Kind: correction. Status: accepted.*
+
+## Context
+
+The accepted entry `docs-add-pacing-strategy-implementation-plans` recorded five useful pacing
+strategies but framed a strategy as part of prediction submission and provided one secondary
+adjusted result. That architecture does not preserve the baseline as the stable primary result from
+which a rider can try and revisit multiple independent alternatives. The drafts also proposed a
+power wrapper that lacks the route context needed for distance rules and used a fixed linear
+W-prime recovery approximation while naming the exponential Skiba model.
+
+## Decision
+
+Keep route submission baseline-only and immutable. After a baseline succeeds, allow multiple
+append-only `PredictionAdjustment` children, each containing exactly one strategy and using the
+baseline's captured route segments, rider model, profile, and assumptions. Add a full-segment
+power-target policy, run search candidates through the complete sequential physics simulation, and
+store typed strategy reports plus adjusted segments beneath each child.
+
+Use exponential W-prime reconstitution for match-burning, remove the undefined EvenEffort
+time-target mode, and keep existing baseline contracts, GPX exports, Garmin actions, warnings, and
+history primary and backward compatible.
+
+## Consequences
+
+Riders can return to one trusted baseline, create multiple strategy alternatives without uploading
+or processing the route again, and delete a child without affecting its siblings. Existing
+succeeded predictions remain eligible because their persisted segments contain the simulation
+inputs.
+
+Implementation gains a distinct adjustment lifecycle, job type, persistence aggregate, nested API,
+feature flags, strategy editors, and comparison UI. Full simulation searches cost more CPU than
+post-hoc scaling but preserve duration-band and sequential-physics correctness. Adjusted GPX/Garmin
+export and composed strategies remain outside this feature.
