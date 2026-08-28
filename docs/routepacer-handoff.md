@@ -164,45 +164,51 @@ relay, which riders see as an error rather than as a feature that is simply not 
 Neither secret needs to be removed to disable the feature, but rotate the upload credential if the
 reason for the rollback was a suspected leak.
 
-## 9. Readiness gate — current status: **NO-GO**
+## 9. Readiness gate — current status: **step 1 passed; steps 2–3 outstanding**
 
-Checked 2026-08-28 against RouteTimer commit on `feat/open-in-pacetracker` and the RoutePacer
-working tree. **Do not enable in production until the blocking item below is resolved.**
+Do not enable in production until steps 2 and 3 below have been run against a deployed relay.
 
-### Blocking: RoutePacer rejects the contract's `src` value
+### Step 1 — contract agreement: **PASS** (2026-08-28)
 
-Both specs freeze the first query key as `src=rt`, and both repositories' canonicalizers sign the
-literal `rt` as the first canonical line — those agree. But RoutePacer's invocation parser requires
-the *query parameter* to equal `RouteTimer`:
+Checked against RouteTimer `36e5a01` (`feat/open-in-pacetracker`) and RoutePacer `8bc3fd4`.
 
-```
-src/RoutePacer.App/Invocation/InvocationParser.cs
-    values["src"] != "RouteTimer"   // rejects the contract's src=rt
-```
+The earlier blocking defect is resolved. RoutePacer's invocation parser previously required
+`src=RouteTimer` while its own canonicalizer signed `rt`, so every link RouteTimer produced was
+refused before its signature was ever checked. RoutePacer now requires `src=rt`, and its tests pin
+that value to the contract rather than to the former behaviour.
 
-Every link RouteTimer produces would be refused as `Invalid invocation query` before its signature
-is ever checked. RoutePacer's own `InvocationCanonicalizer` uses `rt`, so the parser contradicts
-the format it verifies against — the defect is internal to RoutePacer and the fix belongs there,
-not here. RouteTimer emits what both specs and the shared canonical form require.
+Verified directly, not assumed:
 
-### Verified as agreeing
+- The interop fixture is mirrored byte-for-byte. Every contract field — `version`, `publicJwk`,
+  `payloadUrl`, `name`, `issuedUnixMilliseconds`, `canonical`, `signature`, and `invocationUrl` — is
+  identical between this repository's
+  `tests/RouteTimer.Services.Tests/RoutePacer/Fixtures/routepacer-contract-v1.json` and RoutePacer's
+  `docs/contracts/fixtures/route-timer-contract-v1.json`.
+- RoutePacer parses the fixture's `invocationUrl` and verifies its signature over the canonical
+  bytes, recovering the payload URL, name, timestamp, and signature unchanged.
+- RoutePacer rejects the fixture with each signed field mutated — name, timestamp, payload URL, and
+  signature — and rejects it outside its ten-minute validity window.
+- RoutePacer now refuses the former `src=RouteTimer` spelling, so the old behaviour cannot return
+  unnoticed.
+- Full suites pass on both sides: 1,226 tests here, 416 in RoutePacer.
 
-- Canonical byte sequence: `rt\n1\n{payload}\n{name}\n{unix-ms}`, no trailing newline.
-- Query key set and order: `src`, `v`, `payload`, `name`, `ts`, `sig`, each once.
-- Payload URL shape: HTTPS, same origin, `/api/handoffs/{43-char base64url}`, no query or fragment.
-- Signature encoding: 64-byte IEEE-P1363, unpadded base64url, rejected if either differs.
-- RouteTimer's interop fixture is internally consistent — its recorded signature verifies against
-  its own public key over its own canonical bytes.
+Canonical form, query key set and order, payload URL shape, and signature encoding all agree, as
+they did before.
 
-### Not yet run
+### Steps 2 and 3 — **not yet run**
 
-RoutePacer holds no mirrored copy of
-`tests/RouteTimer.Services.Tests/RoutePacer/Fixtures/routepacer-contract-v1.json`, so the
-byte-for-byte fixture comparison and the mutated-field rejection tests are outstanding. Steps 2 and
-3 of the readiness gate — the production-like private-to-public flow on a real phone, the
-single-use `404` on second fetch, the ten-minute expiry check, and the log inspection — need a
-deployed relay and have not been performed.
+Both need a deployed public relay and a real phone, so neither can be completed from a development
+machine:
 
-Record only aggregate status, tested commit identifiers, origins, and timestamps when this gate is
-re-run. Never the fixture private key, production secrets, live tokens, signed URLs, route names,
-or GPX content.
+- the production-like private-to-public flow — create a handoff, scan the QR on a phone, import the
+  route, and confirm the relay returns `404` on a second fetch;
+- the expiry check past ten minutes, and inspection of application and ingress logs for absence of
+  the upload key, payload tokens, payload URLs, invocation query strings, signatures, route names,
+  and GPX content;
+- the disable-first rollback rehearsal from section 8.
+
+Section 6 is the smoke test to run for step 2.
+
+When this gate is re-run, record only aggregate status, tested commit identifiers, origins, and
+timestamps. Never the fixture private key, production secrets, live tokens, signed URLs, route
+names, or GPX content.
