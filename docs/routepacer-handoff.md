@@ -72,21 +72,44 @@ Consequences to hold to:
 Two secrets, both server-side only. Neither ever reaches the browser, a log, a response body, or an
 image layer.
 
-**Signing key.** Generate a P-256 private key in PKCS#8 form:
+**Signing key.** Generate a P-256 private key in PKCS#8 form, on the host that will run
+RouteTimer. Write it straight to a file: a key printed to the terminal is in scrollback, which is
+the screenshot and the log bundle this section tells you to keep it out of.
+
+Generate it **outside this checkout**. `*.pem` is ignored here, but this repository is public and
+an ignore rule is a thinner defence than never putting the file in the tree at all.
 
 ```bash
-openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt
+mkdir -p ~/.routetimer && umask 077 && openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt -out ~/.routetimer/routepacer-signing-key.pem
 ```
 
-Export the matching public JWK for RoutePacer's verifier — this is the only half that leaves
-RouteTimer, and it is public:
+`umask 077` makes the file owner-only from the moment it exists, rather than after a later
+`chmod` that a failed command may never reach. Confirm with `stat -c '%a %n'`
+(`stat -f '%Sp %N'` on macOS) that it reads `600`.
+
+Export the matching **public** JWK for RoutePacer's verifier. This is the only half that leaves
+RouteTimer, and it is public — RoutePacer serves it to every visitor from
+`/api/config/route-timer-invocation`:
 
 ```bash
-openssl ec -in key.pem -pubout
+openssl ec -in ~/.routetimer/routepacer-signing-key.pem -pubout -outform DER 2>/dev/null | tail -c 65 | python3 -c "import sys,base64,json;p=sys.stdin.buffer.read();assert len(p)==65 and p[0]==4,'unexpected point encoding';b=lambda x:base64.urlsafe_b64encode(x).rstrip(b'=').decode();print(json.dumps({'kty':'EC','crv':'P-256','x':b(p[1:33]),'y':b(p[33:])},separators=(',',':')))"
 ```
 
-Give RoutePacer the public key as a JWK with `"kty":"EC"`, `"crv":"P-256"`, and the base64url `x`
-and `y` coordinates. RoutePacer verifies every `/open` request against it.
+`-pubout` alone emits PEM, and RoutePacer requires a JWK, so the conversion is part of the
+procedure rather than left to the operator at the one moment they are holding a live signing key.
+An uncompressed P-256 point is the final 65 bytes of the DER `SubjectPublicKeyInfo` — `0x04`
+followed by 32-byte `X` and `Y` — which the assertion checks before encoding.
+
+The single line it prints is what RoutePacer is given, and it contains no private material:
+
+```json
+{"kty":"EC","crv":"P-256","x":"<base64url>","y":"<base64url>"}
+```
+
+It must stay on one line and contain no `#`: the relay operator seeds it into a `.env`, which
+truncates at a newline and treats ` #` as a comment. RoutePacer refuses a JWK carrying a `d`
+member, so a private key pasted by mistake is rejected rather than published — but do not rely on
+that. If the private half is ever exposed, generate a new pair and reprovision both sides.
 
 **Relay upload credential.** Provisioned by RoutePacer, not generated here. It authenticates
 RouteTimer to `POST /api/handoffs` and nothing else. Rotate it by provisioning the new value on the
