@@ -49,6 +49,9 @@ required.
 Hosting it behind a shared ingress for other people to reach — with real authentication rather than
 a single local passphrase — is a different setup: see [deploy/README.md](deploy/README.md).
 
+See [Contributing.md](Contributing.md) for the contribution workflow, validation commands, and how
+the project Narrative records significant decisions.
+
 ## Design and planning documents
 
 Every feature was designed and planned in writing before being built, under
