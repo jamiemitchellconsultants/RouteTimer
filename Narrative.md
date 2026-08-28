@@ -11,6 +11,7 @@ This document records what was asked, what was decided, why, and what followed.
 | [1](#entry-plan-private-to-phone-pacetracker-relay-handoff) | 2026-08-27 | Plan private-to-phone PaceTracker relay handoff | product | Use a public, same-origin RoutePacer handoff relay. Private RouteTimer generates the timed GPX and uploads it outbound over HTTPS using a server-side relay credential. |
 | [2](#entry-docs-add-pacing-strategy-implementation-plans) | 2026-08-27 | docs: add pacing strategy implementation plans | product | Document five strategy designs in-repo: 1. Segment-Specific Gains 2. Normalized Power / IF Target 3. Time Target Mode 4. RPE / Zone Shift 5. |
 | [3](#entry-correct-pacing-strategies-to-append-only-adjustments) | 2026-08-27 | Correct pacing strategies to append-only adjustments | correction | Keep each prediction as an immutable baseline and model pacing strategies as multiple append-only child adjustments created only after the baseline succeeds. |
+| [4](#entry-docs-adopt-pacing-adjustment-architecture-and-implementation-plan) | 2026-08-28 | docs: adopt pacing adjustment architecture and implementation plan | product | Adopt an immutable baseline with multiple append-only `PredictionAdjustment` children. |
 
 ---
 
@@ -104,3 +105,29 @@ Implementation gains a distinct adjustment lifecycle, job type, persistence aggr
 feature flags, strategy editors, and comparison UI. Full simulation searches cost more CPU than
 post-hoc scaling but preserve duration-band and sequential-physics correctness. Adjusted GPX/Garmin
 export and composed strategies remain outside this feature.
+
+---
+
+<a id="entry-docs-adopt-pacing-adjustment-architecture-and-implementation-plan"></a>
+
+## Entry 4 — 2026-08-28 — docs: adopt pacing adjustment architecture and implementation plan
+
+*Kind: product. Status: accepted.*
+
+## Context
+
+The accepted `docs-add-pacing-strategy-implementation-plans` entry documented five useful strategies, but its strategy-at-submission and single-adjusted-result framing does not preserve one trusted baseline from which a rider can create, retain, revisit, and compare multiple alternatives. The earlier drafts also left important simulation details ambiguous, including route context for policies, full-physics search behavior, and W-prime recovery.
+
+This pull request carries the required explicit `kind: correction` fragment for that reversal. The merge-time narrative records the additional product decision to adopt the detailed architecture and staged implementation sequence.
+
+## Decision
+
+Adopt an immutable baseline with multiple append-only `PredictionAdjustment` children. Create adjustments only after a baseline succeeds, apply exactly one strategy to each child, use the baseline's captured route/model/profile inputs, and keep baseline history, exports, and Garmin actions primary and backward compatible.
+
+Implement the work through the plan's shared-infrastructure foundation and independently releasable strategy slices: segment gains, time target, NP/IF target, zone targeting, and variable match-burning. Require full sequential-physics simulations for search candidates, exponential W-prime reconstitution, default-off feature flags, and review checkpoints with fresh verification.
+
+## Consequences
+
+Riders can always return to the primary prediction and try different adjustment strategies without replacing earlier results or reprocessing the route. Existing succeeded predictions remain eligible, while failed, deleted, or disabled adjustments cannot mutate their baseline or siblings.
+
+The implementation adds a dedicated adjustment aggregate, durable job type, nested API, strategy reports, adjusted segments, and comparison UI. It also increases schema, worker, testing, and operational complexity; full-simulation searches cost more CPU, match-burning remains an estimate, composed strategies and adjusted exports remain out of scope, and every capability stays disabled until its vertical slice passes its rollout gate.
