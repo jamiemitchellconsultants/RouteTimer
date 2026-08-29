@@ -14,6 +14,7 @@ This document records what was asked, what was decided, why, and what followed.
 | [4](#entry-docs-adopt-pacing-adjustment-architecture-and-implementation-plan) | 2026-08-28 | docs: adopt pacing adjustment architecture and implementation plan | product | Adopt an immutable baseline with multiple append-only `PredictionAdjustment` children. |
 | [5](#entry-open-in-pacetracker-hand-a-prediction-to-a-phone-from-a-private-routetim) | 2026-08-28 | Open in PaceTracker: hand a prediction to a phone from a private RouteTimer | product | Invert the direction. RouteTimer makes one **outbound** HTTPS call to a public RoutePacer relay, uploads the timed GPX, and receives a single-use payload URL with a fixed ten-minute lifetime. |
 | [6](#entry-chore-remove-the-open-in-pacetracker-handoff) | 2026-08-29 | chore: remove the Open in PaceTracker handoff | product | Remove the endpoints, options and validator, the relay client, both invocation signers, the QR interop and component, the contracts, the six error codes, and every test covering them. `qrcode` and `esbuild` go with it. |
+| [7](#entry-docs-split-pacing-adjustment-plan-into-per-task-files) | 2026-08-29 | docs: split pacing adjustment plan into per-task files | product | Split the plan into a `README.md` (goal, architecture, constraints, target file map, task index, and execution checkpoints) plus one Markdown file per task, each self-contained with its own file list, TDD steps, and commit command. |
 
 ---
 
@@ -245,3 +246,23 @@ Riders keep the capability. **Download GPX with predicted times** and move the f
 RouteTimer no longer holds a signing key or an upload credential, so `deploy/.env` loses three variables and the deployment loses a class of secret entirely. Anyone who provisioned a P-256 key for this can discard it.
 
 RoutePacer's side is removed in its PR #18, which also deletes PostgreSQL — the relay was the only thing using it there. The frozen contract, its fixture, and the coordinated rollout document go with it, so restoring this feature means starting from the multi-tenant design that was never built.
+
+---
+
+<a id="entry-docs-split-pacing-adjustment-plan-into-per-task-files"></a>
+
+## Entry 7 — 2026-08-29 — docs: split pacing adjustment plan into per-task files
+
+*Kind: product. Status: accepted.*
+
+## Context
+
+The pacing adjustment implementation plan lived in one 965-line file covering 16 sequential tasks. Executing the plan task by task meant scrolling through the whole document to find the current task's scope, and there was no explicit instruction to push or report progress after each task's commit — only the commit itself.
+
+## Decision
+
+Split the plan into a `README.md` (goal, architecture, constraints, target file map, task index, and execution checkpoints) plus one Markdown file per task, each self-contained with its own file list, TDD steps, and commit command. Added a final "push and summarize" step to every task file: `git push` followed by an instruction to summarize what changed and why, so progress is visible and reviewable one task at a time rather than only at plan completion. No task content, file paths, commands, or commit messages were altered — this is a reorganization plus one additive step per task.
+
+## Consequences
+
+The plan is easier to execute and review incrementally: each task is a standalone unit of work with its own review-ready summary point. The original monolithic plan file is removed; nothing else in the repository referenced it by path except the narrative fragment for `docs-add-pacing-strategy-implementation-plans`, which points at the sibling design spec, not this plan file, so no other links needed updating. No production code, tests, or behavior changed.
