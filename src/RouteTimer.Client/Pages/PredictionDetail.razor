@@ -43,41 +43,6 @@ else
                    href="@($"/api/predictions/{Id}/gpx?timed=true")">Download GPX with predicted times</a>
             </div>
 
-            @if (paceTrackerEnabled)
-            {
-                <div class="prediction-detail-actions">
-                    <button type="button"
-                            class="predictions-button predictions-button--secondary"
-                            data-testid="prediction-open-pacetracker"
-                            @onclick="CreateRoutePacerHandoffAsync"
-                            disabled="@creatingHandoff">
-                        @(creatingHandoff ? "Creating code…" : "Open in PaceTracker")
-                    </button>
-                </div>
-
-                @if (creatingHandoff)
-                {
-                    <p data-testid="prediction-pacetracker-creating">Creating a PaceTracker code…</p>
-                }
-
-                @if (handoffProblem is not null || handoffFallbackProblem)
-                {
-                    <div data-testid="prediction-pacetracker-error">
-                        <ProblemMessage Problem="@handoffProblem"
-                                        FallbackMessage="We could not create a PaceTracker code. Download the timed GPX instead." />
-                    </div>
-                }
-
-                @if (handoff is not null)
-                {
-                    <PaceTrackerHandoff Handoff="handoff"
-                                        RoutePacerOrigin="@paceTrackerOrigin"
-                                        TimedGpxDownloadUrl="@($"/api/predictions/{Id}/gpx?timed=true")"
-                                        OnRecreate="CreateRoutePacerHandoffAsync"
-                                        OnClose="CloseRoutePacerHandoff" />
-                }
-            }
-
             <p>
                 If Garmin Connect rejects a manually uploaded GPX file, try uploading it as an
                 activity instead of a course, then save that activity as a course — this works
@@ -298,12 +263,6 @@ else
     private bool confirmingGarminResend;
     private ApiProblemException? garminCourseProblem;
     private bool garminCourseFallbackProblem;
-    private bool paceTrackerEnabled;
-    private string paceTrackerOrigin = string.Empty;
-    private RoutePacerHandoffResponse? handoff;
-    private bool creatingHandoff;
-    private ApiProblemException? handoffProblem;
-    private bool handoffFallbackProblem;
 
     [Parameter]
     public Guid Id { get; set; }
@@ -316,11 +275,6 @@ else
         orderedSegments = [];
         segmentsReceivedOutOfOrder = false;
         visualizationReady = false;
-        paceTrackerEnabled = false;
-        paceTrackerOrigin = string.Empty;
-        handoff = null;
-        handoffProblem = null;
-        handoffFallbackProblem = false;
 
         try
         {
@@ -333,7 +287,6 @@ else
                     .SequenceEqual(orderedSegments.Select(segment => segment.Sequence)) is false;
                 visualizationReady = prediction.Summary.State.Equals("Succeeded", StringComparison.OrdinalIgnoreCase)
                     && orderedSegments.Count > 0;
-                await LoadRoutePacerStatusAsync();
             }
         }
         catch (ApiProblemException apiProblem)
@@ -412,89 +365,6 @@ else
                 sendingToGarmin = false;
             }
         }
-    }
-
-    // Fail closed, and only for a prediction that actually has a route to send. A status call that
-    // fails leaves the integration hidden rather than offering an action that cannot work -- and
-    // deliberately touches nothing else, so a RoutePacer outage cannot blank the prediction,
-    // the downloads, the visualization, or the Garmin controls.
-    private async Task LoadRoutePacerStatusAsync()
-    {
-        if (orderedSegments.Count == 0)
-        {
-            return;
-        }
-
-        try
-        {
-            var status = await Api.GetRoutePacerStatusAsync(pageCancellation.Token);
-            if (status.Enabled
-                && Uri.TryCreate(status.RoutePacerOrigin, UriKind.Absolute, out var origin)
-                && origin.Scheme == Uri.UriSchemeHttps)
-            {
-                paceTrackerEnabled = true;
-                // Stored as the parsed origin, not the raw string: this is the value every
-                // handoff link is validated against before it becomes a scannable code.
-                paceTrackerOrigin = origin.GetLeftPart(UriPartial.Authority);
-            }
-        }
-        catch (ApiProblemException)
-        {
-        }
-        catch (HttpRequestException)
-        {
-        }
-        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
-        {
-        }
-    }
-
-    private async Task CreateRoutePacerHandoffAsync()
-    {
-        if (creatingHandoff || prediction is null)
-        {
-            return;
-        }
-
-        creatingHandoff = true;
-        // Cleared before the request, not after it: a stale code left on screen during a recreate
-        // is one a rider could scan into a payload that is about to be replaced.
-        handoff = null;
-        handoffProblem = null;
-        handoffFallbackProblem = false;
-
-        try
-        {
-            handoff = await Api.CreateRoutePacerHandoffAsync(Id, pageCancellation.Token);
-        }
-        catch (ApiProblemException apiProblem)
-        {
-            handoffProblem = apiProblem;
-        }
-        catch (HttpRequestException)
-        {
-            handoffFallbackProblem = true;
-        }
-        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
-        {
-            return;
-        }
-        finally
-        {
-            if (!pageCancellation.IsCancellationRequested)
-            {
-                creatingHandoff = false;
-            }
-        }
-    }
-
-    // Local dismissal only. The relay payload is single-use and expires on its own, and RouteTimer
-    // has no endpoint that could revoke it early.
-    private void CloseRoutePacerHandoff()
-    {
-        handoff = null;
-        handoffProblem = null;
-        handoffFallbackProblem = false;
     }
 
     private static string DisplayBoolean(bool value) => value ? "Yes" : "No";

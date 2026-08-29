@@ -1,6 +1,5 @@
 import { mkdir, readdir, rm, copyFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { build } from "esbuild";
 
 const projectRoot = resolve(import.meta.dirname, "..");
 const outputRoot = join(projectRoot, "wwwroot", "vendor");
@@ -49,16 +48,3 @@ await copyExactFile(
   join(projectRoot, "node_modules", "chart.js", "dist", "chart.umd.js"),
   join(outputRoot, "chart.js", "chart.umd.js")
 );
-
-// qrcode ships CommonJS across several files, so unlike Leaflet and Chart.js it cannot simply be
-// copied -- the browser needs one ES module. Bundling here rather than at runtime is also what
-// keeps QR generation local: nothing in this application ever calls a hosted QR service.
-await build({
-  entryPoints: [join(projectRoot, "scripts", "qrcode-entry.mjs")],
-  outfile: join(outputRoot, "qrcode", "qrcode.mjs"),
-  bundle: true,
-  platform: "browser",
-  format: "esm",
-  target: "es2022",
-  legalComments: "inline"
-});

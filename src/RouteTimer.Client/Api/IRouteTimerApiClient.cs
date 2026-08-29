@@ -39,6 +39,4 @@ public interface IRouteTimerApiClient
     Task SaveGoogleMapsKeyAsync(SaveGoogleMapsKeyRequest request, CancellationToken ct);
     Task DeleteGoogleMapsKeyAsync(CancellationToken ct);
     Task<GoogleMapsKeyResponse> UseGoogleMapsKeyAsync(CancellationToken ct);
-    Task<RoutePacerStatusResponse> GetRoutePacerStatusAsync(CancellationToken ct);
-    Task<RoutePacerHandoffResponse> CreateRoutePacerHandoffAsync(Guid predictionId, CancellationToken ct);
 }
