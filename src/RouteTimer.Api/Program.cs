@@ -15,7 +15,6 @@ using RouteTimer.Api.Routing;
 using RouteTimer.Contracts.Errors;
 using RouteTimer.Api.Endpoints;
 using RouteTimer.Api.Garmin;
-using RouteTimer.Api.RoutePacer;
 using RouteTimer.Api.Security;
 using RouteTimer.Api.Workers;
 using RouteTimer.Contracts.Uploads;
@@ -33,7 +32,6 @@ using RouteTimer.Services.Security;
 using RouteTimer.Services.Settings;
 using RouteTimer.Services.Training;
 using RouteTimer.Services.Jobs;
-using RouteTimer.Services.RoutePacer;
 using RouteTimer.Services.Routes;
 using RouteTimer.Services.Validation;
 
@@ -157,45 +155,6 @@ builder.Services.AddHttpClient<ShortLinkResolutionService>(client =>
 
 // Fail closed at startup rather than on a rider's first handoff: an enabled deployment whose
 // secrets expanded to empty strings -- the exact shape a missing .env produces -- must not boot.
-builder.Services.AddOptions<RoutePacerHandoffOptions>()
-    .Bind(builder.Configuration.GetSection(RoutePacerHandoffOptions.SectionName))
-    .ValidateOnStart();
-builder.Services.AddSingleton<IValidateOptions<RoutePacerHandoffOptions>, RoutePacerHandoffOptionsValidator>();
-// Resolved eagerly through IOptions so the typed relay client -- which takes the settled options
-// rather than a monitor -- gets a value that has already been through ValidateOnStart.
-builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<RoutePacerHandoffOptions>>().Value);
-builder.Services.AddHttpClient<IRoutePacerRelayClient, RoutePacerRelayClient>((sp, client) =>
-{
-    var options = sp.GetRequiredService<IOptions<RoutePacerHandoffOptions>>().Value;
-    client.BaseAddress = new Uri(options.RoutePacerBaseUrl, UriKind.Absolute);
-    client.Timeout = TimeSpan.FromSeconds(30);
-})
-.ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
-{
-    // Redirects are off so the bearer upload credential can never be replayed to another host,
-    // and cookies are off because nothing about this outbound call is a session.
-    AllowAutoRedirect = false,
-    UseCookies = false
-})
-.RedactLoggedHeaders(["Authorization"]);
-builder.Services.AddSingleton(sp =>
-{
-    var options = sp.GetRequiredService<IOptions<RoutePacerHandoffOptions>>().Value;
-    return new RoutePacerHandoffConfiguration(
-        options.Enabled,
-        new Uri(options.RoutePacerBaseUrl, UriKind.Absolute));
-});
-// A disabled deployment configures no key, so there is nothing to import -- but the container
-// must still build. The disabled signer throws if it is ever reached, which the handoff service's
-// enabled-first check makes unreachable.
-builder.Services.AddSingleton<IRoutePacerInvocationSigner>(sp =>
-{
-    var options = sp.GetRequiredService<IOptions<RoutePacerHandoffOptions>>().Value;
-    return options.Enabled
-        ? EcdsaRoutePacerInvocationSigner.FromPem(options.SigningPrivateKeyPem)
-        : new DisabledRoutePacerInvocationSigner();
-});
-builder.Services.AddScoped<RoutePacerHandoffService>();
 
 builder.Services.AddSingleton<IGpxRouteParser, GpxRouteParser>();
 builder.Services.AddSingleton<IRouteProcessor>(_ => new RouteProcessor(RouteProcessingOptions.Default));
@@ -429,7 +388,6 @@ app.MapModelsEndpoints();
 app.MapPredictionEndpoints();
 app.MapJobEndpoints();
 app.MapGarminEndpoints();
-app.MapRoutePacerEndpoints();
 app.MapRouteEndpoints();
 app.MapSettingsEndpoints();
 app.MapAuthEndpoints(authMode);

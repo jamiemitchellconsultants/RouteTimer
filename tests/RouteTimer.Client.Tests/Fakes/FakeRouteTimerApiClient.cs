@@ -37,10 +37,6 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
     public Func<string, CancellationToken, Task<bool>>? OnLocalLoginAsync { get; set; }
     public Func<string, CancellationToken, Task<ShortLinkResponse>>? OnResolveShortLinkAsync { get; set; }
     public Func<Guid, CreateGarminCourseRequest, CancellationToken, Task<GarminCourseResponse>>? OnCreateGarminCourseAsync { get; set; }
-    public Func<CancellationToken, Task<RoutePacerStatusResponse>>? OnGetRoutePacerStatusAsync { get; set; }
-    public Func<Guid, CancellationToken, Task<RoutePacerHandoffResponse>>? OnCreateRoutePacerHandoffAsync { get; set; }
-    public List<CancellationToken> RequestedRoutePacerStatuses { get; } = [];
-    public List<(Guid PredictionId, CancellationToken CancellationToken)> CreatedRoutePacerHandoffs { get; } = [];
     public Func<CancellationToken, Task<GoogleMapsKeyStatusResponse>>? OnGetGoogleMapsKeyStatusAsync { get; set; }
     public Func<SaveGoogleMapsKeyRequest, CancellationToken, Task>? OnSaveGoogleMapsKeyAsync { get; set; }
     public Func<CancellationToken, Task>? OnDeleteGoogleMapsKeyAsync { get; set; }
@@ -285,24 +281,6 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
         OnUseGoogleMapsKeyAsync is not null
             ? OnUseGoogleMapsKeyAsync(ct)
             : throw new NotSupportedException();
-
-    public Task<RoutePacerStatusResponse> GetRoutePacerStatusAsync(CancellationToken ct)
-    {
-        RequestedRoutePacerStatuses.Add(ct);
-        // Disabled unless a test says otherwise: every existing prediction-page test asserts the
-        // page as it looks without the integration, and a default-on fake would change all of them.
-        return OnGetRoutePacerStatusAsync is not null
-            ? OnGetRoutePacerStatusAsync(ct)
-            : Task.FromResult(new RoutePacerStatusResponse(false, "https://pacetracking.tqaentry.com"));
-    }
-
-    public Task<RoutePacerHandoffResponse> CreateRoutePacerHandoffAsync(Guid predictionId, CancellationToken ct)
-    {
-        CreatedRoutePacerHandoffs.Add((predictionId, ct));
-        return OnCreateRoutePacerHandoffAsync is not null
-            ? OnCreateRoutePacerHandoffAsync(predictionId, ct)
-            : throw new NotSupportedException();
-    }
 
     private static GarminConnectionResponse NotConnected() =>
         new("not-connected", null, null, null);
