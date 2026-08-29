@@ -13,6 +13,7 @@ This document records what was asked, what was decided, why, and what followed.
 | [3](#entry-correct-pacing-strategies-to-append-only-adjustments) | 2026-08-27 | Correct pacing strategies to append-only adjustments | correction | Keep each prediction as an immutable baseline and model pacing strategies as multiple append-only child adjustments created only after the baseline succeeds. |
 | [4](#entry-docs-adopt-pacing-adjustment-architecture-and-implementation-plan) | 2026-08-28 | docs: adopt pacing adjustment architecture and implementation plan | product | Adopt an immutable baseline with multiple append-only `PredictionAdjustment` children. |
 | [5](#entry-open-in-pacetracker-hand-a-prediction-to-a-phone-from-a-private-routetim) | 2026-08-28 | Open in PaceTracker: hand a prediction to a phone from a private RouteTimer | product | Invert the direction. RouteTimer makes one **outbound** HTTPS call to a public RoutePacer relay, uploads the timed GPX, and receives a single-use payload URL with a fixed ten-minute lifetime. |
+| [6](#entry-chore-remove-the-open-in-pacetracker-handoff) | 2026-08-29 | chore: remove the Open in PaceTracker handoff | product | Remove the endpoints, options and validator, the relay client, both invocation signers, the QR interop and component, the contracts, the six error codes, and every test covering them. `qrcode` and `esbuild` go with it. |
 
 ---
 
@@ -210,3 +211,37 @@ the new public JWK, or every link stops verifying.
 **Deliberately left open:** readiness-gate steps 2 and 3 are unrun and need a deployed relay and a
 real phone, so this ships disabled; end-to-end encryption is deferred to a future contract version;
 and the relay's ten-minute lifetime is fixed by RoutePacer, not negotiable per handoff.
+
+---
+
+<a id="entry-chore-remove-the-open-in-pacetracker-handoff"></a>
+
+## Entry 6 — 2026-08-29 — chore: remove the Open in PaceTracker handoff
+
+*Kind: product. Status: accepted.*
+
+## Context
+
+This reverses `plan-private-to-phone-pacetracker-relay-handoff` and the implementation entry that followed it. Per `AGENTS.md` both stand unaltered; this is a `correction` citing them by slug.
+
+The handoff uploaded a timed GPX to RoutePacer's relay and rendered a signed, expiring QR code so a phone could fetch it. It existed to save one file transfer.
+
+It cannot serve anyone but this deployment. RoutePacer's relay authenticates exactly one upload credential (`HandoffRelayOptions.UploadCredential`, a single string) and verifies exactly one signing key (`RouteTimerInvocationOptions.PublicKeyJwk`, a single key). A second RouteTimer would need the shared credential — making it public and the relay an open file drop — and the private signing key, which would defeat the signature entirely. Contract v1 is frozen at six query keys and rejects any additional one, so there is nowhere to put a tenant identifier without a v2 across both repositories.
+
+RouteTimer is a public repository, and a feature only its author can use does not belong in one.
+
+## Decision
+
+Remove the endpoints, options and validator, the relay client, both invocation signers, the QR interop and component, the contracts, the six error codes, and every test covering them.
+
+`qrcode` and `esbuild` go with it. The QR was their only consumer, so `scripts/qrcode-entry.mjs` is deleted and `build-vendor.mjs` returns to plain copies of Leaflet and Chart.js — the bundler existed solely to turn qrcode's CommonJS into one browser ES module.
+
+`RUNBOOK.md` and `README.md` are rewritten rather than trimmed. Both are rider-facing and both described an action riders can no longer take. "Sending a prediction to your phone" now presents the file route as the answer rather than the fallback, and says plainly why the relay went. Six troubleshooting entries — relay authentication, rate limiting, availability, expiry, invalid signature, action missing — are deleted with the thing they diagnosed.
+
+## Consequences
+
+Riders keep the capability. **Download GPX with predicted times** and move the file the way files already move. That needs no relay, no credential and no signing key, and works for every deployment rather than one. It was already the documented fallback; it is now simply the route.
+
+RouteTimer no longer holds a signing key or an upload credential, so `deploy/.env` loses three variables and the deployment loses a class of secret entirely. Anyone who provisioned a P-256 key for this can discard it.
+
+RoutePacer's side is removed in its PR #18, which also deletes PostgreSQL — the relay was the only thing using it there. The frozen contract, its fixture, and the coordinated rollout document go with it, so restoring this feature means starting from the multi-tenant design that was never built.
