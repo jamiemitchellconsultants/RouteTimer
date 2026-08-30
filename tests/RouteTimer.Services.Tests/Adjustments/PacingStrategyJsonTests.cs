@@ -86,5 +86,59 @@ public sealed class PacingStrategyJsonTests
         Assert.Equal("pacing-strategy-invalid", exception.Code);
     }
 
+    // Break caught: stored JSON is parsed before its size is checked, so an oversized row costs a full
+    // parse on the worker before it is rejected.
+    [Fact]
+    public void Deserialize_rejects_stored_json_above_the_utf8_limit_before_parsing()
+    {
+        var oversized = new string('x', PacingStrategyJson.MaximumBytes + 1);
+
+        var exception = Assert.Throws<PacingStrategyValidationException>(() =>
+            PacingStrategyJson.Deserialize<TestDefinition>(oversized));
+
+        Assert.Equal("pacing-strategy-too-large", exception.Code);
+    }
+
+    // Break caught: the limit is measured in UTF-16 chars, so a multibyte payload stores well past
+    // 64 KiB of actual bytes.
+    [Fact]
+    public void The_size_limit_counts_utf8_bytes_not_characters()
+    {
+        // Three UTF-8 bytes per character, so half the character budget is already over the limit.
+        var multibyte = new string('\u4e2d', (PacingStrategyJson.MaximumBytes / 2) + 1);
+        Assert.True(multibyte.Length < PacingStrategyJson.MaximumBytes);
+
+        var canonicalize = Assert.Throws<PacingStrategyValidationException>(() =>
+            PacingStrategyJson.Canonicalize(new TestDefinition(PacingStrategyType.NpIfTarget, 1, multibyte)));
+        var deserialize = Assert.Throws<PacingStrategyValidationException>(() =>
+            PacingStrategyJson.Deserialize<TestDefinition>(multibyte));
+
+        Assert.Equal("pacing-strategy-too-large", canonicalize.Code);
+        Assert.Equal("pacing-strategy-too-large", deserialize.Code);
+    }
+
+    // Break caught: JSON that parses but fails the domain constructor leaks a raw ArgumentException
+    // out of the worker instead of the stable validation failure.
+    [Fact]
+    public void Deserialize_translates_constructor_validation_into_a_stable_failure()
+    {
+        var json = """{"type":"rpeZoneShift","thresholdMode":"ftpBased","ftpWatts":9000,"assignments":[]}""";
+
+        var exception = Assert.Throws<PacingStrategyValidationException>(() =>
+            PacingStrategyJson.Deserialize<RouteTimer.Domain.Adjustments.Zones.ZoneShiftDefinition>(json));
+
+        Assert.Equal("pacing-strategy-invalid", exception.Code);
+    }
+
+    // Break caught: cancellation is swallowed by the catch-all and reported as malformed JSON.
+    [Fact]
+    public void Deserialize_does_not_swallow_cancellation()
+    {
+        Assert.Throws<OperationCanceledException>(() =>
+            PacingStrategyJson.Deserialize<TestDefinition>(ThrowingJson()));
+
+        static string ThrowingJson() => throw new OperationCanceledException();
+    }
+
     private sealed record TestDefinition(PacingStrategyType Type, double Value, string Label) : PacingStrategyDefinition(Type);
 }

@@ -289,6 +289,59 @@ public sealed class PredictionEndpointTests
             CancellationToken.None);
     }
 
+    // Break caught: the adjustments feature leaks into the baseline contracts, so a client that never
+    // enables pacing strategies still has to reason about them.
+    [Fact]
+    public void Baseline_contracts_carry_no_adjustment_shaped_property()
+    {
+        var submission = new PredictionSubmissionResponse(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        var summary = new PredictionSummaryResponse(
+            Guid.NewGuid(), "Succeeded", 100, 5, 20, 5, 200, "Medium", ["a-warning"], Guid.NewGuid(), "v1", true,
+            "Passed", .05, .08, 75, 10, "dry-road", "calm", "temperate", true,
+            DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch);
+        var detail = new PredictionDetailResponse(
+            summary,
+            [new PredictionSegmentResponse(1, 51.1, -2.1, 100, 100, 100, .02, 0, 200, 5, 20, 20, "Medium")]);
+
+        string[] forbidden = ["strategy", "strategies", "adjustment", "adjustments", "adjustmentid", "adjusted"];
+        foreach (var payload in new object[] { submission, summary, detail })
+        {
+            using var document = JsonDocument.Parse(JsonSerializer.Serialize(payload, payload.GetType()));
+            foreach (var name in PropertyNames(document.RootElement))
+            {
+                Assert.DoesNotContain(forbidden, term => name.Contains(term, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+    }
+
+    private static IEnumerable<string> PropertyNames(JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject())
+                {
+                    yield return property.Name;
+                    foreach (var nested in PropertyNames(property.Value))
+                    {
+                        yield return nested;
+                    }
+                }
+
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                {
+                    foreach (var nested in PropertyNames(item))
+                    {
+                        yield return nested;
+                    }
+                }
+
+                break;
+        }
+    }
+
     private sealed class FakeCourseAdapterClient : IGarminAdapterClient
     {
         public GarminAdapterCourse Result { get; set; } = new(1, "R", "refreshed-token");
