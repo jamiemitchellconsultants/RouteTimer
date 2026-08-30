@@ -9,6 +9,8 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
 {
     public DbSet<PredictionEntity> Predictions => Set<PredictionEntity>();
     public DbSet<PredictionSegmentEntity> PredictionSegments => Set<PredictionSegmentEntity>();
+    public DbSet<PredictionAdjustmentEntity> PredictionAdjustments => Set<PredictionAdjustmentEntity>();
+    public DbSet<PredictionAdjustmentSegmentEntity> PredictionAdjustmentSegments => Set<PredictionAdjustmentSegmentEntity>();
     public DbSet<AnalysisJobEntity> Jobs => Set<AnalysisJobEntity>();
     public DbSet<RiderProfileEntity> Profiles => Set<RiderProfileEntity>();
     public DbSet<StoredUploadEntity> Uploads => Set<StoredUploadEntity>();
@@ -55,6 +57,41 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
         prediction.HasMany(entity => entity.Segments)
             .WithOne()
             .HasForeignKey(entity => entity.PredictionId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        var adjustment = modelBuilder.Entity<PredictionAdjustmentEntity>();
+        adjustment.ToTable("prediction_adjustments");
+        adjustment.HasKey(entity => entity.Id);
+        adjustment.Property(entity => entity.StrategyType).HasMaxLength(50).IsRequired();
+        adjustment.Property(entity => entity.StrategyJson).HasColumnType("jsonb").IsRequired();
+        adjustment.Property(entity => entity.StrategyAlgorithmVersion).HasMaxLength(128).IsRequired();
+        adjustment.Property(entity => entity.State).HasMaxLength(32).IsRequired();
+        adjustment.Property(entity => entity.Confidence).HasMaxLength(32);
+        adjustment.Property(entity => entity.Warnings)
+            .HasConversion(
+                warnings => JsonSerializer.Serialize(warnings, JsonOptions),
+                json => JsonSerializer.Deserialize<List<string>>(json, JsonOptions) ?? new List<string>())
+            .HasColumnType("jsonb")
+            .Metadata.SetValueComparer(ListComparer);
+        adjustment.Property(entity => entity.ResultJson).HasColumnType("jsonb");
+        adjustment.Property(entity => entity.CreatedAt).HasColumnType("timestamp with time zone");
+        adjustment.Property(entity => entity.CompletedAt).HasColumnType("timestamp with time zone");
+        adjustment.HasIndex(entity => new { entity.PredictionId, entity.CreatedAt });
+
+        adjustment.HasOne<PredictionEntity>()
+            .WithMany()
+            .HasForeignKey(entity => entity.PredictionId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        var adjustmentSegment = modelBuilder.Entity<PredictionAdjustmentSegmentEntity>();
+        adjustmentSegment.ToTable("prediction_adjustment_segments");
+        adjustmentSegment.HasKey(entity => new { entity.AdjustmentId, entity.Sequence });
+        adjustmentSegment.Property(entity => entity.Confidence).HasMaxLength(32).IsRequired();
+        adjustmentSegment.Property(entity => entity.StrategyPhase).HasMaxLength(64);
+
+        adjustment.HasMany(entity => entity.Segments)
+            .WithOne()
+            .HasForeignKey(entity => entity.AdjustmentId)
             .OnDelete(DeleteBehavior.Cascade);
 
         var job = modelBuilder.Entity<AnalysisJobEntity>();
