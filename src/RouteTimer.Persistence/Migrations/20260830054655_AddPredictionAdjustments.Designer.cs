@@ -12,7 +12,7 @@ using RouteTimer.Persistence;
 namespace RouteTimer.Persistence.Migrations
 {
     [DbContext(typeof(RouteTimerDbContext))]
-    [Migration("20260830053433_AddPredictionAdjustments")]
+    [Migration("20260830054655_AddPredictionAdjustments")]
     partial class AddPredictionAdjustments
     {
         /// <inheritdoc />
@@ -354,7 +354,6 @@ namespace RouteTimer.Persistence.Migrations
                         .HasColumnType("character varying(32)");
 
                     b.Property<string>("StrategyAlgorithmVersion")
-                        .IsRequired()
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)");
 

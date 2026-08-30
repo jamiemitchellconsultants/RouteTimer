@@ -64,7 +64,7 @@ public sealed class RouteTimerDbContext(DbContextOptions<RouteTimerDbContext> op
         adjustment.HasKey(entity => entity.Id);
         adjustment.Property(entity => entity.StrategyType).HasMaxLength(50).IsRequired();
         adjustment.Property(entity => entity.StrategyJson).HasColumnType("jsonb").IsRequired();
-        adjustment.Property(entity => entity.StrategyAlgorithmVersion).HasMaxLength(128).IsRequired();
+        adjustment.Property(entity => entity.StrategyAlgorithmVersion).HasMaxLength(128);
         adjustment.Property(entity => entity.State).HasMaxLength(32).IsRequired();
         adjustment.Property(entity => entity.Confidence).HasMaxLength(32);
         adjustment.Property(entity => entity.Warnings)

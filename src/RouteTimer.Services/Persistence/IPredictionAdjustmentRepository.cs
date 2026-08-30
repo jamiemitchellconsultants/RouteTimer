@@ -7,7 +7,6 @@ public sealed record QueuedAdjustmentCreation(
     Guid PredictionId,
     PacingStrategyType StrategyType,
     string StrategyJson,
-    string StrategyAlgorithmVersion,
     DateTimeOffset CreatedAt);
 
 public enum AdjustmentBaselineStatus { Ready, BaselineNotFound, BaselineNotReady }
@@ -40,6 +39,7 @@ public sealed record AdjustmentPublication(
     ConfidenceLevel Confidence,
     IReadOnlyList<string> Warnings,
     string ReportJson,
+    string AlgorithmVersion,
     IReadOnlyList<PersistedAdjustmentSegment> Segments);
 
 public sealed record PredictionAdjustmentSummary(
@@ -52,7 +52,7 @@ public sealed record PredictionAdjustmentSummary(
     double? AveragePowerWatts,
     ConfidenceLevel? Confidence,
     IReadOnlyList<string> Warnings,
-    string StrategyAlgorithmVersion,
+    string? StrategyAlgorithmVersion,
     DateTimeOffset CreatedAt,
     DateTimeOffset? CompletedAt);
 
@@ -68,7 +68,7 @@ public sealed record PredictionAdjustmentDetail(
     ConfidenceLevel? Confidence,
     IReadOnlyList<string> Warnings,
     string? ResultJson,
-    string StrategyAlgorithmVersion,
+    string? StrategyAlgorithmVersion,
     DateTimeOffset CreatedAt,
     DateTimeOffset? CompletedAt,
     IReadOnlyList<PersistedAdjustmentSegment> Segments);

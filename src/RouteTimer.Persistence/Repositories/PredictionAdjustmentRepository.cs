@@ -50,7 +50,6 @@ public sealed class PredictionAdjustmentRepository(RouteTimerDbContext context) 
             PredictionId = creation.PredictionId,
             StrategyType = creation.StrategyType.ToString(),
             StrategyJson = creation.StrategyJson,
-            StrategyAlgorithmVersion = creation.StrategyAlgorithmVersion,
             State = AdjustmentState.Queued.ToString(),
             CreatedAt = creation.CreatedAt,
         };
@@ -159,6 +158,7 @@ public sealed class PredictionAdjustmentRepository(RouteTimerDbContext context) 
         adjustment.Confidence = publication.Confidence.ToString();
         adjustment.Warnings = publication.Warnings.ToList();
         adjustment.ResultJson = publication.ReportJson;
+        adjustment.StrategyAlgorithmVersion = publication.AlgorithmVersion;
         adjustment.State = AdjustmentState.Succeeded.ToString();
         adjustment.CompletedAt = DateTimeOffset.UtcNow;
         await context.SaveChangesAsync(cancellationToken);

@@ -109,7 +109,7 @@ public sealed class PredictionAdjustmentRepositoryTests
             var published = await new PredictionAdjustmentRepository(publishing).TryPublishAsync(
                 adjustmentId, jobId, "worker-a",
                 new AdjustmentPublication(
-                    TimeSpan.FromSeconds(30), 6, 210, ConfidenceLevel.Medium, ["segment-gains-power-clamped"], """{"type":"segmentSpecificGains"}""",
+                    TimeSpan.FromSeconds(30), 6, 210, ConfidenceLevel.Medium, ["segment-gains-power-clamped"], """{"type":"segmentSpecificGains"}""", "segment-gains-v1",
                     [
                         new PersistedAdjustmentSegment(1, 200, 5, TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(20), ConfidenceLevel.High, null, "burn", 12000),
                         new PersistedAdjustmentSegment(2, 220, 7, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30), ConfidenceLevel.Medium, 3, null, null),
@@ -154,7 +154,7 @@ public sealed class PredictionAdjustmentRepositoryTests
         await using var publishing = CreateContext(database);
         var published = await new PredictionAdjustmentRepository(publishing).TryPublishAsync(
             adjustmentId, jobId, "worker-a",
-            new AdjustmentPublication(TimeSpan.FromSeconds(10), 5, 200, ConfidenceLevel.Medium, [], "{}",
+            new AdjustmentPublication(TimeSpan.FromSeconds(10), 5, 200, ConfidenceLevel.Medium, [], "{}", "time-target-v1",
                 [new PersistedAdjustmentSegment(1, 200, 5, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10), ConfidenceLevel.Medium, null, null, null)]),
             CancellationToken.None);
 
@@ -261,10 +261,10 @@ public sealed class PredictionAdjustmentRepositoryTests
     }
 
     private static QueuedAdjustmentCreation Creation(Guid predictionId, string? strategyJson = null) => new(
-        predictionId, PacingStrategyType.TimeTarget, strategyJson ?? """{"type":"timeTarget"}""", "segment-gains-v1", DateTimeOffset.UtcNow);
+        predictionId, PacingStrategyType.TimeTarget, strategyJson ?? """{"type":"timeTarget"}""", DateTimeOffset.UtcNow);
 
     private static AdjustmentPublication SinglePublication() => new(
-        TimeSpan.FromSeconds(10), 5, 200, ConfidenceLevel.Medium, [], "{}",
+        TimeSpan.FromSeconds(10), 5, 200, ConfidenceLevel.Medium, [], "{}", "time-target-v1",
         [new PersistedAdjustmentSegment(1, 200, 5, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10), ConfidenceLevel.Medium, null, null, null)]);
 
     private static async Task<Guid> SeedBaselineAsync(RouteTimerDbContext context, string state, int[]? sequences = null)
