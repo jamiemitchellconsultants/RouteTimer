@@ -300,6 +300,79 @@ public sealed class RoutePredictorTests
         Assert.True(result.MovingTime > TimeSpan.Zero);
     }
 
+    // Break caught: introducing the power-target-policy seam changes results when no policy is supplied.
+    [Fact]
+    public void Predict_with_a_null_power_target_policy_is_identical_to_the_baseline()
+    {
+        var withoutPolicy = PredictionFixtures.PredictMixedRoute();
+        var route = PredictionFixtures.MixedProcessedRoute();
+        var model = PredictionFixtures.Model(new PowerModel([], 250), PhysicalCoefficients.Default, calibrated: false);
+        var withNullPolicy = PredictionFixtures.Predict(route, model, new RiderProfile(75, 10), powerTargetPolicy: null);
+
+        Assert.Equal(withoutPolicy.Confidence, withNullPolicy.Confidence);
+        Assert.Equal(withoutPolicy.Warnings, withNullPolicy.Warnings);
+        Assert.Equal(withoutPolicy.MovingTime, withNullPolicy.MovingTime);
+        Assert.Equal(withoutPolicy.Segments, withNullPolicy.Segments);
+    }
+
+    // Break caught: the policy seam sees a stale or incomplete context instead of the full segment, elapsed time, and baseline estimate.
+    [Fact]
+    public void Predict_gives_the_power_target_policy_the_full_segment_elapsed_time_and_untouched_baseline_estimate()
+    {
+        var route = PredictionFixtures.Route((10, 0, 0), (10, .02, 0));
+        var model = PredictionFixtures.Model(PredictionFixtures.ExactPower("-1:1", 100, ConfidenceLevel.High), PhysicalCoefficients.Default, calibrated: true);
+        var policy = new RecordingPolicy(context => context.BaselineEstimate);
+
+        PredictionFixtures.Predict(route, model, new RiderProfile(75, 10), powerTargetPolicy: policy);
+
+        Assert.Equal(2, policy.Contexts.Count);
+        Assert.Equal(1, policy.Contexts[0].Segment.Sequence);
+        Assert.Equal(TimeSpan.Zero, policy.Contexts[0].ElapsedMovingTime);
+        Assert.Equal(2, policy.Contexts[1].Segment.Sequence);
+        Assert.True(policy.Contexts[1].ElapsedMovingTime > TimeSpan.Zero);
+        Assert.All(policy.Contexts, context => Assert.True(double.IsFinite(context.BaselineEstimate.Watts) && context.BaselineEstimate.Watts >= 0));
+    }
+
+    // Break caught: a policy's resolved power is ignored, so pacing strategies could never change simulated duration.
+    [Fact]
+    public void Predict_uses_the_policy_resolved_power_to_change_simulated_duration()
+    {
+        var route = PredictionFixtures.Route((100, .05, 0));
+        var model = PredictionFixtures.Model(new PowerModel([], 150), PhysicalCoefficients.Default, calibrated: true);
+        var baseline = PredictionFixtures.Predict(route, model, new RiderProfile(75, 10));
+        var doublePower = new RecordingPolicy(context => context.BaselineEstimate with { Watts = context.BaselineEstimate.Watts * 2 });
+
+        var boosted = PredictionFixtures.Predict(route, model, new RiderProfile(75, 10), powerTargetPolicy: doublePower);
+
+        Assert.True(boosted.MovingTime < baseline.MovingTime);
+    }
+
+    // Break caught: a policy resolving non-finite, negative, or undefined power leaks past the predictor as invalid state.
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    public void Predict_rejects_invalid_power_resolved_by_the_policy(double watts)
+    {
+        var route = PredictionFixtures.Route((10, 0, 0));
+        var model = PredictionFixtures.Model(new PowerModel([], 100), PhysicalCoefficients.Default, calibrated: true);
+        var policy = new RecordingPolicy(context => context.BaselineEstimate with { Watts = watts });
+
+        Assert.Throws<PredictionCalculationException>(() =>
+            PredictionFixtures.Predict(route, model, new RiderProfile(75, 10), powerTargetPolicy: policy));
+    }
+
+    private sealed class RecordingPolicy(Func<PowerTargetContext, PowerEstimate> resolve) : IPowerTargetPolicy
+    {
+        public List<PowerTargetContext> Contexts { get; } = [];
+
+        public PowerEstimate Resolve(PowerTargetContext context)
+        {
+            Contexts.Add(context);
+            return resolve(context);
+        }
+    }
+
     private sealed class FixedDescentLimiter(DescentLimitEstimate estimate) : IDescentSpeedLimiter
     {
         public DescentLimitEstimate Resolve(double gradient, double curvaturePerMetre, DescentLimitModel model) => estimate;
