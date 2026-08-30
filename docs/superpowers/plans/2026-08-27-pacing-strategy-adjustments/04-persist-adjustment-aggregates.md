@@ -8,13 +8,46 @@
 - Create: `src/RouteTimer.Persistence/Entities/PredictionAdjustmentSegmentEntity.cs`
 - Create: `src/RouteTimer.Services/Persistence/IPredictionAdjustmentRepository.cs`
 - Create: `src/RouteTimer.Persistence/Repositories/PredictionAdjustmentRepository.cs`
-- Modify: `src/RouteTimer.Persistence/Entities/PredictionEntity.cs`
+- ~~Modify: `src/RouteTimer.Persistence/Entities/PredictionEntity.cs`~~ not needed (see note below)
 - Modify: `src/RouteTimer.Persistence/RouteTimerDbContext.cs`
 - Create: `src/RouteTimer.Persistence/Migrations/*_AddPredictionAdjustments.cs`
 - Create: `src/RouteTimer.Persistence/Migrations/*_AddPredictionAdjustments.Designer.cs`
 - Modify: `src/RouteTimer.Persistence/Migrations/RouteTimerDbContextModelSnapshot.cs`
 - Test: `tests/RouteTimer.Persistence.Tests/PredictionAdjustmentRepositoryTests.cs`
-- Modify: `tests/RouteTimer.Persistence.Tests/PostgresMigrationTests.cs`
+- ~~Modify: `tests/RouteTimer.Persistence.Tests/PostgresMigrationTests.cs`~~ not needed (see note below)
+
+**Implementation notes (deviations from plan):**
+
+- **No `PredictionEntity.Adjustments` navigation.** The `PredictionId` foreign key is configured as a
+  shadow relationship (`HasOne<PredictionEntity>().WithMany()` with no collection property on
+  `PredictionEntity`), matching how nothing currently needs to eager-load a baseline's adjustments
+  from the baseline side — the adjustment repository always queries `prediction_adjustments` directly
+  by `PredictionId`. Adding an unused navigation property would be speculative.
+- **`PostgresMigrationTests.cs`'s fixed-table-list test is untouched.** That test
+  (`Migrate_creates_the_stored_uploads_table_on_a_fresh_database`) asserts a fixed historical subset of
+  tables (it doesn't include `prediction_segments`, `analysis_jobs`, or `google_maps_credentials`
+  either) — it's checking that the full migration history still applies cleanly to a fresh database,
+  not maintaining an exhaustive table inventory. `Model_has_no_pending_changes` (already in that same
+  file) is what actually guards the new tables against model/snapshot drift.
+- **Job creation and enqueueing are not in this repository.** `CreateQueuedAsync` here inserts only the
+  `prediction_adjustments` row and returns `AdjustmentBaselineStatus` plus the new adjustment's id — no
+  `AnalysisJobEntity` row is created, unlike `PredictionRepository.CreateQueuedAsync`'s baseline
+  pattern (which creates prediction and job together in one transaction). Task 5's Step 1 explicitly
+  tests "cleanup if enqueue fails," which only makes sense if enqueueing is a separate, independently
+  failable step after the insert — so the codebase's existing generic `IJobQueue.EnqueueAsync` (already
+  used by `ModelRebuildService` and `ParseTrainingJobHandler` for the same decoupled-enqueue pattern) is
+  the right fit, wired up in Task 5's `PredictionAdjustmentService`, not here.
+- **`"AdjustPrediction"` is a literal string in this repository**, not `JobType.AdjustPrediction`,
+  since that enum member doesn't exist until Task 5 modifies `AnalysisJob.cs`. It stringifies to the
+  same value the repository already writes, matching how `PredictionRepository` also mixes literal
+  `"PredictRoute"` strings with `JobType.PredictRoute.ToString()`.
+- **Unknown-warning validation is not in this repository**, matching precedent:
+  `PredictionJobHandler.BuildPublication` validates warning codes against `PredictionWarningCodes`
+  *before* calling `IPredictionRepository.TryPublishAsync`, not inside the repository. Task 5's
+  `PredictionAdjustmentJobHandler` will do the same against `AdjustmentWarningCodes` before calling
+  `TryPublishAsync` here. This repository does still validate the sequence-set match itself (rejecting
+  publication when the adjusted segment sequences don't exactly match the baseline's), since that check
+  inherently needs the baseline's persisted segments and is a repository-level ownership concern.
 
 **Step 1: Write failing repository tests**
 
