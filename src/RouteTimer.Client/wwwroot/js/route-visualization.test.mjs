@@ -298,3 +298,169 @@ test("buildComparisonProfileDatasets downsamples every group to the same sequenc
   assert.deepEqual(datasets[2].adjustmentPoints.map(point => point.sequence), powerSequences);
   assert.deepEqual(datasets[3].adjustmentPoints.map(point => point.sequence), powerSequences);
 });
+
+class FakeChart {
+  constructor(context, config) {
+    this.config = config;
+    this.data = config.data;
+    this.options = config.options;
+    this.updateCount = 0;
+    this.destroyed = false;
+  }
+
+  update() {
+    this.updateCount++;
+  }
+
+  destroy() {
+    this.destroyed = true;
+  }
+}
+
+const canvasIds = { elevation: "elevation", gradient: "gradient", power: "power", speed: "speed" };
+
+function installChartStubs() {
+  globalThis.Chart = FakeChart;
+  globalThis.document = { getElementById: () => ({ getContext: () => ({}) }) };
+  const selected = [];
+  return {
+    selected,
+    dotNetReference: {
+      invokeMethodAsync(_method, sequence) {
+        selected.push(sequence);
+        return Promise.resolve();
+      }
+    }
+  };
+}
+
+// Sequences deliberately do not start at 1: a chart index is not a segment sequence.
+const offsetBaseline = rawSegments.map(segment => ({ ...segment, sequence: segment.sequence + 4 }));
+const offsetAdjustment = rawAdjustment.map(segment => ({ ...segment, sequence: segment.sequence + 4 }));
+
+test("initializeProfiles keeps one line plus the cursor and no legend", async () => {
+  const { dotNetReference } = installChartStubs();
+  const charts = await import("./route-visualization.js");
+
+  charts.initializeProfiles("baseline-only", canvasIds, rawSegments, dotNetReference);
+  const power = charts.__profileChartsForTest("baseline-only")[2];
+
+  assert.equal(power.chart.data.datasets.length, 2);
+  assert.equal(power.chart.data.datasets[0].label, "Power");
+  assert.equal(power.cursorDatasetIndex, 1);
+  assert.equal(power.chart.options.plugins.legend.display, false);
+  assert.equal(power.chart.options.interaction.mode, "nearest");
+  charts.disposeProfiles("baseline-only");
+});
+
+test("initializeComparisonProfiles draws the adjustment line only on power and speed", async () => {
+  const { dotNetReference } = installChartStubs();
+  const charts = await import("./route-visualization.js");
+
+  charts.initializeComparisonProfiles("comparison", canvasIds, offsetBaseline, offsetAdjustment, dotNetReference);
+  const [elevation, , power, speed] = charts.__profileChartsForTest("comparison");
+
+  assert.equal(elevation.chart.data.datasets.length, 2);
+  assert.equal(elevation.chart.options.plugins.legend.display, false);
+
+  for (const entry of [power, speed]) {
+    assert.equal(entry.chart.data.datasets.length, 3);
+    assert.equal(entry.cursorDatasetIndex, 2);
+    assert.equal(entry.chart.options.plugins.legend.display, true);
+    assert.equal(entry.chart.data.datasets[1].borderColor, "#d1495b");
+    assert.equal(entry.chart.data.datasets[1].borderWidth, 2);
+    assert.equal(entry.chart.data.datasets[1].fill, false);
+  }
+
+  assert.equal(power.chart.data.datasets[0].label, "Power (baseline)");
+  assert.equal(power.chart.data.datasets[1].label, "Power (adjustment)");
+  charts.disposeProfiles("comparison");
+});
+
+test("comparison tooltips report baseline, adjustment, deltas, and annotations", async () => {
+  const { dotNetReference } = installChartStubs();
+  const charts = await import("./route-visualization.js");
+  const annotated = offsetAdjustment.map(segment =>
+    segment.sequence === 5
+      ? { ...segment, zoneNumber: 3, strategyPhase: "burn", wPrimeBalanceJoules: 12500 }
+      : segment);
+
+  charts.initializeComparisonProfiles("tooltips", canvasIds, offsetBaseline, annotated, dotNetReference);
+  const power = charts.__profileChartsForTest("tooltips")[2].chart;
+  const label = power.options.plugins.tooltip.callbacks.label;
+
+  assert.equal(
+    label({ datasetIndex: 0, dataIndex: 0, dataset: power.data.datasets[0], parsed: { y: 246 } }),
+    "Baseline power: 246 W");
+  assert.deepEqual(
+    label({ datasetIndex: 1, dataIndex: 0, dataset: power.data.datasets[1], parsed: { y: 260 } }),
+    [
+      "Adjustment power: 260 W",
+      "Delta: +14 W",
+      "Segment time: -2 s",
+      "Zone: 3",
+      "Phase: burn",
+      "W' balance: 12500 J"
+    ]);
+
+  // The cursor dataset never appears in the tooltip or the legend.
+  assert.equal(power.options.plugins.tooltip.filter({ datasetIndex: 2 }), false);
+  assert.equal(power.options.plugins.legend.labels.filter({ datasetIndex: 2 }), false);
+  charts.disposeProfiles("tooltips");
+});
+
+test("hovering a comparison chart reports the point's sequence, not its index", async () => {
+  const { selected, dotNetReference } = installChartStubs();
+  const charts = await import("./route-visualization.js");
+
+  charts.initializeComparisonProfiles("hover", canvasIds, offsetBaseline, offsetAdjustment, dotNetReference);
+  const power = charts.__profileChartsForTest("hover")[2].chart;
+
+  power.options.onHover(null, [{ datasetIndex: 2, index: 0 }, { datasetIndex: 1, index: 0 }]);
+
+  assert.deepEqual(selected, [5]);
+  charts.disposeProfiles("hover");
+});
+
+test("selectProfileSequence moves the cursor dataset in both chart modes", async () => {
+  const { dotNetReference } = installChartStubs();
+  const charts = await import("./route-visualization.js");
+
+  charts.initializeProfiles("cursor-baseline", canvasIds, rawSegments, dotNetReference);
+  charts.selectProfileSequence("cursor-baseline", 2);
+  const baselinePower = charts.__profileChartsForTest("cursor-baseline")[2];
+  assert.deepEqual(baselinePower.chart.data.datasets[1].data, [{ x: 1, y: 250, sequence: 2 }]);
+
+  charts.initializeComparisonProfiles("cursor-comparison", canvasIds, offsetBaseline, offsetAdjustment, dotNetReference);
+  charts.selectProfileSequence("cursor-comparison", 6);
+  const comparisonPower = charts.__profileChartsForTest("cursor-comparison")[2];
+  assert.deepEqual(comparisonPower.chart.data.datasets[2].data, [{ x: 1, y: 250, sequence: 6 }]);
+
+  charts.disposeProfiles("cursor-baseline");
+  charts.disposeProfiles("cursor-comparison");
+});
+
+test("selectProfileSequence falls back to the nearest surviving point", async () => {
+  const { dotNetReference } = installChartStubs();
+  const charts = await import("./route-visualization.js");
+
+  charts.initializeComparisonProfiles("missing", canvasIds, offsetBaseline, offsetAdjustment, dotNetReference);
+  charts.selectProfileSequence("missing", 99);
+  const power = charts.__profileChartsForTest("missing")[2];
+
+  assert.equal(power.chart.data.datasets[2].data[0].sequence, 6);
+  charts.disposeProfiles("missing");
+});
+
+test("disposeProfiles destroys every chart it created", async () => {
+  const { dotNetReference } = installChartStubs();
+  const charts = await import("./route-visualization.js");
+
+  charts.initializeProfiles("disposable", canvasIds, rawSegments, dotNetReference);
+  const created = charts.__profileChartsForTest("disposable").map(entry => entry.chart);
+
+  charts.disposeProfiles("disposable");
+
+  assert.ok(created.every(chart => chart.destroyed));
+  assert.equal(charts.__profileChartsForTest("disposable"), undefined);
+});

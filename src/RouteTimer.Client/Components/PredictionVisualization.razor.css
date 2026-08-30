@@ -49,3 +49,49 @@
         min-height: 14rem;
     }
 }
+
+.prediction-visualization__comparison {
+    display: grid;
+    gap: 0.25rem 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    margin: 0.5rem 0 0;
+}
+
+.prediction-visualization__comparison div {
+    display: flex;
+    gap: 0.35rem;
+    align-items: baseline;
+    flex-wrap: wrap;
+}
+
+.prediction-visualization__comparison dt {
+    font-weight: 600;
+}
+
+.prediction-visualization__comparison dt::after {
+    content: ":";
+}
+
+.prediction-visualization__comparison dd {
+    margin: 0;
+}
+
+/* Line colours themselves come from Chart.js; this key only names which line is which. */
+.prediction-visualization__comparison div:nth-child(1) dt::before,
+.prediction-visualization__comparison div:nth-child(2) dt::before {
+    content: "";
+    display: inline-block;
+    width: 0.75rem;
+    height: 0.2rem;
+    margin-right: 0.35rem;
+    vertical-align: middle;
+    border-radius: 0.1rem;
+    background: currentColor;
+}
+
+.prediction-visualization__comparison-problem {
+    padding: 0.75rem 1rem;
+    border-radius: 0.75rem;
+    background: #fdf1f3;
+    border: 1px solid #e7b9c1;
+}
