@@ -10,12 +10,31 @@
 - Create: `src/RouteTimer.Domain/Adjustments/PacingStrategyReport.cs`
 - Create: `src/RouteTimer.Domain/Adjustments/PredictionAdjustmentAnnotation.cs`
 - Create: `src/RouteTimer.Contracts/Adjustments/PacingStrategyContracts.cs`
-- Create: `src/RouteTimer.Contracts/Adjustments/PredictionAdjustmentContracts.cs`
+- ~~Create: `src/RouteTimer.Contracts/Adjustments/PredictionAdjustmentContracts.cs`~~ deferred to Task 6 (see note below)
 - Create: `src/RouteTimer.Services/Adjustments/PacingStrategyJson.cs`
 - Create: `src/RouteTimer.Services/Adjustments/PacingStrategyValidationException.cs`
 - Modify: `src/RouteTimer.Contracts/Errors/ErrorCodes.cs`
 - Test: `tests/RouteTimer.Domain.Tests/Adjustments/PacingStrategyDefinitionTests.cs`
 - Test: `tests/RouteTimer.Services.Tests/Adjustments/PacingStrategyJsonTests.cs`
+
+**Implementation note (deviation from plan):** "Add the exact strategy records approved in the
+design" in Step 2 read literally would mean building all five concrete domain `Definition`/`Report`
+record subtypes now — but Tasks 8, 10, 11, 12, and 13 each separately list those same domain files
+as files *they* create. As actually implemented, Task 3 delivers only the abstract
+`PacingStrategyDefinition`/`PacingStrategyReport` union (the enum plus the two abstract records) and
+the full closed **wire-format** request union in `PacingStrategyContracts.cs` — the Contracts project
+has zero project references (not even to Domain), so its five concrete request DTOs are self-contained
+and fully testable without any concrete domain type existing yet. The concrete domain `Definition`
+and `Report` subtypes for each strategy are built in that strategy's own delivery task (8, 10, 11, 12,
+13), alongside the algorithm that actually needs them, avoiding speculative, untested domain modeling.
+One consequence: `PredictionAdjustmentContracts.cs` (adjustment submission/summary/detail/segment
+responses) was **not** created in this task, since its detail response needs a typed report union that
+only makes sense once at least one concrete report subtype exists. It is created in
+[Task 6](06-nested-apis-and-capabilities.md) instead, where the nested endpoints that actually return
+it are wired up. `PacingStrategyJson`'s `Canonicalize<T>`/`Deserialize<T>` are generic over the caller's
+own concrete subtype rather than the polymorphic base, so no `[JsonPolymorphic]` attributes are needed
+on the domain side yet; those get added once a concrete subtype's discriminator is known (starting in
+Task 8).
 
 **Step 1: Write failing closed-union tests**
 
