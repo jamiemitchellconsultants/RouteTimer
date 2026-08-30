@@ -9,12 +9,46 @@
 - Create: `src/RouteTimer.Api/Endpoints/PredictionAdjustmentEndpoints.cs`
 - Modify: `src/RouteTimer.Api/Program.cs`
 - Modify: `src/RouteTimer.Api/appsettings.json`
-- Modify: `src/RouteTimer.Api/appsettings.Development.json`
+- ~~Modify: `src/RouteTimer.Api/appsettings.Development.json`~~ not needed (see note below)
 - Modify: `src/RouteTimer.Client/Api/IRouteTimerApiClient.cs`
 - Modify: `src/RouteTimer.Client/Api/RouteTimerApiClient.cs`
 - Modify: `tests/RouteTimer.Client.Tests/Fakes/FakeRouteTimerApiClient.cs`
 - Test: `tests/RouteTimer.Api.Tests/Endpoints/PredictionAdjustmentEndpointTests.cs`
 - Modify: `tests/RouteTimer.Client.Tests/Api/RouteTimerApiClientTests.cs`
+
+**Implementation notes (deviations from plan):**
+
+- **`appsettings.Development.json` needed no change.** It only carries settings that *differ* from
+  the shipped default for local dev (Garmin/Keycloak endpoints, auth mode) — `PacingStrategies`'
+  defaults (everything disabled) are already the correct dev-time value, so there is nothing to
+  override.
+- **No genuine POST-succeeds-with-202 happy path is testable yet, and that's by design.** With zero
+  concrete strategies delivered (per [Task 3](03-adjustment-domain-contracts.md)'s and
+  [Task 5](05-adjustment-job-orchestration.md)'s deviations), every strategy type is permanently
+  unreachable past the disabled-check today — `PacingStrategyOptions` defaults every flag to `false`,
+  and nothing in `Program.cs` can ever set one `true` until a strategy exists to enable. The endpoint's
+  `MapDefinition` switch has one arm per contract type, each throwing `NotImplementedException` for now;
+  each is genuinely unreachable (the disabled-check always returns 409 first) until that strategy's own
+  delivery task (8, 10, 11, 12, 13) replaces its arm with real mapping to a concrete domain type. Task 8
+  is explicitly the plan's own "first complete vertical slice" checkpoint, so proving the full
+  201/Location happy path there — rather than faking it here with a test-only handler — is consistent
+  with the plan's own structure, not a shortfall of this task. Everything else is fully tested now:
+  capability reporting, parent-vs-per-strategy disabled gating, malformed/unrecognized-discriminator
+  JSON (a `NotSupportedException` for a missing/unknown polymorphic discriminator, not `JsonException`
+  — both are now caught), nested-ownership 404s on detail/delete, and newest-first listing.
+- **The request-serialization footgun is real and was caught by the tests themselves, not designed
+  around in advance.** `HttpClient.PostAsJsonAsync<TValue>` and `JsonContent.Create<T>` infer `TValue`
+  from the *compile-time* type of the argument expression, not the object's runtime type — passing a
+  concrete `TimeTargetRequest` to either without an explicit `<PacingStrategyRequest>` type argument
+  serializes it without the `"type"` discriminator at all, since polymorphism attributes live only on
+  the abstract base. `RouteTimerApiClient.CreatePredictionAdjustmentAsync` therefore builds its own
+  `JsonContent` explicitly typed as `PacingStrategyRequest` instead of reusing the existing generic
+  `SendJsonAsync<T>(method, path, object payload, ct)` helper (whose `object`-typed parameter would hit
+  the same bug). The discriminator's actual wire value is also the literal declared in
+  `[JsonDerivedType(..., "time-target")]` (kebab-case, e.g. `"time-target"`), not the camelCase-transformed
+  `"timeTarget"` one might expect from `JsonNamingPolicy.CamelCase` — that policy governs property names,
+  not derived-type discriminator string literals. A client test asserting the literal wire body caught
+  both of these before they could reach a real strategy's editor UI in Task 8+.
 
 **Step 1: Add failing endpoint contract tests**
 
