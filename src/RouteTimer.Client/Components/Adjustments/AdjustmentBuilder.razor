@@ -1,0 +1,40 @@
+@using RouteTimer.Contracts.Adjustments
+
+<section class="prediction-detail-panel" data-testid="adjustment-builder">
+    <h2>Create adjustment</h2>
+
+    @if (Capabilities is null || !Capabilities.Enabled)
+    {
+        <p data-testid="adjustment-builder-disabled">Pacing adjustments are not currently enabled.</p>
+    }
+    else if (EnabledStrategyNames.Count == 0)
+    {
+        <p data-testid="adjustment-builder-no-strategies">No pacing strategies are currently available.</p>
+    }
+    else
+    {
+        <p data-testid="adjustment-builder-available">Available strategies: @string.Join(", ", EnabledStrategyNames)</p>
+    }
+</section>
+
+@code {
+    [Parameter]
+    public PacingStrategyCapabilityResponse? Capabilities { get; set; }
+
+    [Parameter]
+    public Guid PredictionId { get; set; }
+
+    private IReadOnlyList<string> EnabledStrategyNames => Capabilities is null
+        ? []
+        : new (bool Enabled, string Name)[]
+            {
+                (Capabilities.SegmentSpecificGains, "Segment-specific gains"),
+                (Capabilities.NpIfTarget, "NP/IF target"),
+                (Capabilities.TimeTarget, "Time target"),
+                (Capabilities.RpeZoneShift, "RPE/zone shift"),
+                (Capabilities.VariableMatchBurning, "Variable match-burning"),
+            }
+            .Where(entry => entry.Enabled)
+            .Select(entry => entry.Name)
+            .ToArray();
+}

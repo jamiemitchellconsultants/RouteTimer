@@ -1,0 +1,60 @@
+@using RouteTimer.Client.Formatting
+@using RouteTimer.Contracts.Adjustments
+@using RouteTimer.Contracts.Predictions
+
+<section class="prediction-detail-panel" data-testid="adjustment-comparison">
+    <h2>Comparison</h2>
+    <button type="button" class="predictions-button predictions-button--secondary"
+            data-testid="adjustment-back-to-baseline"
+            @onclick="() => OnBackToBaseline.InvokeAsync()">
+        Back to baseline
+    </button>
+
+    <table data-testid="adjustment-comparison-table">
+        <thead>
+            <tr>
+                <th scope="col"></th>
+                <th scope="col">Baseline</th>
+                <th scope="col">@RouteTimerText.Sentence(Selected.Summary.StrategyType)</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <th scope="row">Moving time</th>
+                <td>@RouteTimerFormat.DetailedDuration(Baseline.MovingSeconds)</td>
+                <td>@RouteTimerFormat.DetailedDuration(Selected.Summary.MovingSeconds)</td>
+            </tr>
+            <tr>
+                <th scope="row">Average speed</th>
+                <td>@RouteTimerFormat.SpeedKilometresPerHour(Baseline.AverageSpeedMetresPerSecond)</td>
+                <td>@RouteTimerFormat.SpeedKilometresPerHour(Selected.Summary.AverageSpeedMetresPerSecond)</td>
+            </tr>
+            <tr>
+                <th scope="row">Average power</th>
+                <td>@RouteTimerFormat.Power(Baseline.AveragePowerWatts)</td>
+                <td>@RouteTimerFormat.Power(Selected.Summary.AveragePowerWatts)</td>
+            </tr>
+        </tbody>
+    </table>
+
+    @if (Selected.Summary.Warnings.Count > 0)
+    {
+        <ul data-testid="adjustment-comparison-warnings" class="prediction-detail-list">
+            @foreach (var warning in Selected.Summary.Warnings)
+            {
+                <li>@RouteTimerText.Sentence(warning)</li>
+            }
+        </ul>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public PredictionSummaryResponse Baseline { get; set; } = null!;
+
+    [Parameter, EditorRequired]
+    public PredictionAdjustmentDetailResponse Selected { get; set; } = null!;
+
+    [Parameter]
+    public EventCallback OnBackToBaseline { get; set; }
+}
