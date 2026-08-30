@@ -210,6 +210,14 @@ bounds, tolerance, and a maximum evaluation count so a request cannot create unb
 
 ## Shared Domain and Service Interfaces
 
+**Implementation note:** the concrete `PacingStrategyDefinition`/`PacingStrategyReport` subtypes for
+each of the five strategies below are built incrementally, one per strategy's own delivery task in the
+implementation plan, rather than all at once alongside this abstract union. Only the enum and the two
+abstract records are shared from the start. The HTTP-facing request union in `PacingStrategyContracts.cs`
+is the exception: since the Contracts project has no dependency on Domain, its five concrete request DTOs
+are self-contained and were defined complete and closed from the start, ahead of their domain
+counterparts. See the pacing-strategy-adjustments plan's Task 3 for the reasoning.
+
 ```csharp
 public enum PacingStrategyType
 {

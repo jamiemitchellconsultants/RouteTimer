@@ -4,6 +4,7 @@
 
 **Files:**
 
+- Create: `src/RouteTimer.Contracts/Adjustments/PredictionAdjustmentContracts.cs` (moved here from [Task 3](03-adjustment-domain-contracts.md); see that task's implementation note)
 - Create: `src/RouteTimer.Api/Adjustments/PacingStrategyOptions.cs`
 - Create: `src/RouteTimer.Api/Endpoints/PredictionAdjustmentEndpoints.cs`
 - Modify: `src/RouteTimer.Api/Program.cs`
