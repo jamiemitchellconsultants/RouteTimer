@@ -76,17 +76,32 @@ public static class PowerZoneResolver
                 }
                 else
                 {
-                    lowerTarget = z == 1 ? 5.0 : lowerWatts + 5.0;
+                    lowerTarget = lowerWatts + 5.0;
                     upperTarget = upperWatts - 5.0;
                     midTarget = (lowerWatts + upperWatts) / 2.0;
                 }
             }
+
+            // Zone 1 is open at the bottom, so its lower-bound target would otherwise be 5 W - a
+            // power the physics cannot hold above walking pace on any climb, which fails the whole
+            // replay rather than producing a slow one. Every target is floored at a rideable
+            // fraction of threshold; only zone 1 (and zone 2's lower target at tiny thresholds)
+            // ever reaches the floor.
+            lowerTarget = Math.Max(lowerTarget, MinimumTargetWatts(thresholdWatts));
+            midTarget = Math.Max(midTarget, MinimumTargetWatts(thresholdWatts));
+            upperTarget = Math.Max(upperTarget, MinimumTargetWatts(thresholdWatts));
 
             zones.Add(new ResolvedPowerZone(z, lowerWatts, upperWatts, lowerTarget, midTarget, upperTarget));
         }
 
         return new ResolvedPowerZoneSet(thresholdWatts, provenance, zones);
     }
+
+    /// <summary>
+    /// Lowest power any zone will be targeted at: 30% of threshold, never below the 10 W floor the
+    /// rest of the adjustment stack uses.
+    /// </summary>
+    public static double MinimumTargetWatts(double thresholdWatts) => Math.Max(10.0, thresholdWatts * 0.30);
 
     public static double SelectTarget(ResolvedPowerZone zone, ZonePlacement placement) => placement switch
     {

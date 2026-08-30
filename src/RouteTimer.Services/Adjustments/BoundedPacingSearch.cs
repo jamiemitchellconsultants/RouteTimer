@@ -18,23 +18,33 @@ public static class BoundedPacingSearch
         if (minMultiplier >= maxMultiplier) throw new ArgumentException("Min multiplier must be less than max multiplier.");
 
         double bestDist = double.MaxValue;
-        double bestPoint = minMultiplier;
+        int bestIndex = 0;
 
         double step = (maxMultiplier - minMultiplier) / GridSteps;
+        var gridPoints = new double[GridSteps + 1];
+        var gridValues = new double[GridSteps + 1];
         for (int i = 0; i <= GridSteps; i++)
         {
-            double m = minMultiplier + i * step;
-            double val = evaluate(m);
-            double dist = Math.Abs(val - targetValue);
+            gridPoints[i] = minMultiplier + i * step;
+            gridValues[i] = evaluate(gridPoints[i]);
+            double dist = Math.Abs(gridValues[i] - targetValue);
             if (dist < bestDist)
             {
                 bestDist = dist;
-                bestPoint = m;
+                bestIndex = i;
             }
         }
 
-        double low = Math.Max(minMultiplier, bestPoint - step);
-        double high = Math.Min(maxMultiplier, bestPoint + step);
+        // The bracket endpoints are the grid neighbours of the best grid point, so their values are
+        // already known. Each endpoint then keeps its evaluated value as the bracket narrows: only
+        // one of them moves per iteration, and evaluate() is a full route simulation for every real
+        // caller.
+        int lowIndex = Math.Max(0, bestIndex - 1);
+        int highIndex = Math.Min(GridSteps, bestIndex + 1);
+        double low = gridPoints[lowIndex];
+        double high = gridPoints[highIndex];
+        double lowVal = gridValues[lowIndex];
+        double highVal = gridValues[highIndex];
 
         for (int iter = 0; iter < MaximumBisectionIterations; iter++)
         {
@@ -46,23 +56,29 @@ public static class BoundedPacingSearch
                 return mid;
             }
 
-            double lowVal = evaluate(low);
-            double highVal = evaluate(high);
-
+            bool moveHigh;
             if ((midVal - targetValue) * (lowVal - targetValue) <= 0)
             {
-                high = mid;
+                moveHigh = true;
             }
             else if ((midVal - targetValue) * (highVal - targetValue) <= 0)
             {
-                low = mid;
+                moveHigh = false;
             }
             else
             {
-                double distLow = Math.Abs(lowVal - targetValue);
-                double distHigh = Math.Abs(highVal - targetValue);
-                if (distLow < distHigh) high = mid;
-                else low = mid;
+                moveHigh = Math.Abs(lowVal - targetValue) < Math.Abs(highVal - targetValue);
+            }
+
+            if (moveHigh)
+            {
+                high = mid;
+                highVal = midVal;
+            }
+            else
+            {
+                low = mid;
+                lowVal = midVal;
             }
 
             if (Math.Abs(high - low) < 1e-7)

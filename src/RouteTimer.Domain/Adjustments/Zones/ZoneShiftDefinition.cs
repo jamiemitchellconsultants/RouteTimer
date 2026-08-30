@@ -123,12 +123,24 @@ public sealed record ZoneShiftDefinition : PacingStrategyDefinition
         ThresholdMode = thresholdMode;
         FtpWatts = ftpWatts;
 
-        Assignments = assignments.Where(a => !a.AllSegments).Concat(assignments.Where(a => a.AllSegments)).ToList();
+        // Submitted order is preserved so a report's per-assignment counts stay addressable by the
+        // index the caller sent. Precedence is expressed by MatchOrder instead, which is what the
+        // matching policy walks.
+        Assignments = assignments.ToList();
     }
 
     public ZoneThresholdMode ThresholdMode { get; }
     public double? FtpWatts { get; }
     public IReadOnlyList<ZoneAssignment> Assignments { get; }
+
+    /// <summary>
+    /// Submitted indices in evaluation order: gradient assignments first in submitted order
+    /// (first match wins), then the optional all-segments assignment as the final fallback.
+    /// </summary>
+    public IReadOnlyList<int> MatchOrder =>
+        Enumerable.Range(0, Assignments.Count).Where(index => !Assignments[index].AllSegments)
+            .Concat(Enumerable.Range(0, Assignments.Count).Where(index => Assignments[index].AllSegments))
+            .ToList();
 }
 
 public sealed record ResolvedPowerZone(int Zone, double LowerWatts, double UpperWatts, double LowerTargetWatts, double MidpointTargetWatts, double UpperTargetWatts);

@@ -15,6 +15,8 @@ This document records what was asked, what was decided, why, and what followed.
 | [5](#entry-open-in-pacetracker-hand-a-prediction-to-a-phone-from-a-private-routetim) | 2026-08-28 | Open in PaceTracker: hand a prediction to a phone from a private RouteTimer | product | Invert the direction. RouteTimer makes one **outbound** HTTPS call to a public RoutePacer relay, uploads the timed GPX, and receives a single-use payload URL with a fixed ten-minute lifetime. |
 | [6](#entry-chore-remove-the-open-in-pacetracker-handoff) | 2026-08-29 | chore: remove the Open in PaceTracker handoff | product | Remove the endpoints, options and validator, the relay client, both invocation signers, the QR interop and component, the contracts, the six error codes, and every test covering them. `qrcode` and `esbuild` go with it. |
 | [7](#entry-docs-split-pacing-adjustment-plan-into-per-task-files) | 2026-08-29 | docs: split pacing adjustment plan into per-task files | product | Split the plan into a `README.md` (goal, architecture, constraints, target file map, task index, and execution checkpoints) plus one Markdown file per task, each self-contained with its own file list, TDD steps, and commit command. |
+| [8](#entry-docs-add-implementation-ready-pacing-tasks-9-16) | 2026-08-30 | docs: add implementation-ready pacing tasks 9-16 | product | Keep the original plan files unchanged and add a sibling refined-tasks directory. |
+| [9](#entry-fix-review-findings-in-pacing-tasks-9-16) | 2026-08-30 | fix: resolve review findings in pacing tasks 9-16 | correction | Fix the nine findings from the review of tasks 9-16 on the branch itself and close the pull request unmerged. |
 
 ---
 
@@ -266,3 +268,53 @@ Split the plan into a `README.md` (goal, architecture, constraints, target file 
 ## Consequences
 
 The plan is easier to execute and review incrementally: each task is a standalone unit of work with its own review-ready summary point. The original monolithic plan file is removed; nothing else in the repository referenced it by path except the narrative fragment for `docs-add-pacing-strategy-implementation-plans`, which points at the sibling design spec, not this plan file, so no other links needed updating. No production code, tests, or behavior changed.
+
+---
+
+<a id="entry-docs-add-implementation-ready-pacing-tasks-9-16"></a>
+
+## Entry 8 — 2026-08-30 — docs: add implementation-ready pacing tasks 9-16
+
+*Kind: product. Status: accepted.*
+
+## Context
+
+The original Tasks 9-16 were milestone summaries and left critical details to the implementer, including search tie-breaking, fractional-second normalized-power behavior, concrete strategy interfaces, stable sub-field wire literals, lifecycle outcomes, and current visualization extension points. Tasks 1-8 also exposed architectural patterns and deviations that the remaining plan needed to carry forward explicitly.
+
+## Decision
+
+Keep the original plan files unchanged and add a sibling refined-tasks directory. Define deterministic interfaces and behavior for bounded search, normalized power, time targeting, NP/IF targeting, zone resolution, match-burning, one-adjustment visualization, lifecycle hardening, and rollout verification. Split large work into commit-sized checkpoints and correct stale assumptions: match-burning refinement follows changed phase membership, visualization uses RouteProfiles and route-visualization modules, baseline deletion cancels active adjustment jobs, and Narrative verification does not depend on a machine-specific temporary CLI path.
+
+Rejected alternatives were overwriting the historical task files, leaving algorithmic choices to each executor, or introducing new production abstractions solely to make the plan shorter.
+
+## Consequences
+
+A smaller local model can execute one checkpoint with explicit inputs, outputs, tests, files, commands, and stop conditions, reducing architectural drift and invented behavior. The refined plan is longer and records implementation choices that future code should either follow or deliberately correct. Original planning history remains available for comparison, and no production code or feature flag changes in this PR.
+
+---
+
+<a id="entry-fix-review-findings-in-pacing-tasks-9-16"></a>
+
+## Entry 9 — 2026-08-30 — fix: resolve review findings in pacing tasks 9-16
+
+*Kind: correction. Status: accepted.*
+
+## Context
+
+A review of the tasks 9-16 delivery found nine problems. Three were unrelated to the feature and would have broken the repository on merge: `global.json` was downgraded from SDK 10.0.302 to 10.0.103, which with `rollForward: latestPatch` matches neither the SDK CI installs nor the `sdk:10.0.302` image the Dockerfile builds on; and narrative entry 8 was deleted from both `Narrative.md` and `narrative/entries/`.
+
+Four were behavioral. The four new Blazor editors were never referenced by `AdjustmentBuilder`, so every strategy except segment gains was listed as available but unreachable. `ZoneShiftDefinition` reordered its assignments so the all-segments fallback matched last, and the policy counted matches against that reordered list, so `AssignmentMatchCounts` was addressed by a different index than the caller submitted. Zone 1's lower-bound target resolved to a flat 5 W, a power the physics cannot hold above walking pace, so a Zone 1 / lower-bound request threw out of the replay and failed the whole adjustment. `BoundedPacingSearch` re-evaluated both bracket endpoints on every bisection pass, tripling the number of full route simulations.
+
+The last two were verification. `docs/pacing-strategies/backtesting.md` documented a five-fixture matrix as rollout evidence when only `flat-short` existed, and neither the NP/IF nor the match-burning handler was executed by any test - the two tests named for them asserted arithmetic performed in the test body.
+
+## Decision
+
+Fix all nine on the branch and close the pull request rather than iterate on it.
+
+Precedence and reporting are now separate concerns: `ZoneShiftDefinition` keeps assignments in submitted order and exposes `MatchOrder`, the evaluation sequence the policy walks, so counts stay addressable by the submitted index while the fallback still matches last. Zone targets are floored at `MinimumTargetWatts` - 30% of threshold, never below the 10 W floor the rest of the adjustment stack uses - which is reachable on a climb and only ever binds on zone 1. `BoundedPacingSearch` carries each endpoint's evaluated value forward from the grid sweep, so a bisection pass costs one evaluation instead of three.
+
+The fixture matrix is defined once in `PacingFixtures` and every strategy now runs on every fixture, with the two tautological tests replaced by ones that exercise the handlers. The zone-1 and match-count fixes each carry a regression test that was confirmed to fail against the previous behavior.
+
+## Consequences
+
+The branch builds against the SDK CI and the Dockerfile actually install, the narrative history is intact, and the four strategies are reachable from the prediction detail page. Backtesting is 5 strategies x 5 fixtures rather than 1 x 1, and the documented rollout evidence describes tests that exist. Zone 1's reported lower boundary stays 0 W for classification while its *target* is floored, so a rider coasting below the floor is still classified in zone 1 - the floor governs what the strategy asks for, not how power is banded.

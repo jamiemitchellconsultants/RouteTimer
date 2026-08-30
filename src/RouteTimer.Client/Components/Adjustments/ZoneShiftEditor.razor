@@ -175,6 +175,14 @@
             foreach (var r in Rows)
             {
                 if (r.Zone < 1 || r.Zone > MaxZone) return false;
+
+                // A gradient row with neither bound set is rejected by the domain, so keep submit
+                // disabled rather than round-tripping to a guaranteed 400.
+                if (r.Selector == "gradient" &&
+                    ParseDouble(r.MinGradientText) is null && ParseDouble(r.MaxGradientText) is null)
+                {
+                    return false;
+                }
             }
 
             return true;

@@ -19,6 +19,26 @@
         {
             <SegmentGainsEditor PredictionId="PredictionId" OnCreated="id => OnAdjustmentCreated.InvokeAsync(id)" />
         }
+
+        @if (Capabilities.NpIfTarget)
+        {
+            <NpIfTargetEditor PredictionId="PredictionId" OnCreated="id => OnAdjustmentCreated.InvokeAsync(id)" />
+        }
+
+        @if (Capabilities.TimeTarget)
+        {
+            <TimeTargetEditor PredictionId="PredictionId" OnCreated="id => OnAdjustmentCreated.InvokeAsync(id)" />
+        }
+
+        @if (Capabilities.RpeZoneShift)
+        {
+            <ZoneShiftEditor PredictionId="PredictionId" OnCreated="id => OnAdjustmentCreated.InvokeAsync(id)" />
+        }
+
+        @if (Capabilities.VariableMatchBurning)
+        {
+            <MatchBurningEditor PredictionId="PredictionId" OnCreated="id => OnAdjustmentCreated.InvokeAsync(id)" />
+        }
     }
 </section>
 

@@ -12,6 +12,7 @@ public sealed class ZoneShiftPolicy : IPowerTargetPolicy
     private readonly ZoneShiftDefinition _definition;
     private readonly ResolvedPowerZoneSet _zones;
     private readonly int[] _matchCounts;
+    private readonly int[] _matchOrder;
     private readonly Dictionary<int, int> _assignedZonesBySequence = new();
 
     public ZoneShiftPolicy(ZoneShiftDefinition definition, ResolvedPowerZoneSet zones)
@@ -19,6 +20,7 @@ public sealed class ZoneShiftPolicy : IPowerTargetPolicy
         _definition = definition;
         _zones = zones;
         _matchCounts = new int[definition.Assignments.Count];
+        _matchOrder = definition.MatchOrder.ToArray();
     }
 
     public IReadOnlyList<int> MatchCounts => _matchCounts;
@@ -29,7 +31,7 @@ public sealed class ZoneShiftPolicy : IPowerTargetPolicy
     {
         if (context is null) throw new ArgumentNullException(nameof(context));
 
-        for (int i = 0; i < _definition.Assignments.Count; i++)
+        foreach (int i in _matchOrder)
         {
             var assignment = _definition.Assignments[i];
             if (assignment.Matches(context.Segment.Gradient))
