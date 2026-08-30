@@ -252,7 +252,7 @@ else
 
     @if (prediction.Summary.State.Equals("Succeeded", StringComparison.OrdinalIgnoreCase))
     {
-        <AdjustmentBuilder Capabilities="capabilities" PredictionId="Id" />
+        <AdjustmentBuilder Capabilities="capabilities" PredictionId="Id" OnAdjustmentCreated="AdjustmentCreatedAsync" />
 
         <AdjustmentList
             Summaries="adjustmentSummaries"
@@ -448,6 +448,12 @@ else
         catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
         {
         }
+    }
+
+    private async Task AdjustmentCreatedAsync(Guid adjustmentId)
+    {
+        await LoadAdjustmentsAsync();
+        await SelectAdjustmentAsync(adjustmentId);
     }
 
     private void BackToBaseline()

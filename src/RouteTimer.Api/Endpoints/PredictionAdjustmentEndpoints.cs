@@ -72,6 +72,14 @@ public static class PredictionAdjustmentEndpoints
                 _ => ApiProblems.BadRequest(exception.Code, exception.Message),
             };
         }
+        catch (SegmentGainsRequestValidationException exception)
+        {
+            return Results.ValidationProblem(
+                exception.Errors,
+                detail: exception.Message,
+                statusCode: StatusCodes.Status400BadRequest,
+                extensions: new Dictionary<string, object?> { ["code"] = ErrorCodes.PacingStrategyInvalid });
+        }
     }
 
     private static async Task<IResult> GetAdjustmentsAsync(
@@ -120,7 +128,7 @@ public static class PredictionAdjustmentEndpoints
 
     private static PacingStrategyDefinition MapDefinition(PacingStrategyRequest request) => request switch
     {
-        SegmentSpecificGainsRequest => throw new NotImplementedException("Segment-specific gains mapping is delivered in its own task."),
+        SegmentSpecificGainsRequest segmentGains => SegmentGainsRequestMapper.ToDefinition(segmentGains),
         NpIfTargetRequest => throw new NotImplementedException("NP/IF target mapping is delivered in its own task."),
         TimeTargetRequest => throw new NotImplementedException("Time target mapping is delivered in its own task."),
         RpeZoneShiftRequest => throw new NotImplementedException("RPE/zone shift mapping is delivered in its own task."),

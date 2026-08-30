@@ -46,6 +46,28 @@
             }
         </ul>
     }
+
+    @if (SegmentGainsReport is { } report)
+    {
+        <div data-testid="adjustment-comparison-segment-gains-report">
+            <dl class="prediction-detail-grid">
+                <div>
+                    <dt>Matched segments</dt>
+                    <dd>@report.GetProperty("matchedSegmentCount").GetInt32()</dd>
+                </div>
+                <div>
+                    <dt>Unmatched segments</dt>
+                    <dd>@report.GetProperty("unmatchedSegmentCount").GetInt32()</dd>
+                </div>
+            </dl>
+            <ul class="prediction-detail-list" data-testid="adjustment-comparison-rule-hit-counts">
+                @foreach (var hit in report.GetProperty("ruleHitCounts").EnumerateArray())
+                {
+                    <li>Rule @(hit.GetProperty("ruleIndex").GetInt32() + 1): @hit.GetProperty("segmentCount").GetInt32() segment(s)</li>
+                }
+            </ul>
+        </div>
+    }
 </section>
 
 @code {
@@ -57,4 +79,10 @@
 
     [Parameter]
     public EventCallback OnBackToBaseline { get; set; }
+
+    // Every strategy report reaches this component as an opaque JsonElement (see Task 6's deviation
+    // notes), so segment gains is the first to render its own report shape; later strategies get their
+    // own switch arm here rather than a shared abstraction premised on reports no strategy has yet.
+    private System.Text.Json.JsonElement? SegmentGainsReport =>
+        Selected.Summary.StrategyType == "SegmentSpecificGains" ? Selected.Report : null;
 }

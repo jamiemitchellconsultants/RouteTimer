@@ -1,0 +1,191 @@
+@using RouteTimer.Client.Api
+@using RouteTimer.Client.Components
+@using RouteTimer.Contracts.Adjustments
+@inject IRouteTimerApiClient Api
+
+<div data-testid="segment-gains-editor">
+    @if (Problem is not null)
+    {
+        <div data-testid="segment-gains-editor-error">
+            <ProblemMessage Problem="@Problem" FallbackMessage="We could not create the adjustment." />
+        </div>
+    }
+
+    @for (var index = 0; index < Rules.Count; index++)
+    {
+        var rowIndex = index;
+        var row = Rules[rowIndex];
+        <div class="prediction-detail-grid" data-testid="@($"segment-gains-rule-{rowIndex}")">
+            <div>
+                <label for="@($"segment-gains-selector-{rowIndex}")">Selector</label>
+                <select id="@($"segment-gains-selector-{rowIndex}")" data-testid="@($"segment-gains-selector-{rowIndex}")"
+                        value="@row.Selector" @onchange="e => ChangeSelector(row, e.Value)">
+                    <option value="Gradient">Gradient</option>
+                    <option value="Sequence">Sequence</option>
+                    <option value="Distance">Distance</option>
+                </select>
+            </div>
+            <div>
+                <label for="@($"segment-gains-min-{rowIndex}")">Min</label>
+                <input id="@($"segment-gains-min-{rowIndex}")" data-testid="@($"segment-gains-min-{rowIndex}")"
+                       value="@row.Min" @oninput="e => row.Min = e.Value?.ToString()" />
+            </div>
+            <div>
+                <label for="@($"segment-gains-max-{rowIndex}")">Max</label>
+                <input id="@($"segment-gains-max-{rowIndex}")" data-testid="@($"segment-gains-max-{rowIndex}")"
+                       value="@row.Max" @oninput="e => row.Max = e.Value?.ToString()" />
+            </div>
+            <div>
+                <label for="@($"segment-gains-mode-{rowIndex}")">Mode</label>
+                <select id="@($"segment-gains-mode-{rowIndex}")" data-testid="@($"segment-gains-mode-{rowIndex}")"
+                        value="@row.Mode" @onchange="e => ChangeMode(row, e.Value)">
+                    <option value="Factor">Factor</option>
+                    <option value="Delta">Delta watts</option>
+                </select>
+            </div>
+            <div>
+                <label for="@($"segment-gains-value-{rowIndex}")">Value</label>
+                <input id="@($"segment-gains-value-{rowIndex}")" data-testid="@($"segment-gains-value-{rowIndex}")"
+                       value="@(row.Mode == RuleMode.Factor ? row.FactorValue : row.DeltaValue)"
+                       @oninput="e => SetValue(row, e.Value?.ToString())" />
+            </div>
+            @if (FieldErrors.TryGetValue($"rules[{rowIndex}]", out var ruleErrors))
+            {
+                <ul data-testid="@($"segment-gains-rule-error-{rowIndex}")" class="prediction-detail-list">
+                    @foreach (var message in ruleErrors)
+                    {
+                        <li>@message</li>
+                    }
+                </ul>
+            }
+            <div class="prediction-detail-actions">
+                <button type="button" class="predictions-button predictions-button--danger"
+                        data-testid="@($"segment-gains-remove-{rowIndex}")"
+                        @onclick="() => RemoveRule(rowIndex)">
+                    Remove
+                </button>
+            </div>
+        </div>
+    }
+
+    @if (FieldErrors.TryGetValue("rules", out var definitionErrors))
+    {
+        <ul data-testid="segment-gains-definition-error" class="prediction-detail-list">
+            @foreach (var message in definitionErrors)
+            {
+                <li>@message</li>
+            }
+        </ul>
+    }
+
+    <div class="prediction-detail-actions">
+        <button type="button" class="predictions-button predictions-button--secondary"
+                data-testid="segment-gains-add-rule"
+                @onclick="AddRule"
+                disabled="@(Rules.Count >= MaximumRules)">
+            Add rule
+        </button>
+        <button type="button" class="predictions-button"
+                data-testid="segment-gains-submit"
+                @onclick="SubmitAsync"
+                disabled="@(Rules.Count == 0 || isSubmitting)">
+            Create adjustment
+        </button>
+    </div>
+</div>
+
+@code {
+    private const int MaximumRules = 10;
+    private static readonly IReadOnlyDictionary<string, string[]> EmptyErrors = new Dictionary<string, string[]>();
+
+    [Parameter, EditorRequired]
+    public Guid PredictionId { get; set; }
+
+    [Parameter]
+    public EventCallback<Guid> OnCreated { get; set; }
+
+    private List<RuleRow> Rules { get; } = [];
+    private ApiProblemException? Problem { get; set; }
+    private bool isSubmitting;
+
+    private IReadOnlyDictionary<string, string[]> FieldErrors => Problem?.Errors ?? EmptyErrors;
+
+    private void AddRule()
+    {
+        if (Rules.Count >= MaximumRules) return;
+        Rules.Add(new RuleRow());
+    }
+
+    private void RemoveRule(int index) => Rules.RemoveAt(index);
+
+    // Switching a row's selector or mode clears whichever fields belonged to the old choice, so a
+    // stale gradient bound can't ride along as a hidden sequence bound (or a stale factor as a delta).
+    private static void ChangeSelector(RuleRow row, object? value)
+    {
+        if (value is not string text || !Enum.TryParse<RuleSelector>(text, out var selector)) return;
+        row.Selector = selector;
+        row.Min = null;
+        row.Max = null;
+    }
+
+    private static void ChangeMode(RuleRow row, object? value)
+    {
+        if (value is not string text || !Enum.TryParse<RuleMode>(text, out var mode)) return;
+        row.Mode = mode;
+        row.FactorValue = null;
+        row.DeltaValue = null;
+    }
+
+    private static void SetValue(RuleRow row, string? value)
+    {
+        if (row.Mode == RuleMode.Factor) row.FactorValue = value;
+        else row.DeltaValue = value;
+    }
+
+    private async Task SubmitAsync()
+    {
+        Problem = null;
+        isSubmitting = true;
+        try
+        {
+            var requests = Rules.Select(ToRequest).ToList();
+            var submission = await Api.CreatePredictionAdjustmentAsync(PredictionId, new SegmentSpecificGainsRequest(requests), CancellationToken.None);
+            Rules.Clear();
+            await OnCreated.InvokeAsync(submission.AdjustmentId);
+        }
+        catch (ApiProblemException problem)
+        {
+            Problem = problem;
+        }
+        finally
+        {
+            isSubmitting = false;
+        }
+    }
+
+    private static SegmentGainsRuleRequest ToRequest(RuleRow row) => row.Selector switch
+    {
+        RuleSelector.Gradient => new SegmentGainsRuleRequest(ParseDouble(row.Min), ParseDouble(row.Max), null, null, null, null, ParseFactor(row), ParseDelta(row)),
+        RuleSelector.Sequence => new SegmentGainsRuleRequest(null, null, ParseInt(row.Min), ParseInt(row.Max), null, null, ParseFactor(row), ParseDelta(row)),
+        RuleSelector.Distance => new SegmentGainsRuleRequest(null, null, null, null, ParseDouble(row.Min), ParseDouble(row.Max), ParseFactor(row), ParseDelta(row)),
+        _ => throw new InvalidOperationException($"Unhandled selector {row.Selector}."),
+    };
+
+    private static double? ParseFactor(RuleRow row) => row.Mode == RuleMode.Factor ? ParseDouble(row.FactorValue) : null;
+    private static double? ParseDelta(RuleRow row) => row.Mode == RuleMode.Delta ? ParseDouble(row.DeltaValue) : null;
+    private static double? ParseDouble(string? value) => double.TryParse(value, out var parsed) ? parsed : null;
+    private static int? ParseInt(string? value) => int.TryParse(value, out var parsed) ? parsed : null;
+
+    private enum RuleSelector { Gradient, Sequence, Distance }
+    private enum RuleMode { Factor, Delta }
+
+    private sealed class RuleRow
+    {
+        public RuleSelector Selector { get; set; } = RuleSelector.Gradient;
+        public string? Min { get; set; }
+        public string? Max { get; set; }
+        public RuleMode Mode { get; set; } = RuleMode.Factor;
+        public string? FactorValue { get; set; } = "1.0";
+        public string? DeltaValue { get; set; }
+    }
+}

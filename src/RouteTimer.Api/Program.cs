@@ -30,6 +30,7 @@ using RouteTimer.Services.Physics;
 using RouteTimer.Services.Persistence;
 using RouteTimer.Services.Predictions;
 using RouteTimer.Services.Adjustments;
+using RouteTimer.Services.Adjustments.SegmentGains;
 using RouteTimer.Services.Security;
 using RouteTimer.Services.Settings;
 using RouteTimer.Services.Training;
@@ -176,9 +177,11 @@ builder.Services.AddScoped<IJobHandler, PredictionJobHandler>();
 builder.Services.AddScoped<IPredictionAdjustmentRepository, PredictionAdjustmentRepository>();
 var pacingStrategyOptions = PacingStrategyOptions.Bind(builder.Configuration);
 builder.Services.AddSingleton(pacingStrategyOptions);
-// No strategy handlers are registered yet (each strategy's own delivery task adds one). Sourcing
-// enabledTypes from configuration here (rather than a literal []) is already correct for when they
-// are: every strategy flag defaults to false, so this stays empty until an operator turns one on.
+builder.Services.AddSingleton<IPacingStrategyHandler, SegmentGainsHandler>();
+// The remaining strategies still have no registered handler (each strategy's own delivery task adds
+// one). Sourcing enabledTypes from configuration here (rather than a literal []) is already correct
+// for when they are: every strategy flag defaults to false, so this only grows as an operator turns
+// one on and its handler exists.
 builder.Services.AddScoped(sp => new PacingStrategyDispatcher(sp.GetServices<IPacingStrategyHandler>(), pacingStrategyOptions.EnabledTypes));
 builder.Services.AddScoped<PredictionAdjustmentService>();
 builder.Services.AddScoped<PredictionAdjustmentQueryService>();
