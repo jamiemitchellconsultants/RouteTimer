@@ -2,7 +2,6 @@ using RouteTimer.Domain.Models;
 using RouteTimer.Domain.Physics;
 using RouteTimer.Domain.Predictions;
 using RouteTimer.Domain.Profile;
-using RouteTimer.Domain.Routes;
 using RouteTimer.Services.Models;
 using RouteTimer.Services.Physics;
 
@@ -18,7 +17,11 @@ public sealed class RoutePredictor : IRoutePredictor
     public RoutePredictor(IDescentSpeedLimiter descentLimiter) =>
         _descentLimiter = descentLimiter ?? throw new ArgumentNullException(nameof(descentLimiter));
 
-    public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model)
+    public PredictionResult Predict(
+        PredictionRoute route,
+        RiderProfile profile,
+        RiderModel model,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(route);
         ArgumentNullException.ThrowIfNull(profile);
@@ -26,7 +29,7 @@ public sealed class RoutePredictor : IRoutePredictor
         ValidateInputs(route, profile, model);
 
         var lookup = new PowerLookup(model.PowerModel);
-        var segments = new List<PredictionSegment>(route.Samples.Count - 1);
+        var segments = new List<PredictionSegment>(route.Segments.Count);
         var warnings = new List<string>();
         var warningSet = new HashSet<string>(StringComparer.Ordinal);
         var elapsed = TimeSpan.Zero;
@@ -34,8 +37,9 @@ public sealed class RoutePredictor : IRoutePredictor
         var entrySpeed = InitialSpeedMetresPerSecond;
         var physicalConfidence = model.WasCalibrated ? ConfidenceLevel.High : ConfidenceLevel.Low;
 
-        foreach (var sample in route.Samples.Skip(1))
+        foreach (var sample in route.Segments)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var estimate = lookup.GetWatts(sample.Gradient, elapsed);
             if (!double.IsFinite(estimate.Watts) || estimate.Watts < 0 || !Enum.IsDefined(estimate.Confidence))
                 throw new PredictionCalculationException("Prediction resolved invalid rider power.");
@@ -158,22 +162,22 @@ public sealed class RoutePredictor : IRoutePredictor
         return new AcceptedSubstep(exitSpeed, seconds);
     }
 
-    private static void ValidateInputs(ProcessedRoute route, RiderProfile profile, RiderModel model)
+    private static void ValidateInputs(PredictionRoute route, RiderProfile profile, RiderModel model)
     {
         var mass = profile.RiderWeightKg + profile.BikeAndEquipmentWeightKg;
         if (!double.IsFinite(mass) || mass <= 0)
             throw new PredictionCalculationException("Prediction requires positive finite total mass.");
         if (!double.IsFinite(route.DistanceMetres) || route.DistanceMetres < 0 ||
             !double.IsFinite(route.AscentMetres) || route.AscentMetres < 0 ||
-            route.Samples is null || route.Samples.Count < 2)
+            route.Segments is null || route.Segments.Count < 1)
             throw new PredictionCalculationException("Prediction route geometry is invalid.");
 
-        foreach (var sample in route.Samples)
+        foreach (var sample in route.Segments)
         {
             if (sample is null ||
-                !double.IsFinite(sample.Point.Latitude) ||
-                !double.IsFinite(sample.Point.Longitude) ||
-                !double.IsFinite(sample.Point.ElevationMetres) ||
+                !double.IsFinite(sample.Latitude) ||
+                !double.IsFinite(sample.Longitude) ||
+                !double.IsFinite(sample.ElevationMetres) ||
                 !double.IsFinite(sample.CumulativeDistanceMetres) || sample.CumulativeDistanceMetres < 0 ||
                 !double.IsFinite(sample.SegmentDistanceMetres) || sample.SegmentDistanceMetres < 0 ||
                 !double.IsFinite(sample.Gradient) ||
@@ -181,7 +185,7 @@ public sealed class RoutePredictor : IRoutePredictor
                 throw new PredictionCalculationException("Prediction route geometry is invalid.");
         }
 
-        if (route.Samples.Skip(1).Any(sample => sample.SegmentDistanceMetres <= 0))
+        if (route.Segments.Any(sample => sample.SegmentDistanceMetres <= 0))
             throw new PredictionCalculationException("Prediction segments require positive finite distance.");
         if (model.PowerModel is null || model.PowerModel.Bands is null ||
             !double.IsFinite(model.PowerModel.GlobalTypicalWatts) || model.PowerModel.GlobalTypicalWatts < 0)

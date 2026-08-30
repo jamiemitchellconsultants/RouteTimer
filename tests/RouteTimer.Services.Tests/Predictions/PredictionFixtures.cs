@@ -51,11 +51,7 @@ internal static class PredictionFixtures
         Model(new PowerModel([], 0), LosslessCoefficients, calibrated: true),
         new RiderProfile(1, 0));
 
-    public static PredictionResult PredictMixedRoute()
-    {
-        var route = Route((10, 0, 0), (10, .04, .001), (10, -.06, .02), (10, -.01, 0));
-        return Predict(route, Model(new PowerModel([], 250), PhysicalCoefficients.Default, calibrated: false), new RiderProfile(75, 10));
-    }
+    public static PredictionResult PredictMixedRoute() => MixedRouteGoldenResult();
 
     public static PredictionResult PredictSingle(double grade, double watts, double mass, double curvature, double distance) =>
         Predict(Route((distance, grade, curvature)), Model(new PowerModel([], watts), PhysicalCoefficients.Default, calibrated: false), new RiderProfile(mass, 0));
@@ -105,7 +101,19 @@ internal static class PredictionFixtures
         RiderModel model,
         RiderProfile profile,
         IDescentSpeedLimiter? descentLimiter = null) =>
+        Predict(PredictionRoute.FromProcessed(route), model, profile, descentLimiter);
+
+    public static PredictionResult Predict(
+        PredictionRoute route,
+        RiderModel model,
+        RiderProfile profile,
+        IDescentSpeedLimiter? descentLimiter = null) =>
         new RoutePredictor(descentLimiter ?? new DescentSpeedLimiter()).Predict(route, profile, model);
+
+    public static ProcessedRoute MixedProcessedRoute() => Route((10, 0, 0), (10, .04, .001), (10, -.06, .02), (10, -.01, 0));
+
+    public static PredictionResult MixedRouteGoldenResult() =>
+        Predict(MixedProcessedRoute(), Model(new PowerModel([], 250), PhysicalCoefficients.Default, calibrated: false), new RiderProfile(75, 10));
 
     public static ProcessedRoute Route(params (double Distance, double Grade, double Curvature)[] segments)
     {

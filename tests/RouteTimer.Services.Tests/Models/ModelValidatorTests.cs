@@ -254,7 +254,7 @@ public sealed class ModelValidatorTests
         var descents = FakeDescentLimitBuilder.Fallbacks(4);
         var routeProcessor = new FakeRouteProcessor(Enumerable.Repeat<Func<IReadOnlyList<GeoPoint>, ProcessedRoute>>(_ => EmptyRoute(), 4));
         var predictor = new FakeRoutePredictor(activities.Select(activity =>
-            new Func<ProcessedRoute, RiderProfile, RiderModel, PredictionResult>((_, _, _) => PredictionOf(activity.MovingDuration.TotalSeconds))));
+            new Func<PredictionRoute, RiderProfile, RiderModel, PredictionResult>((_, _, _) => PredictionOf(activity.MovingDuration.TotalSeconds))));
         var validator = new ModelValidator(builder, calibrator, descents, routeProcessor, predictor);
 
         var result = validator.Validate(SampleProfile, activities);
@@ -289,7 +289,7 @@ public sealed class ModelValidatorTests
         var calibrator = new FakePhysicsCalibrator(Enumerable.Repeat<Func<IReadOnlyList<CleanedActivity>, PhysicalCalibrationResult>>(_ => calibration, 3));
         var descents = new FakeDescentLimitBuilder(Enumerable.Repeat<Func<IReadOnlyList<CleanedActivity>, DescentLimitModel>>(_ => descentModel, 3));
         var routeProcessor = new FakeRouteProcessor(Enumerable.Repeat<Func<IReadOnlyList<GeoPoint>, ProcessedRoute>>(_ => EmptyRoute(), 3));
-        var predictor = new FakeRoutePredictor(Enumerable.Repeat<Func<ProcessedRoute, RiderProfile, RiderModel, PredictionResult>>(
+        var predictor = new FakeRoutePredictor(Enumerable.Repeat<Func<PredictionRoute, RiderProfile, RiderModel, PredictionResult>>(
             (_, _, model) =>
             {
                 Assert.Same(SampleModel, model.PowerModel);
@@ -324,8 +324,8 @@ public sealed class ModelValidatorTests
         };
         var processor = new RouteProcessor(RouteProcessingOptions.Default);
         var expected = processor.Process(points);
-        var actualRoutes = new List<ProcessedRoute>();
-        var predictor = new FakeRoutePredictor(Enumerable.Repeat<Func<ProcessedRoute, RiderProfile, RiderModel, PredictionResult>>(
+        var actualRoutes = new List<PredictionRoute>();
+        var predictor = new FakeRoutePredictor(Enumerable.Repeat<Func<PredictionRoute, RiderProfile, RiderModel, PredictionResult>>(
             (route, _, _) =>
             {
                 actualRoutes.Add(route);
@@ -343,8 +343,8 @@ public sealed class ModelValidatorTests
 
         Assert.Equal(3, actualRoutes.Count);
         Assert.All(actualRoutes, actual => Assert.Equal(
-            expected.Samples.Select(sample => (sample.Point.ElevationMetres, sample.Gradient, sample.CurvaturePerMetre)),
-            actual.Samples.Select(sample => (sample.Point.ElevationMetres, sample.Gradient, sample.CurvaturePerMetre))));
+            expected.Samples.Skip(1).Select(sample => (sample.Point.ElevationMetres, sample.Gradient, sample.CurvaturePerMetre)),
+            actual.Segments.Select(segment => (segment.ElevationMetres, segment.Gradient, segment.CurvaturePerMetre))));
     }
 
     private static ModelValidator CreateValidator(
@@ -382,7 +382,10 @@ public sealed class ModelValidatorTests
         return new CleanedActivity("Short Ride", samples, TimeSpan.FromMinutes(1), new ActivityQuality(ActivityEligibility.Ineligible, 0.1, 0.1, 0.1, 0, new Dictionary<string, int> { ["gap"] = 1 }, ["too-short"]), ActivityFixtures.Metadata("short-ride.fit", start, start, null, null, null, null));
     }
 
-    private static ProcessedRoute EmptyRoute() => new([], 0, 0);
+    private static ProcessedRoute EmptyRoute() => new(
+        [new RouteSample(0, new GeoPoint(51, -2, 0), 0, 0, 0, 0), new RouteSample(1, new GeoPoint(51, -2, 0), 1, 1, 0, 0)],
+        1,
+        0);
 
     private static PredictionResult PredictionOf(double movingSeconds) => new([], TimeSpan.FromSeconds(movingSeconds), ConfidenceLevel.High, []);
 
@@ -477,14 +480,14 @@ public sealed class ModelValidatorTests
 
     private sealed class FakeRoutePredictor : IRoutePredictor
     {
-        private readonly Queue<Func<ProcessedRoute, RiderProfile, RiderModel, PredictionResult>> _handlers;
+        private readonly Queue<Func<PredictionRoute, RiderProfile, RiderModel, PredictionResult>> _handlers;
 
-        public FakeRoutePredictor(IEnumerable<Func<ProcessedRoute, RiderProfile, RiderModel, PredictionResult>> handlers) =>
-            _handlers = new Queue<Func<ProcessedRoute, RiderProfile, RiderModel, PredictionResult>>(handlers);
+        public FakeRoutePredictor(IEnumerable<Func<PredictionRoute, RiderProfile, RiderModel, PredictionResult>> handlers) =>
+            _handlers = new Queue<Func<PredictionRoute, RiderProfile, RiderModel, PredictionResult>>(handlers);
 
         public int CallCount { get; private set; }
 
-        public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model)
+        public PredictionResult Predict(PredictionRoute route, RiderProfile profile, RiderModel model, CancellationToken cancellationToken = default)
         {
             CallCount++;
             if (_handlers.Count == 0)
