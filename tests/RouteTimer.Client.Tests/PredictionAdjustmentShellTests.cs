@@ -36,6 +36,7 @@ public sealed class PredictionAdjustmentShellTests : BunitContext
         var module = JSInterop.SetupModule("./js/route-visualization.js");
         module.SetupVoid("initializeMap", _ => true).SetVoidResult();
         module.SetupVoid("initializeProfiles", _ => true).SetVoidResult();
+        module.SetupVoid("initializeComparisonProfiles", _ => true).SetVoidResult();
         module.SetupVoid("selectMapSequence", _ => true).SetVoidResult();
         module.SetupVoid("selectProfileSequence", _ => true).SetVoidResult();
         module.SetupVoid("disposeMap", _ => true).SetVoidResult();
@@ -216,11 +217,55 @@ public sealed class PredictionAdjustmentShellTests : BunitContext
         Assert.NotNull(cut.Find($"[data-testid=adjustment-card-{sibling.Id}]"));
     }
 
+    // Break caught: the visualization keeps comparing a previously selected adjustment, or keeps
+    // comparing at all once the selection is cleared.
+    [Fact]
+    public void Visualization_compares_only_the_selected_adjustment_and_returns_to_baseline_when_cleared()
+    {
+        var predictionId = Guid.NewGuid();
+        var first = AdjustmentSummary(predictionId, "TimeTarget");
+        var second = AdjustmentSummary(predictionId, "SegmentSpecificGains");
+        IReadOnlyList<PredictionAdjustmentSegmentResponse> firstSegments =
+            [new PredictionAdjustmentSegmentResponse(1, 210, 6.5, 70, 70, "Medium", null, null, null)];
+        IReadOnlyList<PredictionAdjustmentSegmentResponse> secondSegments =
+            [new PredictionAdjustmentSegmentResponse(1, 300, 9.0, 50, 50, "High", null, null, null)];
+
+        api.OnGetPredictionAsync = (_, _) => Task.FromResult<PredictionDetailResponse?>(SucceededPrediction(predictionId));
+        api.OnGetPredictionAdjustmentsAsync = (_, _) => Task.FromResult<IReadOnlyList<PredictionAdjustmentSummaryResponse>>([first, second]);
+        api.OnGetPredictionAdjustmentAsync = (_, adjustmentId, _) => Task.FromResult<PredictionAdjustmentDetailResponse?>(
+            adjustmentId == first.Id
+                ? AdjustmentDetail(first, firstSegments)
+                : AdjustmentDetail(second, secondSegments));
+
+        var cut = Render<PredictionDetail>(parameters => parameters.Add(page => page.Id, predictionId));
+
+        cut.Find($"[data-testid=adjustment-compare-{first.Id}]").Click();
+        var comparison = cut.Find("[data-testid=prediction-visualization-comparison]").TextContent;
+        Assert.Contains("245 W", comparison, StringComparison.Ordinal);
+        Assert.Contains("210 W", comparison, StringComparison.Ordinal);
+        Assert.DoesNotContain("300 W", comparison, StringComparison.Ordinal);
+
+        cut.Find($"[data-testid=adjustment-compare-{second.Id}]").Click();
+        comparison = cut.Find("[data-testid=prediction-visualization-comparison]").TextContent;
+        Assert.Contains("300 W", comparison, StringComparison.Ordinal);
+        Assert.DoesNotContain("210 W", comparison, StringComparison.Ordinal);
+
+        cut.Find("[data-testid=adjustment-back-to-baseline]").Click();
+
+        Assert.Throws<ElementNotFoundException>(() => cut.Find("[data-testid=prediction-visualization-comparison]"));
+        Assert.Throws<ElementNotFoundException>(() => cut.Find("[data-testid=prediction-visualization-comparison-problem]"));
+    }
+
     private static PredictionAdjustmentSummaryResponse AdjustmentSummary(Guid predictionId, string strategyType) => new(
         Guid.NewGuid(), predictionId, strategyType, "Succeeded", 1100, 6.5, 210, "Medium", [], $"{strategyType}-v1", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow);
 
     private static PredictionAdjustmentDetailResponse AdjustmentDetail(PredictionAdjustmentSummaryResponse summary) => new(
         summary, JsonDocument.Parse("{}").RootElement, null, []);
+
+    private static PredictionAdjustmentDetailResponse AdjustmentDetail(
+        PredictionAdjustmentSummaryResponse summary,
+        IReadOnlyList<PredictionAdjustmentSegmentResponse> segments) => new(
+        summary, JsonDocument.Parse("{}").RootElement, null, segments);
 
     private static PredictionDetailResponse SucceededPrediction(Guid predictionId) => new(
         new PredictionSummaryResponse(

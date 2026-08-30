@@ -6,6 +6,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.JSInterop;
 using RouteTimer.Client.Components;
+using RouteTimer.Contracts.Adjustments;
 using RouteTimer.Contracts.Predictions;
 
 namespace RouteTimer.Client.Tests;
@@ -154,11 +155,117 @@ public sealed class PredictionVisualizationTests : BunitContext
         Assert.ThrowsAny<ObjectDisposedException>(() => _ = profileReference.Value);
     }
 
+    [Fact]
+    public void Baseline_only_keeps_existing_route_profile_arguments()
+    {
+        Services.AddSingleton<IConfiguration>(BuildConfiguration(includeTiles: true));
+        var module = SetupVisualizationModule();
+
+        var cut = Render<PredictionVisualization>(parameters => parameters.Add(component => component.Segments, Segments));
+
+        cut.WaitForAssertion(() =>
+        {
+            var invocation = Assert.Single(module.Invocations["initializeProfiles"]);
+            Assert.Equal(4, invocation.Arguments.Count);
+            Assert.DoesNotContain("initializeComparisonProfiles", module.Invocations.Identifiers);
+            Assert.Throws<ElementNotFoundException>(() => cut.Find("[data-testid=prediction-visualization-comparison]"));
+        });
+    }
+
+    [Fact]
+    public void Aligned_adjustment_is_passed_to_comparison_profiles()
+    {
+        Services.AddSingleton<IConfiguration>(BuildConfiguration(includeTiles: true));
+        var module = SetupVisualizationModule();
+
+        var cut = Render<PredictionVisualization>(parameters => parameters
+            .Add(component => component.Segments, Segments)
+            .Add(component => component.AdjustmentSegments, AdjustmentSegments));
+
+        cut.WaitForAssertion(() =>
+        {
+            var invocation = Assert.Single(module.Invocations["initializeComparisonProfiles"]);
+            Assert.Equal(5, invocation.Arguments.Count);
+            Assert.Equal(Segments, invocation.Arguments[2]);
+            Assert.Equal(AdjustmentSegments, invocation.Arguments[3]);
+            Assert.DoesNotContain("initializeProfiles", module.Invocations.Identifiers);
+            Assert.Throws<ElementNotFoundException>(() => cut.Find("[data-testid=prediction-visualization-comparison-problem]"));
+        });
+    }
+
+    [Fact]
+    public void Mismatched_adjustment_shows_problem_and_never_invokes_comparison_profiles()
+    {
+        Services.AddSingleton<IConfiguration>(BuildConfiguration(includeTiles: true));
+        var module = SetupVisualizationModule();
+        IReadOnlyList<PredictionAdjustmentSegmentResponse> mismatched =
+        [
+            new PredictionAdjustmentSegmentResponse(1, 260, 8.5, 58, 58, "High", null, null, null),
+            new PredictionAdjustmentSegmentResponse(3, 275, 9.2, 58, 116, "High", null, null, null)
+        ];
+
+        var cut = Render<PredictionVisualization>(parameters => parameters
+            .Add(component => component.Segments, Segments)
+            .Add(component => component.AdjustmentSegments, mismatched));
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Equal(
+                "The selected adjustment does not match the baseline route.",
+                cut.Find("[data-testid=prediction-visualization-comparison-problem]").TextContent.Trim());
+
+            // The baseline keeps rendering: map, charts, and readout are untouched.
+            Assert.Single(module.Invocations["initializeMap"]);
+            var invocation = Assert.Single(module.Invocations["initializeProfiles"]);
+            Assert.Equal(4, invocation.Arguments.Count);
+            Assert.DoesNotContain("initializeComparisonProfiles", module.Invocations.Identifiers);
+            Assert.Contains("0.5 km", cut.Find("[data-testid=prediction-visualization-selection]").TextContent, StringComparison.Ordinal);
+            Assert.Throws<ElementNotFoundException>(() => cut.Find("[data-testid=prediction-visualization-comparison]"));
+        });
+    }
+
+    [Fact]
+    public async Task Selected_readout_shows_baseline_adjustment_deltas_and_annotations()
+    {
+        Services.AddSingleton<IConfiguration>(BuildConfiguration(includeTiles: true));
+        SetupVisualizationModule();
+
+        var cut = Render<PredictionVisualization>(parameters => parameters
+            .Add(component => component.Segments, Segments)
+            .Add(component => component.AdjustmentSegments, AdjustmentSegments));
+
+        var comparison = cut.Find("[data-testid=prediction-visualization-comparison]").TextContent;
+        Assert.Contains("Baseline", comparison, StringComparison.Ordinal);
+        Assert.Contains("246 W", comparison, StringComparison.Ordinal);
+        Assert.Contains("29.5 km/h", comparison, StringComparison.Ordinal);
+        Assert.Contains("Adjustment", comparison, StringComparison.Ordinal);
+        Assert.Contains("260 W", comparison, StringComparison.Ordinal);
+        Assert.Contains("30.6 km/h", comparison, StringComparison.Ordinal);
+        Assert.Contains("+14 W", comparison, StringComparison.Ordinal);
+        Assert.Contains("+1.1 km/h", comparison, StringComparison.Ordinal);
+        Assert.Contains("-2 s", comparison, StringComparison.Ordinal);
+        Assert.Contains("Zone 3", comparison, StringComparison.Ordinal);
+        Assert.Contains("Burn", comparison, StringComparison.Ordinal);
+        Assert.Contains("12,500 J", comparison, StringComparison.Ordinal);
+
+        // Segment 2 carries no annotations, so none are rendered rather than shown as zero or blank.
+        await cut.FindComponent<RouteMap>().Instance.OnSequenceSelected(2);
+        cut.WaitForAssertion(() =>
+        {
+            var second = cut.Find("[data-testid=prediction-visualization-comparison]").TextContent;
+            Assert.Contains("275 W", second, StringComparison.Ordinal);
+            Assert.DoesNotContain("Zone", second, StringComparison.Ordinal);
+            Assert.DoesNotContain("W'", second, StringComparison.Ordinal);
+            Assert.Throws<ElementNotFoundException>(() => cut.Find("[data-testid=prediction-visualization-comparison-annotations]"));
+        });
+    }
+
     private BunitJSModuleInterop SetupVisualizationModule()
     {
         var module = JSInterop.SetupModule("./js/route-visualization.js");
         module.SetupVoid("initializeMap", _ => true).SetVoidResult();
         module.SetupVoid("initializeProfiles", _ => true).SetVoidResult();
+        module.SetupVoid("initializeComparisonProfiles", _ => true).SetVoidResult();
         module.SetupVoid("selectMapSequence", _ => true).SetVoidResult();
         module.SetupVoid("selectProfileSequence", _ => true).SetVoidResult();
         module.SetupVoid("disposeMap", _ => true).SetVoidResult();
@@ -193,5 +300,11 @@ public sealed class PredictionVisualizationTests : BunitContext
     [
         new PredictionSegmentResponse(1, 51.5007, -0.1246, 126, 500, 500, 0.02, 0.001, 246, 8.2, 60, 60, "Medium"),
         new PredictionSegmentResponse(2, 51.5105, -0.1224, 132, 1000, 500, 0.03, 0.001, 250, 8.9, 62, 122, "High")
+    ];
+
+    private static IReadOnlyList<PredictionAdjustmentSegmentResponse> AdjustmentSegments =>
+    [
+        new PredictionAdjustmentSegmentResponse(1, 260, 8.5, 58, 58, "High", 3, "burn", 12_500),
+        new PredictionAdjustmentSegmentResponse(2, 275, 9.2, 58, 116, "High", null, null, null)
     ];
 }
