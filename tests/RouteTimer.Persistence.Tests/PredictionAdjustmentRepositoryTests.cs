@@ -398,6 +398,71 @@ public sealed class PredictionAdjustmentRepositoryTests
         Assert.False(published);
     }
 
+    // Break caught: two siblings created at the same moment collide on an id or a unique index, so one
+    // request silently loses its child.
+    [Fact]
+    public async Task Parallel_sibling_creation_keeps_both_children_with_distinct_ids()
+    {
+        await using var database = await StartDatabaseAsync();
+        Guid predictionId;
+        await using (var setup = CreateContext(database))
+        {
+            await setup.Database.MigrateAsync();
+            predictionId = await SeedBaselineAsync(setup, "Succeeded", sequences: [1]);
+        }
+
+        async Task<Guid?> CreateAsync()
+        {
+            await using var context = CreateContext(database);
+            var result = await new PredictionAdjustmentRepository(context)
+                .CreateQueuedAsync(Creation(predictionId), CancellationToken.None);
+            return result.AdjustmentId;
+        }
+
+        var created = await Task.WhenAll(CreateAsync(), CreateAsync());
+
+        Assert.All(created, id => Assert.NotNull(id));
+        Assert.Equal(2, created.Distinct().Count());
+
+        await using var verify = CreateContext(database);
+        Assert.Equal(2, await verify.PredictionAdjustments.CountAsync(entity => entity.PredictionId == predictionId));
+    }
+
+    // Break caught: a job delivered twice to the same worker publishes twice, doubling the child's
+    // segment rows instead of being rejected as already terminal.
+    [Fact]
+    public async Task A_second_publish_by_the_same_worker_is_rejected_without_duplicating_segments()
+    {
+        await using var database = await StartDatabaseAsync();
+        Guid predictionId, adjustmentId, jobId;
+        await using (var setup = CreateContext(database))
+        {
+            await setup.Database.MigrateAsync();
+            predictionId = await SeedBaselineAsync(setup, "Succeeded", sequences: [1]);
+            adjustmentId = (await new PredictionAdjustmentRepository(setup)
+                .CreateQueuedAsync(Creation(predictionId), CancellationToken.None)).AdjustmentId!.Value;
+            jobId = await EnqueueRunningJobAsync(setup, adjustmentId, "worker-a");
+        }
+
+        await using (var first = CreateContext(database))
+        {
+            Assert.True(await new PredictionAdjustmentRepository(first)
+                .TryPublishAsync(adjustmentId, jobId, "worker-a", SinglePublication(), CancellationToken.None));
+        }
+
+        await using (var second = CreateContext(database))
+        {
+            Assert.False(await new PredictionAdjustmentRepository(second)
+                .TryPublishAsync(adjustmentId, jobId, "worker-a", SinglePublication(), CancellationToken.None));
+        }
+
+        await using var verify = CreateContext(database);
+        var segmentCount = await verify.Database.SqlQuery<int>($"""
+            SELECT COUNT(*)::int AS "Value" FROM prediction_adjustment_segments WHERE "AdjustmentId" = {adjustmentId}
+            """).SingleAsync();
+        Assert.Equal(1, segmentCount);
+    }
+
     private static async Task<Guid> EnqueueAdjustmentJobAsync(
         RouteTimerDbContext context, Guid adjustmentId, string state, string? workerId)
     {
