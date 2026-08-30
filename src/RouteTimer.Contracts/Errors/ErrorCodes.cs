@@ -44,4 +44,11 @@ public static class ErrorCodes
     public const string GoogleMapsKeyStorageUnavailable = "google-maps-key-storage-unavailable";
     public const string PredictionNotComplete = "prediction-not-complete";
     public const string GarminCourseRejected = "garmin-course-rejected";
+    public const string AdjustmentNotFound = "adjustment-not-found";
+    public const string AdjustmentBaselineNotReady = "adjustment-baseline-not-ready";
+    public const string PacingStrategyDisabled = "pacing-strategy-disabled";
+    public const string PacingStrategyInvalid = "pacing-strategy-invalid";
+    public const string PacingStrategyTooLarge = "pacing-strategy-too-large";
+    public const string PacingStrategyCapacityRequired = "pacing-strategy-capacity-required";
+    public const string PacingStrategyTargetInfeasible = "pacing-strategy-target-infeasible";
 }
