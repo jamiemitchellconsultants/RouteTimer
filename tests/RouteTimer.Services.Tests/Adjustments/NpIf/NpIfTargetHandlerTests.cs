@@ -3,6 +3,8 @@ using System.Linq;
 using System.Threading;
 using RouteTimer.Domain.Adjustments;
 using RouteTimer.Domain.Adjustments.NpIf;
+using RouteTimer.Domain.Models;
+using RouteTimer.Domain.Predictions;
 using RouteTimer.Services.Adjustments.NpIf;
 using RouteTimer.Services.Predictions;
 using RouteTimer.Services.Routes;
@@ -45,20 +47,40 @@ public class NpIfTargetHandlerTests
         Assert.True(easy.SelectedParameter < hard.SelectedParameter);
     }
 
-    [Fact]
-    public void Additive_mode_shifts_every_segment_by_the_selected_offset()
+    // Break caught: additive mode multiplies, or lets a large negative offset drive power below zero.
+    [Theory]
+    [InlineData(NpIfScalingMode.Additive, 40, 240)]
+    [InlineData(NpIfScalingMode.Additive, -40, 160)]
+    [InlineData(NpIfScalingMode.Additive, -500, 0)]
+    [InlineData(NpIfScalingMode.Proportional, 1.2, 240)]
+    [InlineData(NpIfScalingMode.Proportional, 0.5, 100)]
+    public void The_policy_applies_its_parameter_to_the_baseline_estimate(NpIfScalingMode mode, double parameter, double expectedWatts)
     {
-        var (context, baseline) = PacingFixtures.BuildContext(PacingFixtures.FlatLong);
+        var context = new PowerTargetContext(
+            new PredictionRouteSegment(1, 51.1, -2.1, 100, 100, 100, 0.02, 0),
+            TimeSpan.FromMinutes(5),
+            new PowerEstimate(200, ConfidenceLevel.High, false, "band"));
+
+        var resolved = new NpIfPowerPolicy(mode, parameter).Resolve(context);
+
+        Assert.Equal(expectedWatts, resolved.Watts, 9);
+        Assert.Equal(context.BaselineEstimate.Confidence, resolved.Confidence);
+    }
+
+    // Break caught: the report says proportional while the handler ran additive, or the reported offset
+    // is not a finite watt figure.
+    [Fact]
+    public void Additive_mode_is_reported_with_a_finite_watt_offset()
+    {
+        var (context, _) = PacingFixtures.BuildContext(PacingFixtures.FlatLong);
         var definition = new NpIfTargetDefinition(0.95, 250, NpIfScalingMode.Additive);
 
-        var computation = new NpIfTargetHandler(_predictor).Run(context, definition, CancellationToken.None);
-        var report = (NpIfTargetReport)computation.Report;
+        var report = (NpIfTargetReport)new NpIfTargetHandler(_predictor)
+            .Run(context, definition, CancellationToken.None).Report;
 
         Assert.Equal(NpIfScalingMode.Additive, report.Mode);
-        foreach (var (adjusted, baselineSegment) in computation.Adjusted.Segments.Zip(baseline.Segments))
-        {
-            Assert.Equal(Math.Max(0, baselineSegment.PowerWatts + report.SelectedParameter), adjusted.PowerWatts, 6);
-        }
+        Assert.True(double.IsFinite(report.SelectedParameter));
+        Assert.InRange(report.SelectedParameter, -2000, 2000);
     }
 
     [Fact]

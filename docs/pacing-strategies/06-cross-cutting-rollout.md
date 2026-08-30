@@ -1,142 +1,128 @@
 # Cross-Cutting Rollout Plan — All Five Strategies
 
-**Date:** 2026-08-27  
-**Status:** Plan only — no code changes
+**Date:** 2026-08-30
+**Status:** Describes the delivered architecture and how to roll it out.
+
+This document replaced its own earlier contents. The original plan proposed carrying a strategy on
+prediction submission and storing one adjusted result beside the baseline. That design was rejected and
+replaced by immutable baselines with append-only child adjustments — see the accepted narrative entries
+`correct-pacing-strategies-to-append-only-adjustments` and
+`docs-adopt-pacing-adjustment-architecture-and-implementation-plan`, and the per-strategy designs in
+[`00-overview.md`](00-overview.md). Deterministic test evidence lives in
+[`backtesting.md`](backtesting.md).
 
 ---
 
-## Shared Infrastructure (build once, used by all strategies)
+## What ships
 
-### 1. Discriminated union in contracts
+A prediction is an immutable baseline. Once it succeeds, any number of child adjustments can be created
+under it; each is computed by its own background job and is itself immutable once published. Deleting a
+child never touches the baseline; deleting a baseline cascades its children and cancels their active jobs.
 
-```csharp
-// RouteTimer.Contracts/Predictions/PacingStrategyRequest.cs
-// New file — replaces nothing existing
-public abstract record PacingStrategyRequest(string Type);
+| Concern | Delivered shape |
+|---|---|
+| Create | `POST /api/predictions/{predictionId}/adjustments` — JSON body, polymorphic on `type`. Returns `202` with the adjustment and job ids. |
+| Read | `GET /api/predictions/{predictionId}/adjustments` and `.../adjustments/{adjustmentId}` |
+| Delete | `DELETE /api/predictions/{predictionId}/adjustments/{adjustmentId}` |
+| Capabilities | `GET /api/pacing-strategies` — reports the flags and limits below |
+| Storage | `prediction_adjustments` and `prediction_adjustment_segments`, added by the `AddPredictionAdjustments` migration. No strategy column is added to `predictions`. |
+| Work | `AdjustPrediction` jobs on the existing analysis-job queue, owner-guarded at publication |
 
-public sealed record SegmentSpecificGainsRequest(IReadOnlyList<SegmentGainRuleRequest> Rules, bool IncludeBaseline)
-    : PacingStrategyRequest("segment-specific-gains");
-
-public sealed record NpIfTargetRequest(double TargetIntensityFactor, double FtpWatts, string ScalingMode, bool IncludeBaseline)
-    : PacingStrategyRequest("np-if-target");
-
-public sealed record TimeTargetRequest(double TargetMovingSeconds, string DistributionMode, bool IncludeFeasibilityReport, bool IncludeBaseline)
-    : PacingStrategyRequest("time-target");
-
-public sealed record RpeZoneStrategyRequest(string Scheme, double? FtpWatts, IReadOnlyList<ZoneAssignmentRequest> Assignments, bool IncludeZoneDistributionReport, bool IncludeBaseline)
-    : PacingStrategyRequest("rpe-zone-shift");
-
-public sealed record MatchBurningRequest(double? CriticalPowerWatts, double? WPrimeJoules, IReadOnlyList<BurnWindowRequest> BurnWindows, ConservationPhaseRequest ConservationPhase, RecoveryPhaseRequest RecoveryPhase, bool IncludeFatigueReport, bool IncludeBaseline)
-    : PacingStrategyRequest("variable-match-burning");
-```
-
-Serialised via `System.Text.Json` with a `[JsonDerivedType]` / `[JsonPolymorphic]` on `PacingStrategyRequest`.
-
-### 2. API submission extension
-
-`POST /api/predictions` changes from form-only to a multipart request:
-- Part 1: `file` (GPX)
-- Part 2: `strategy` (optional JSON; omit for baseline-only)
-
-Or introduce a parallel endpoint `POST /api/predictions/paced` that accepts multipart with strategy, keeping the existing endpoint unchanged for backwards compatibility. **Recommendation: parallel endpoint.**
-
-### 3. Database migrations (ordered)
-
-| Migration | Contents |
-|-----------|----------|
-| M1 | `strategy_type varchar(50)`, `strategy_json jsonb` on `predictions` |
-| M2 | `prediction_adjusted_segments` table (mirrors `prediction_segments`) |
-| M3 | `adjusted_moving_seconds`, `adjusted_average_speed_mps`, `adjusted_average_power_watts` on `predictions` |
-| M4 | NP/IF metadata columns on `predictions` |
-| M5 | Time-target metadata columns on `predictions` |
-| M6 | Zone metadata columns on `predictions` + `zone_number` on `prediction_adjusted_segments` |
-| M7 | Match-burning metadata columns on `predictions` + `strategy_phase`, `strategy_wprime_balance` on `prediction_adjusted_segments` |
-
-Migrations are independent of which strategies are built first. Apply all of M1–M3 in the first shared infrastructure PR; M4–M7 can be per-strategy PRs.
-
-### 4. Shared service interface
-
-```csharp
-// RouteTimer.Services/Predictions/PacingStrategies/
-public interface IPacingStrategyHandler
-{
-    string StrategyType { get; }
-    Task<PacingStrategyResult> RunAsync(
-        ProcessedRoute route,
-        RiderProfile profile,
-        RiderModel model,
-        PredictionResult baselineResult,
-        PacingStrategyRequest request,
-        CancellationToken cancellationToken);
-}
-
-public sealed record PacingStrategyResult(
-    PredictionResult? AdjustedResult,   // null = no adjustment (strategy is no-op)
-    PredictionResult? BaselineResult,   // populated if IncludeBaseline = true
-    IReadOnlyDictionary<string, object?> Metadata); // strategy-specific; serialised to strategy_*_json columns
-```
-
-`PredictionJobHandler` uses a DI-injected `IEnumerable<IPacingStrategyHandler>` keyed by `StrategyType`.
-
-### 5. `ScaledPowerLookup` base class
-
-All strategies need to pass a custom power source into `RoutePredictor`. Introduce:
-
-```csharp
-// RouteTimer.Services/Predictions/PacingStrategies/
-public abstract class ScaledPowerLookup
-{
-    protected readonly PowerLookup _baseline;
-    public ScaledPowerLookup(PowerLookup baseline) => _baseline = baseline;
-    public abstract PowerEstimate GetWatts(double gradient, TimeSpan elapsed, int segmentSequence);
-}
-```
-
-`IRoutePredictor.Predict` gains an optional `ScaledPowerLookup? overlay` parameter (defaulting to null for backwards compatibility). When non-null, the predictor calls `overlay.GetWatts` instead of `_baseline.GetWatts`.
+Baseline submission, its request and response contracts, and its exports are unchanged and carry no
+adjustment-shaped field. A client that never enables pacing strategies sees no difference.
 
 ---
 
-## Recommended Build Order
+## Configuration
 
-Given the dependency graph:
+All of this is the `PacingStrategies` section. Every flag ships false.
 
-```
-Shared infra (M1–M3, ScaledPowerLookup, IPacingStrategyHandler)
-       ↓
-Strategy 1: Segment-Specific Gains      ← simplest; validates pipeline
-Strategy 3: Time Target Mode            ← independent; highest rider value
-Strategy 2: NP/IF Target                ← builds on ScaledPowerLookup pattern
-Strategy 4: RPE/Zone Shift              ← introduces ZoneResolver used by Strategy 5
-Strategy 5: Variable Match-Burning      ← most complex; reuses ZoneResolver
-```
+| Key | Default | Meaning |
+|---|---|---|
+| `Enabled` | `false` | Parent gate. False hides creation entirely. |
+| `SegmentSpecificGains` | `false` | Per-strategy gate |
+| `NpIfTarget` | `false` | Per-strategy gate |
+| `TimeTarget` | `false` | Per-strategy gate |
+| `RpeZoneShift` | `false` | Per-strategy gate |
+| `VariableMatchBurning` | `false` | Per-strategy gate |
+| `MaximumDefinitionBytes` | `65536` | Canonical strategy JSON limit, UTF-8 bytes |
+| `MaximumRules` | `10` | Rules, assignments, or windows per definition |
+| `MaximumPhases` | `10` | Phase entries per definition |
 
-Strategies 1 and 3 can be built in parallel if two developers are available.
-
----
-
-## Feature Flag Strategy
-
-A single parent flag `pacing-strategies-enabled` gates all strategy UI and the `POST /api/predictions/paced` endpoint. Individual flags `pacing-strategy-<type>-enabled` gate each strategy independently for gradual rollout.
+A strategy is creatable only when the parent flag and its own flag are both true. The flags are an
+availability gate, not a validation boundary: server-side domain validation runs regardless.
 
 ---
 
-## Summary of New Types (Domain Layer)
+## Stage order
 
-| Type | Strategy |
-|------|----------|
-| `SegmentGainRule`, `SegmentGainsStrategy` | S1 |
-| `NpIfStrategy`, `NpIfScalingMode` | S2 |
-| `TimeTargetStrategy`, `TimeTargetDistributionMode`, `TimeTargetFeasibilityReport` | S3 |
-| `RpeZoneStrategy`, `ZoneAssignment`, `ZoneDistributionReport` | S4 |
-| `MatchBurningStrategy`, `BurnWindow`, `FatigueReport` | S5 |
+Move one stage at a time, and only after the review named in the stage.
 
-## Summary of New Services (Services Layer)
+1. **Deploy migration and code with every `PacingStrategies` flag false.** The tables exist, no handler is
+   reachable, and nothing changes for riders. Confirm the migration applied and baseline predictions still
+   succeed.
+2. **Enable `Enabled` and `SegmentSpecificGains` for internal riders.** The simplest strategy, and the one
+   that validates the whole pipeline: creation, queueing, publication, read-back, deletion.
+3. **Enable `TimeTarget` and `NpIfTarget`** after reviewing queue depth, handler runtime, and search
+   evaluation counts from stage 2. Both run a bounded search, so they are the first strategies whose cost
+   scales with route length rather than segment count alone.
+4. **Enable `RpeZoneShift`** after reviewing threshold provenance in published reports — specifically how
+   often `ModelInferred` is used instead of a supplied FTP, and the resulting zone distributions.
+5. **Enable `VariableMatchBurning` last**, after reviewing W′ balance traces and the fatigue verdicts from
+   a manual pass over stage-4 data. It is the only strategy that infers physiological capacity when the
+   rider does not supply it.
+6. **Roll back one strategy by setting its child flag false.** New creation stops with
+   `409 pacing-strategy-disabled`. Adjustments already stored under it remain readable and deletable, and
+   any job already queued for it still completes — disabling blocks creation, it does not strand accepted
+   work.
+7. **Roll back all creation by setting `Enabled` false.** Baseline predictions and every stored child
+   remain readable. No data is removed at any stage of rollback.
 
-| Service | Strategy |
-|---------|----------|
-| `SegmentGainsPowerLookup` | S1 |
-| `NpIfScaler` | S2 |
-| `TimeTargetScaler` | S3 |
-| `RpeZoneScaler`, `ZoneResolver` | S4 |
-| `MatchBurningCpEstimator`, `MatchBurningWPrimeTracker`, `MatchBurningPowerLookup` | S5 |
-| `ScaledPowerLookup` (base), `IPacingStrategyHandler` | Shared |
+There is no stage that deletes adjustments. Rollback is a gate change only.
+
+---
+
+## Operational signals
+
+| Signal | Unit | Why |
+|---|---|---|
+| Queued adjustment age | seconds | Children compete with baseline predictions for the same workers; a rising age is the first sign the queue is saturated. |
+| Handler runtime by strategy and algorithm version | seconds | Cost differs by an order of magnitude across strategies; version it so a handler change is attributable. |
+| Search evaluation count | count | Time-target and NP/IF run a bounded search capped at 40 route simulations. Counts pinned at the cap mean the search is not converging. |
+| Cancellation and failure count by diagnostic code | count | Grouped by the stable codes below, never by message text. |
+| Publication conflict count | count | A publish rejected for stale ownership. A non-zero rate is expected under lease expiry; a rising rate means leases are too short or workers are stalling. |
+
+Stable diagnostic codes to group by — API: `pacing-strategy-disabled`, `pacing-strategy-invalid`,
+`pacing-strategy-too-large`, `pacing-strategy-capacity-required`, `pacing-strategy-target-infeasible`,
+`adjustment-not-found`, `adjustment-baseline-not-ready`. Worker: `adjustment-missing`, `baseline-missing`,
+`baseline-not-ready`, `model-missing`, `invalid-rider-model`, `invalid-prediction-adjustment-strategy`,
+`invalid-prediction-adjustment-result`, `prediction-adjustment-sequence-mismatch`.
+
+Algorithm versions currently published: `segment-gains-v1`, `time-target-v1`, `np-if-target-v1`,
+`zone-shift-v1`, `match-burning-v1`.
+
+---
+
+## What may and may not be logged
+
+A pacing adjustment's inputs are rider data. Logs are operational, not diagnostic replays.
+
+**May be logged:** adjustment id, prediction id, job id, strategy enum name, algorithm version, adjustment
+state, diagnostic code, counts (segments, rules, evaluations, warnings), and durations.
+
+**Must not be logged:** the strategy JSON or report JSON in whole or part; route coordinates, elevations,
+or any segment payload; power-model bands or global typical watts; critical power, W′, or FTP values;
+target values such as target moving seconds or target intensity factor; and rider names or file names.
+
+The distinction is that an operator needs to know *which* adjustment behaved how, never *what the rider
+asked for*. Reproducing a failure is a database read against the stored canonical JSON under the same
+access controls as the rest of the rider's data — not a log search.
+
+---
+
+## Verification before each stage
+
+Deterministic evidence for every strategy on five synthetic route shapes is described in
+[`backtesting.md`](backtesting.md), along with the manual historical gates that CI deliberately does not
+fabricate. Run the deterministic suite before any stage change; record the manual gates against the stage
+that enables the strategy they cover.

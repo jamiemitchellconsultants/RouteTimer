@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using RouteTimer.Domain.Models;
 using RouteTimer.Domain.Physics;
+using RouteTimer.Services.Models;
 using RouteTimer.Domain.Predictions;
 using RouteTimer.Domain.Profile;
 using RouteTimer.Services.Adjustments;
@@ -29,10 +30,53 @@ internal static class PacingFixtures
         var predictor = new RoutePredictor(new DescentSpeedLimiter());
         var route = BuildRoute(fixture);
         var profile = new RiderProfile(75, 10);
-        var model = new RiderModel(new PowerModel([], 200), PhysicalCoefficients.Default, DescentLimitModel.Conservative, true, "v1");
+        var model = BuildModel();
         var baseline = predictor.Predict(route, profile, model);
         return (new PacingStrategyContext(Guid.NewGuid(), route, baseline, profile, model), baseline);
     }
+
+    /// <summary>
+    /// A dense, fully populated band grid: every gradient x duration cell exists, watts rise with
+    /// gradient and fall as elapsed duration grows. A sparse or empty model would make
+    /// <see cref="PowerLookup"/> short-circuit to a single global figure, so gradient-dependent power,
+    /// band interpolation, and confidence blending would never be exercised.
+    /// </summary>
+    public static RiderModel BuildModel()
+    {
+        var bands = new List<PowerBand>(PowerModelBands.Gradient.Count * PowerModelBands.Duration.Count);
+        foreach (var gradient in PowerModelBands.Gradient)
+        {
+            foreach (var duration in PowerModelBands.Duration)
+            {
+                bands.Add(new PowerBand(
+                    gradient.Key,
+                    duration.Key,
+                    Math.Round((GlobalTypicalWatts + (gradient.Anchor * 800)) * DurationFactor(duration.Key), 1),
+                    TimeSpan.FromMinutes(30),
+                    5,
+                    1.0,
+                    ConfidenceLevel.High));
+            }
+        }
+
+        return new RiderModel(
+            new PowerModel(bands, GlobalTypicalWatts),
+            PhysicalCoefficients.Default,
+            DescentLimitModel.Conservative,
+            true,
+            "backtest-v1");
+    }
+
+    public const double GlobalTypicalWatts = 200;
+
+    private static double DurationFactor(string durationKey) => durationKey switch
+    {
+        "0:30" => 1.15,
+        "30:60" => 1.08,
+        "60:120" => 1.00,
+        "120:180" => 0.95,
+        _ => 0.90,
+    };
 
     public static PredictionRoute BuildRoute(string fixture)
     {
@@ -44,8 +88,10 @@ internal static class PacingFixtures
             FlatLong => (120, _ => 100.0, index => index % 2 == 0 ? -0.005 : 0.005),
             // 80 segments repeating -3%, 0%, +3%, +5%.
             Rolling => (80, _ => 80.0, index => (index % 4) switch { 0 => -0.03, 1 => 0.0, 2 => 0.03, _ => 0.05 }),
-            // 100 segments of sustained +6%/+9% climb blocks separated by descents.
-            Mountainous => (100, _ => 100.0, index => (index % 20) switch
+            // 100 segments of sustained +6%/+9% climb blocks separated by descents. Longer segments
+            // than the other fixtures so this is the route that crosses the 30-minute duration band;
+            // the matrix fixes its segment count and profile, not its segment length.
+            Mountainous => (100, _ => 250.0, index => (index % 20) switch
             {
                 < 6 => 0.06,
                 < 12 => 0.09,
