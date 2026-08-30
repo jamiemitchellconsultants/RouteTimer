@@ -21,6 +21,7 @@ public sealed class RoutePredictor : IRoutePredictor
         PredictionRoute route,
         RiderProfile profile,
         RiderModel model,
+        IPowerTargetPolicy? powerTargetPolicy = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(route);
@@ -40,9 +41,9 @@ public sealed class RoutePredictor : IRoutePredictor
         foreach (var sample in route.Segments)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var estimate = lookup.GetWatts(sample.Gradient, elapsed);
-            if (!double.IsFinite(estimate.Watts) || estimate.Watts < 0 || !Enum.IsDefined(estimate.Confidence))
-                throw new PredictionCalculationException("Prediction resolved invalid rider power.");
+            var baseline = lookup.GetWatts(sample.Gradient, elapsed);
+            var estimate = powerTargetPolicy?.Resolve(new PowerTargetContext(sample, elapsed, baseline)) ?? baseline;
+            ValidatePowerEstimate(estimate);
 
             var descent = _descentLimiter.Resolve(sample.Gradient, sample.CurvaturePerMetre, model.DescentLimits);
             ValidateDescent(descent);
@@ -205,6 +206,12 @@ public sealed class RoutePredictor : IRoutePredictor
             !double.IsFinite(coefficients.CdA) || coefficients.CdA < 0 ||
             model.DescentLimits is null)
             throw new PredictionCalculationException("Prediction physical model is invalid.");
+    }
+
+    private static void ValidatePowerEstimate(PowerEstimate estimate)
+    {
+        if (estimate is null || !double.IsFinite(estimate.Watts) || estimate.Watts < 0 || !Enum.IsDefined(estimate.Confidence))
+            throw new PredictionCalculationException("Prediction resolved invalid rider power.");
     }
 
     private static void ValidateDescent(DescentLimitEstimate descent)

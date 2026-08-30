@@ -487,7 +487,7 @@ public sealed class ModelValidatorTests
 
         public int CallCount { get; private set; }
 
-        public PredictionResult Predict(PredictionRoute route, RiderProfile profile, RiderModel model, CancellationToken cancellationToken = default)
+        public PredictionResult Predict(PredictionRoute route, RiderProfile profile, RiderModel model, IPowerTargetPolicy? powerTargetPolicy = null, CancellationToken cancellationToken = default)
         {
             CallCount++;
             if (_handlers.Count == 0)

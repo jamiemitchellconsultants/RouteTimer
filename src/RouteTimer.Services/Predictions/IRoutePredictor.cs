@@ -10,5 +10,6 @@ public interface IRoutePredictor
         PredictionRoute route,
         RiderProfile profile,
         RiderModel model,
+        IPowerTargetPolicy? powerTargetPolicy = null,
         CancellationToken cancellationToken = default);
 }

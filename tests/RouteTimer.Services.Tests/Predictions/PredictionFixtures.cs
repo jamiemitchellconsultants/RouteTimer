@@ -100,15 +100,17 @@ internal static class PredictionFixtures
         ProcessedRoute route,
         RiderModel model,
         RiderProfile profile,
-        IDescentSpeedLimiter? descentLimiter = null) =>
-        Predict(PredictionRoute.FromProcessed(route), model, profile, descentLimiter);
+        IDescentSpeedLimiter? descentLimiter = null,
+        IPowerTargetPolicy? powerTargetPolicy = null) =>
+        Predict(PredictionRoute.FromProcessed(route), model, profile, descentLimiter, powerTargetPolicy);
 
     public static PredictionResult Predict(
         PredictionRoute route,
         RiderModel model,
         RiderProfile profile,
-        IDescentSpeedLimiter? descentLimiter = null) =>
-        new RoutePredictor(descentLimiter ?? new DescentSpeedLimiter()).Predict(route, profile, model);
+        IDescentSpeedLimiter? descentLimiter = null,
+        IPowerTargetPolicy? powerTargetPolicy = null) =>
+        new RoutePredictor(descentLimiter ?? new DescentSpeedLimiter()).Predict(route, profile, model, powerTargetPolicy);
 
     public static ProcessedRoute MixedProcessedRoute() => Route((10, 0, 0), (10, .04, .001), (10, -.06, .02), (10, -.01, 0));
 
