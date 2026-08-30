@@ -58,12 +58,18 @@ public static class PacingStrategyJson
         where T : PacingStrategyDefinition
     {
         ArgumentNullException.ThrowIfNull(json);
+
+        if (Encoding.UTF8.GetByteCount(json) > MaximumBytes)
+        {
+            throw new PacingStrategyValidationException("pacing-strategy-too-large", $"Pacing strategy definition exceeds {MaximumBytes} bytes.");
+        }
+
         try
         {
             return JsonSerializer.Deserialize<T>(json, Options)
                 ?? throw new PacingStrategyValidationException("pacing-strategy-invalid", "Pacing strategy definition is malformed.");
         }
-        catch (JsonException)
+        catch (Exception exception) when (exception is JsonException or NotSupportedException or ArgumentException)
         {
             throw new PacingStrategyValidationException("pacing-strategy-invalid", "Pacing strategy definition is malformed.");
         }

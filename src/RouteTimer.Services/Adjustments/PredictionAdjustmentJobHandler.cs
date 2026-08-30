@@ -145,6 +145,22 @@ public sealed class PredictionAdjustmentJobHandler(
             }
 
             computation.Annotations.TryGetValue(segment.Sequence, out var annotation);
+            if (annotation is not null)
+            {
+                if (annotation.WPrimeBalanceJoules is not null && (!double.IsFinite(annotation.WPrimeBalanceJoules.Value) || annotation.WPrimeBalanceJoules.Value < 0))
+                {
+                    throw new PredictionAdjustmentJobException("invalid-prediction-adjustment-result", "Annotation W-prime balance must be non-negative finite.");
+                }
+                if (annotation.ZoneNumber is not null && annotation.ZoneNumber.Value < 1)
+                {
+                    throw new PredictionAdjustmentJobException("invalid-prediction-adjustment-result", "Annotation zone number must be positive.");
+                }
+                if (annotation.StrategyPhase is not null && annotation.StrategyPhase is not ("baseline" or "conservation" or "recovery" or "burn"))
+                {
+                    throw new PredictionAdjustmentJobException("invalid-prediction-adjustment-result", "Annotation strategy phase is invalid.");
+                }
+            }
+
             persisted.Add(new PersistedAdjustmentSegment(
                 segment.Sequence, segment.PowerWatts, segment.SpeedMetresPerSecond, segment.MovingTime, cumulative, segment.Confidence,
                 annotation?.ZoneNumber, annotation?.StrategyPhase, annotation?.WPrimeBalanceJoules));

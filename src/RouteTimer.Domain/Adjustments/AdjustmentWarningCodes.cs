@@ -1,3 +1,7 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
 namespace RouteTimer.Domain.Adjustments;
 
 /// <summary>
@@ -21,6 +25,8 @@ public static class AdjustmentWarningCodes
     public const string MatchBurningWPrimeInferredDefault = "match-burning-wprime-inferred-default";
     public const string MatchBurningCpLowConfidence = "match-burning-cp-low-confidence";
     public const string MatchBurningReserveBreach = "match-burning-reserve-breach";
+    public const string MatchBurningOverlappingWindows = "match-burning-overlapping-windows";
+    public const string MatchBurningWindowNoMatch = "match-burning-window-no-match";
 
     public static IReadOnlyList<string> All { get; } = Array.AsReadOnly(
     [
@@ -38,6 +44,8 @@ public static class AdjustmentWarningCodes
         MatchBurningWPrimeInferredDefault,
         MatchBurningCpLowConfidence,
         MatchBurningReserveBreach,
+        MatchBurningOverlappingWindows,
+        MatchBurningWindowNoMatch,
     ]);
 
     public static bool IsKnown(string? code) =>

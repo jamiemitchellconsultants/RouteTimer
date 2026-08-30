@@ -15,7 +15,6 @@ This document records what was asked, what was decided, why, and what followed.
 | [5](#entry-open-in-pacetracker-hand-a-prediction-to-a-phone-from-a-private-routetim) | 2026-08-28 | Open in PaceTracker: hand a prediction to a phone from a private RouteTimer | product | Invert the direction. RouteTimer makes one **outbound** HTTPS call to a public RoutePacer relay, uploads the timed GPX, and receives a single-use payload URL with a fixed ten-minute lifetime. |
 | [6](#entry-chore-remove-the-open-in-pacetracker-handoff) | 2026-08-29 | chore: remove the Open in PaceTracker handoff | product | Remove the endpoints, options and validator, the relay client, both invocation signers, the QR interop and component, the contracts, the six error codes, and every test covering them. `qrcode` and `esbuild` go with it. |
 | [7](#entry-docs-split-pacing-adjustment-plan-into-per-task-files) | 2026-08-29 | docs: split pacing adjustment plan into per-task files | product | Split the plan into a `README.md` (goal, architecture, constraints, target file map, task index, and execution checkpoints) plus one Markdown file per task, each self-contained with its own file list, TDD steps, and commit command. |
-| [8](#entry-docs-add-implementation-ready-pacing-tasks-9-16) | 2026-08-30 | docs: add implementation-ready pacing tasks 9-16 | product | Keep the original plan files unchanged and add a sibling refined-tasks directory. |
 
 ---
 
@@ -267,25 +266,3 @@ Split the plan into a `README.md` (goal, architecture, constraints, target file 
 ## Consequences
 
 The plan is easier to execute and review incrementally: each task is a standalone unit of work with its own review-ready summary point. The original monolithic plan file is removed; nothing else in the repository referenced it by path except the narrative fragment for `docs-add-pacing-strategy-implementation-plans`, which points at the sibling design spec, not this plan file, so no other links needed updating. No production code, tests, or behavior changed.
-
----
-
-<a id="entry-docs-add-implementation-ready-pacing-tasks-9-16"></a>
-
-## Entry 8 — 2026-08-30 — docs: add implementation-ready pacing tasks 9-16
-
-*Kind: product. Status: accepted.*
-
-## Context
-
-The original Tasks 9-16 were milestone summaries and left critical details to the implementer, including search tie-breaking, fractional-second normalized-power behavior, concrete strategy interfaces, stable sub-field wire literals, lifecycle outcomes, and current visualization extension points. Tasks 1-8 also exposed architectural patterns and deviations that the remaining plan needed to carry forward explicitly.
-
-## Decision
-
-Keep the original plan files unchanged and add a sibling refined-tasks directory. Define deterministic interfaces and behavior for bounded search, normalized power, time targeting, NP/IF targeting, zone resolution, match-burning, one-adjustment visualization, lifecycle hardening, and rollout verification. Split large work into commit-sized checkpoints and correct stale assumptions: match-burning refinement follows changed phase membership, visualization uses RouteProfiles and route-visualization modules, baseline deletion cancels active adjustment jobs, and Narrative verification does not depend on a machine-specific temporary CLI path.
-
-Rejected alternatives were overwriting the historical task files, leaving algorithmic choices to each executor, or introducing new production abstractions solely to make the plan shorter.
-
-## Consequences
-
-A smaller local model can execute one checkpoint with explicit inputs, outputs, tests, files, commands, and stop conditions, reducing architectural drift and invented behavior. The refined plan is longer and records implementation choices that future code should either follow or deliberately correct. Original planning history remains available for comparison, and no production code or feature flag changes in this PR.

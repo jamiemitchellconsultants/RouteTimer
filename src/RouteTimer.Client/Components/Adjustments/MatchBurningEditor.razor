@@ -1,0 +1,240 @@
+@using System.Globalization
+@using RouteTimer.Client.Api
+@using RouteTimer.Client.Components
+@using RouteTimer.Contracts.Adjustments
+@inject IRouteTimerApiClient Api
+
+<div data-testid="match-burning-editor">
+    @if (Problem is not null)
+    {
+        <div data-testid="match-burning-error">
+            <ProblemMessage Problem="@Problem" FallbackMessage="We could not create the match burning adjustment." />
+        </div>
+    }
+
+    <div class="prediction-detail-grid">
+        <div>
+            <label for="match-burning-cp">Critical Power (CP) Watts</label>
+            <input id="match-burning-cp" data-testid="match-burning-cp"
+                   value="@CpWattsText" @oninput="e => CpWattsText = e.Value?.ToString()" placeholder="Leave blank to infer" />
+        </div>
+        <div>
+            <label for="match-burning-wprime">W' Joules</label>
+            <input id="match-burning-wprime" data-testid="match-burning-wprime"
+                   value="@WPrimeJoulesText" @oninput="e => WPrimeJoulesText = e.Value?.ToString()" placeholder="Leave blank to infer" />
+        </div>
+    </div>
+
+    @for (int index = 0; index < Windows.Count; index++)
+    {
+        int rowIndex = index;
+        var row = Windows[rowIndex];
+        <div class="prediction-detail-grid" data-testid="@($"match-burning-window-{rowIndex}")">
+            <div>
+                <label for="@($"match-burning-selector-{rowIndex}")">Selector</label>
+                <select id="@($"match-burning-selector-{rowIndex}")" data-testid="@($"match-burning-selector-{rowIndex}")"
+                        value="@row.Selector" @onchange="e => ChangeSelector(row, e.Value?.ToString())">
+                    <option value="gradient">Gradient</option>
+                    <option value="distance">Distance</option>
+                    <option value="sequence">Sequence</option>
+                </select>
+            </div>
+            <div>
+                <label for="@($"match-burning-min-{rowIndex}")">Min</label>
+                <input id="@($"match-burning-min-{rowIndex}")" data-testid="@($"match-burning-min-{rowIndex}")"
+                       value="@row.MinText" @oninput="e => row.MinText = e.Value?.ToString()" />
+            </div>
+            <div>
+                <label for="@($"match-burning-max-{rowIndex}")">Max</label>
+                <input id="@($"match-burning-max-{rowIndex}")" data-testid="@($"match-burning-max-{rowIndex}")"
+                       value="@row.MaxText" @oninput="e => row.MaxText = e.Value?.ToString()" />
+            </div>
+            <div>
+                <label for="@($"match-burning-intensity-{rowIndex}")">Intensity</label>
+                <select id="@($"match-burning-intensity-{rowIndex}")" data-testid="@($"match-burning-intensity-{rowIndex}")"
+                        value="@row.Intensity" @onchange="e => ChangeIntensity(row, e.Value?.ToString())">
+                    <option value="percent-cp">Percent CP</option>
+                    <option value="absolute-watts">Absolute Watts</option>
+                    <option value="cp-zone">CP Zone</option>
+                </select>
+            </div>
+            <div>
+                <label for="@($"match-burning-value-{rowIndex}")">Intensity Value</label>
+                <input id="@($"match-burning-value-{rowIndex}")" data-testid="@($"match-burning-value-{rowIndex}")"
+                       value="@row.ValueText" @oninput="e => row.ValueText = e.Value?.ToString()" />
+            </div>
+            <div class="prediction-detail-actions">
+                <button type="button" class="predictions-button predictions-button--danger"
+                        data-testid="@($"match-burning-remove-{rowIndex}")"
+                        @onclick="() => RemoveWindow(rowIndex)">
+                    Remove
+                </button>
+            </div>
+        </div>
+    }
+
+    <div class="prediction-detail-actions">
+        <button type="button" class="predictions-button predictions-button--secondary"
+                data-testid="match-burning-add-window"
+                @onclick="AddWindow"
+                disabled="@(Windows.Count >= 10)">
+            Add burn window
+        </button>
+    </div>
+
+    <div class="prediction-detail-grid">
+        <div>
+            <label for="match-burning-conservation-duration">Conservation Duration (s)</label>
+            <input id="match-burning-conservation-duration" data-testid="match-burning-conservation-duration"
+                   value="@ConservationDurationText" @oninput="e => ConservationDurationText = e.Value?.ToString() ?? string.Empty" />
+        </div>
+        <div>
+            <label for="match-burning-conservation-fraction">Conservation CP Fraction</label>
+            <input id="match-burning-conservation-fraction" data-testid="match-burning-conservation-fraction"
+                   value="@ConservationFractionText" @oninput="e => ConservationFractionText = e.Value?.ToString() ?? string.Empty" />
+        </div>
+        <div>
+            <label for="match-burning-recovery-duration">Recovery Duration (s)</label>
+            <input id="match-burning-recovery-duration" data-testid="match-burning-recovery-duration"
+                   value="@RecoveryDurationText" @oninput="e => RecoveryDurationText = e.Value?.ToString() ?? string.Empty" />
+        </div>
+        <div>
+            <label for="match-burning-recovery-fraction">Recovery CP Fraction</label>
+            <input id="match-burning-recovery-fraction" data-testid="match-burning-recovery-fraction"
+                   value="@RecoveryFractionText" @oninput="e => RecoveryFractionText = e.Value?.ToString() ?? string.Empty" />
+        </div>
+        <div>
+            <label for="match-burning-fatigue">Include Fatigue Report</label>
+            <input type="checkbox" id="match-burning-fatigue" data-testid="match-burning-fatigue"
+                   checked="@IncludeFatigue" @onchange="e => IncludeFatigue = (bool)(e.Value ?? false)" />
+        </div>
+        <div>
+            <label for="match-burning-refinement">Enable Refinement</label>
+            <input type="checkbox" id="match-burning-refinement" data-testid="match-burning-refinement"
+                   checked="@EnableRefinement" @onchange="e => EnableRefinement = (bool)(e.Value ?? false)" />
+        </div>
+    </div>
+
+    <div class="prediction-detail-actions">
+        <button type="button" class="predictions-button"
+                data-testid="match-burning-submit"
+                @onclick="SubmitAsync"
+                disabled="@(isSubmitting || Windows.Count == 0)">
+            Create match burning adjustment
+        </button>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public Guid PredictionId { get; set; }
+
+    [Parameter]
+    public EventCallback<Guid> OnCreated { get; set; }
+
+    private string? CpWattsText { get; set; }
+    private string? WPrimeJoulesText { get; set; }
+
+    private string ConservationDurationText { get; set; } = "120";
+    private string ConservationFractionText { get; set; } = "0.80";
+    private string RecoveryDurationText { get; set; } = "300";
+    private string RecoveryFractionText { get; set; } = "0.70";
+
+    private bool IncludeFatigue { get; set; } = true;
+    private bool EnableRefinement { get; set; } = false;
+
+    private List<WindowRow> Windows { get; } = [
+        new WindowRow { Selector = "gradient", MinText = "0.03", Intensity = "percent-cp", ValueText = "1.20" }
+    ];
+
+    private ApiProblemException? Problem { get; set; }
+    private bool isSubmitting;
+
+    private void AddWindow()
+    {
+        if (Windows.Count >= 10) return;
+        Windows.Add(new WindowRow());
+    }
+
+    private void RemoveWindow(int index) => Windows.RemoveAt(index);
+
+    private static void ChangeSelector(WindowRow row, string? selector)
+    {
+        row.Selector = selector ?? "gradient";
+        row.MinText = null;
+        row.MaxText = null;
+    }
+
+    private static void ChangeIntensity(WindowRow row, string? intensity)
+    {
+        row.Intensity = intensity ?? "percent-cp";
+        row.ValueText = row.Intensity == "percent-cp" ? "1.20" : null;
+    }
+
+    private async Task SubmitAsync()
+    {
+        Problem = null;
+
+        double? cpWatts = ParseDouble(CpWattsText);
+        double? wPrimeJoules = ParseDouble(WPrimeJoulesText);
+
+        double consDuration = ParseDouble(ConservationDurationText) ?? 120;
+        double consFraction = ParseDouble(ConservationFractionText) ?? 0.80;
+        double recDuration = ParseDouble(RecoveryDurationText) ?? 300;
+        double recFraction = ParseDouble(RecoveryFractionText) ?? 0.70;
+
+        var reqWindows = Windows.Select(r => new MatchBurnWindowRequest(
+            r.Selector,
+            r.Selector == "gradient" ? ParseDouble(r.MinText) : null,
+            r.Selector == "gradient" ? ParseDouble(r.MaxText) : null,
+            r.Selector == "distance" ? ParseDouble(r.MinText) : null,
+            r.Selector == "distance" ? ParseDouble(r.MaxText) : null,
+            r.Selector == "sequence" ? ParseInt(r.MinText) : null,
+            r.Selector == "sequence" ? ParseInt(r.MaxText) : null,
+            r.Intensity,
+            r.Intensity == "absolute-watts" ? ParseDouble(r.ValueText) : null,
+            r.Intensity == "percent-cp" ? ParseDouble(r.ValueText) : null,
+            r.Intensity == "cp-zone" ? ParseInt(r.ValueText) : null)).ToList();
+
+        isSubmitting = true;
+        try
+        {
+            var request = new VariableMatchBurningRequest(
+                cpWatts,
+                wPrimeJoules,
+                reqWindows,
+                consDuration,
+                consFraction,
+                recDuration,
+                recFraction,
+                IncludeFatigue,
+                EnableRefinement);
+
+            var submission = await Api.CreatePredictionAdjustmentAsync(PredictionId, request, CancellationToken.None);
+            await OnCreated.InvokeAsync(submission.AdjustmentId);
+        }
+        catch (ApiProblemException problem)
+        {
+            Problem = problem;
+        }
+        finally
+        {
+            isSubmitting = false;
+        }
+    }
+
+    private static double? ParseDouble(string? value) =>
+        double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
+
+    private static int? ParseInt(string? value) =>
+        int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
+
+    public sealed class WindowRow
+    {
+        public string Selector { get; set; } = "gradient";
+        public string? MinText { get; set; }
+        public string? MaxText { get; set; }
+        public string Intensity { get; set; } = "percent-cp";
+        public string? ValueText { get; set; } = "1.20";
+    }
+}

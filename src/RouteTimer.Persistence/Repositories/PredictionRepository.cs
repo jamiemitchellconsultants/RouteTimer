@@ -194,20 +194,58 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
             ? await context.Database.BeginTransactionAsync(cancellationToken)
             : null;
 
-        // Lock all matching jobs before reading or deleting the prediction. This serializes
-        // cancellation/deletion with a worker's owner-guarded publication transaction.
-        var jobIds = context.Database.IsRelational()
-            ? await context.Database.SqlQuery<Guid>($"""
-                SELECT "Id" AS "Value" FROM analysis_jobs
-                WHERE "SubjectId" = {predictionId} AND "Type" = {JobType.PredictRoute.ToString()}
-                  AND "State" IN ({JobState.Queued.ToString()}, {JobState.Running.ToString()})
+        var queuedState = JobState.Queued.ToString();
+        var runningState = JobState.Running.ToString();
+        var predictType = JobType.PredictRoute.ToString();
+        var adjustType = JobType.AdjustPrediction.ToString();
+
+        List<Guid> childAdjustmentIds;
+        if (context.Database.IsRelational())
+        {
+            childAdjustmentIds = await context.Database.SqlQuery<Guid>($"""
+                SELECT "Id" AS "Value" FROM prediction_adjustments
+                WHERE "PredictionId" = {predictionId}
                 FOR UPDATE
-                """).ToListAsync(cancellationToken)
-            : await context.Jobs
-                .Where(entity => entity.SubjectId == predictionId && entity.Type == JobType.PredictRoute.ToString() &&
-                    (entity.State == JobState.Queued.ToString() || entity.State == JobState.Running.ToString()))
+                """).ToListAsync(cancellationToken);
+        }
+        else
+        {
+            childAdjustmentIds = await context.PredictionAdjustments
+                .Where(a => a.PredictionId == predictionId)
+                .Select(a => a.Id)
+                .ToListAsync(cancellationToken);
+        }
+
+        List<Guid> jobIds;
+        if (context.Database.IsRelational())
+        {
+            if (childAdjustmentIds.Count > 0)
+            {
+                var adjArray = childAdjustmentIds.ToArray();
+                jobIds = await context.Database.SqlQuery<Guid>($"""
+                    SELECT "Id" AS "Value" FROM analysis_jobs
+                    WHERE ("SubjectId" = {predictionId} AND "Type" = {predictType} AND "State" IN ({queuedState}, {runningState}))
+                       OR ("SubjectId" = ANY({adjArray}) AND "Type" = {adjustType} AND "State" IN ({queuedState}, {runningState}))
+                    FOR UPDATE
+                    """).ToListAsync(cancellationToken);
+            }
+            else
+            {
+                jobIds = await context.Database.SqlQuery<Guid>($"""
+                    SELECT "Id" AS "Value" FROM analysis_jobs
+                    WHERE "SubjectId" = {predictionId} AND "Type" = {predictType} AND "State" IN ({queuedState}, {runningState})
+                    FOR UPDATE
+                    """).ToListAsync(cancellationToken);
+            }
+        }
+        else
+        {
+            jobIds = await context.Jobs
+                .Where(entity => (entity.SubjectId == predictionId && entity.Type == predictType && (entity.State == queuedState || entity.State == runningState)) ||
+                                 (childAdjustmentIds.Contains(entity.SubjectId) && entity.Type == adjustType && (entity.State == queuedState || entity.State == runningState)))
                 .Select(entity => entity.Id)
                 .ToListAsync(cancellationToken);
+        }
 
         if (context.Database.IsRelational())
         {

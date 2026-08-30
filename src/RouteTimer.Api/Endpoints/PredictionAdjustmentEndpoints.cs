@@ -80,6 +80,38 @@ public static class PredictionAdjustmentEndpoints
                 statusCode: StatusCodes.Status400BadRequest,
                 extensions: new Dictionary<string, object?> { ["code"] = ErrorCodes.PacingStrategyInvalid });
         }
+        catch (TimeTargetRequestValidationException exception)
+        {
+            return Results.ValidationProblem(
+                exception.Errors,
+                detail: exception.Message,
+                statusCode: StatusCodes.Status400BadRequest,
+                extensions: new Dictionary<string, object?> { ["code"] = ErrorCodes.PacingStrategyInvalid });
+        }
+        catch (NpIfRequestValidationException exception)
+        {
+            return Results.ValidationProblem(
+                exception.Errors,
+                detail: exception.Message,
+                statusCode: StatusCodes.Status400BadRequest,
+                extensions: new Dictionary<string, object?> { ["code"] = ErrorCodes.PacingStrategyInvalid });
+        }
+        catch (ZoneShiftRequestValidationException exception)
+        {
+            return Results.ValidationProblem(
+                exception.Errors,
+                detail: exception.Message,
+                statusCode: StatusCodes.Status400BadRequest,
+                extensions: new Dictionary<string, object?> { ["code"] = ErrorCodes.PacingStrategyInvalid });
+        }
+        catch (MatchBurningRequestValidationException exception)
+        {
+            return Results.ValidationProblem(
+                exception.Errors,
+                detail: exception.Message,
+                statusCode: StatusCodes.Status400BadRequest,
+                extensions: new Dictionary<string, object?> { ["code"] = ErrorCodes.PacingStrategyInvalid });
+        }
     }
 
     private static async Task<IResult> GetAdjustmentsAsync(
@@ -129,10 +161,10 @@ public static class PredictionAdjustmentEndpoints
     private static PacingStrategyDefinition MapDefinition(PacingStrategyRequest request) => request switch
     {
         SegmentSpecificGainsRequest segmentGains => SegmentGainsRequestMapper.ToDefinition(segmentGains),
-        NpIfTargetRequest => throw new NotImplementedException("NP/IF target mapping is delivered in its own task."),
-        TimeTargetRequest => throw new NotImplementedException("Time target mapping is delivered in its own task."),
-        RpeZoneShiftRequest => throw new NotImplementedException("RPE/zone shift mapping is delivered in its own task."),
-        VariableMatchBurningRequest => throw new NotImplementedException("Variable match-burning mapping is delivered in its own task."),
+        NpIfTargetRequest npIfTarget => NpIfRequestMapper.ToDefinition(npIfTarget),
+        TimeTargetRequest timeTarget => TimeTargetRequestMapper.ToDefinition(timeTarget),
+        RpeZoneShiftRequest zoneShift => ZoneShiftRequestMapper.ToDefinition(zoneShift),
+        VariableMatchBurningRequest matchBurning => MatchBurningRequestMapper.ToDefinition(matchBurning),
         _ => throw new InvalidOperationException($"Unhandled pacing strategy request type {request.GetType()}."),
     };
 
