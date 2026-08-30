@@ -557,11 +557,11 @@ public sealed class PredictionWorkflowTests
     {
         public RiderProfile? Profile { get; private set; }
         public RiderModel? Model { get; private set; }
-        public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model)
+        public PredictionResult Predict(PredictionRoute route, RiderProfile profile, RiderModel model, CancellationToken cancellationToken = default)
         {
             Profile = profile;
             Model = model;
-            var segments = route.Samples.Skip(1).Select(sample => new PredictionSegment(
+            var segments = route.Segments.Select(sample => new PredictionSegment(
                 sample.Sequence,
                 sample.SegmentDistanceMetres,
                 sample.Gradient,
@@ -575,18 +575,18 @@ public sealed class PredictionWorkflowTests
 
     private sealed class NegativePredictor : IRoutePredictor
     {
-        public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model) => new(
-            route.Samples.Skip(1).Select(sample => new PredictionSegment(sample.Sequence, sample.SegmentDistanceMetres, sample.Gradient, -1, 5, TimeSpan.FromSeconds(1), ConfidenceLevel.Low)).ToList(),
-            TimeSpan.FromSeconds(route.Samples.Count - 1),
+        public PredictionResult Predict(PredictionRoute route, RiderProfile profile, RiderModel model, CancellationToken cancellationToken = default) => new(
+            route.Segments.Select(sample => new PredictionSegment(sample.Sequence, sample.SegmentDistanceMetres, sample.Gradient, -1, 5, TimeSpan.FromSeconds(1), ConfidenceLevel.Low)).ToList(),
+            TimeSpan.FromSeconds(route.Segments.Count),
             ConfidenceLevel.Low,
             []);
     }
 
     private sealed class InvalidResultPredictor(string kind) : IRoutePredictor
     {
-        public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model)
+        public PredictionResult Predict(PredictionRoute route, RiderProfile profile, RiderModel model, CancellationToken cancellationToken = default)
         {
-            var source = route.Samples.Skip(1).ToArray();
+            var source = route.Segments.ToArray();
             if (kind == "sequence") return new PredictionResult([], TimeSpan.Zero, ConfidenceLevel.Low, []);
             var segments = source.Select(sample => new PredictionSegment(
                 sample.Sequence,
@@ -602,9 +602,9 @@ public sealed class PredictionWorkflowTests
 
     private sealed class UnequalDurationPredictor : IRoutePredictor
     {
-        public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model)
+        public PredictionResult Predict(PredictionRoute route, RiderProfile profile, RiderModel model, CancellationToken cancellationToken = default)
         {
-            var segments = route.Samples.Skip(1).Select((sample, index) => new PredictionSegment(sample.Sequence, sample.SegmentDistanceMetres, sample.Gradient,
+            var segments = route.Segments.Select((sample, index) => new PredictionSegment(sample.Sequence, sample.SegmentDistanceMetres, sample.Gradient,
                 index == 0 ? 100 : 200, 5, TimeSpan.FromSeconds(index == 0 ? 10 : 20), ConfidenceLevel.Low)).ToList();
             return new PredictionResult(segments, TimeSpan.FromSeconds(30), ConfidenceLevel.Low, []);
         }
@@ -612,9 +612,9 @@ public sealed class PredictionWorkflowTests
 
     private sealed class WarningPredictor(IReadOnlyList<string> warnings) : IRoutePredictor
     {
-        public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model)
+        public PredictionResult Predict(PredictionRoute route, RiderProfile profile, RiderModel model, CancellationToken cancellationToken = default)
         {
-            var segments = route.Samples.Skip(1).Select(sample => new PredictionSegment(
+            var segments = route.Segments.Select(sample => new PredictionSegment(
                 sample.Sequence,
                 sample.SegmentDistanceMetres,
                 sample.Gradient,
@@ -628,20 +628,20 @@ public sealed class PredictionWorkflowTests
 
     private sealed class CalculationFailurePredictor : IRoutePredictor
     {
-        public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model) =>
+        public PredictionResult Predict(PredictionRoute route, RiderProfile profile, RiderModel model, CancellationToken cancellationToken = default) =>
             throw new PredictionCalculationException("Simulation could not progress.");
     }
 
     private sealed class MalformedStructurePredictor(string kind) : IRoutePredictor
     {
-        public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model)
+        public PredictionResult Predict(PredictionRoute route, RiderProfile profile, RiderModel model, CancellationToken cancellationToken = default)
         {
             if (kind == "null-result")
                 return null!;
             if (kind == "null-segments")
                 return new PredictionResult(null!, TimeSpan.Zero, ConfidenceLevel.Low, []);
 
-            var segments = route.Samples.Skip(1).Select((sample, index) => new PredictionSegment(
+            var segments = route.Segments.Select((sample, index) => new PredictionSegment(
                 sample.Sequence,
                 sample.SegmentDistanceMetres,
                 sample.Gradient,
@@ -669,11 +669,11 @@ public sealed class PredictionWorkflowTests
 
     private sealed class ThrowingPredictor : IRoutePredictor
     {
-        public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model) => throw new InvalidOperationException("transient");
+        public PredictionResult Predict(PredictionRoute route, RiderProfile profile, RiderModel model, CancellationToken cancellationToken = default) => throw new InvalidOperationException("transient");
     }
 
     private sealed class OverflowPredictor(OverflowException exception) : IRoutePredictor
     {
-        public PredictionResult Predict(ProcessedRoute route, RiderProfile profile, RiderModel model) => throw exception;
+        public PredictionResult Predict(PredictionRoute route, RiderProfile profile, RiderModel model, CancellationToken cancellationToken = default) => throw exception;
     }
 }

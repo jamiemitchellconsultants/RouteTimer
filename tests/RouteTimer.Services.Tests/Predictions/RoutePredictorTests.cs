@@ -8,6 +8,26 @@ namespace RouteTimer.Services.Tests.Predictions;
 
 public sealed class RoutePredictorTests
 {
+    // Break caught: mapping ProcessedRoute samples through PredictionRoute changes the simulated baseline result.
+    [Fact]
+    public void PredictionRoute_refactor_preserves_the_complete_baseline_result()
+    {
+        var processed = PredictionFixtures.MixedProcessedRoute();
+        var expected = PredictionFixtures.MixedRouteGoldenResult();
+
+        var actual = PredictionFixtures.Predict(
+            PredictionRoute.FromProcessed(processed),
+            PredictionFixtures.Model(new PowerModel([], 250), PhysicalCoefficients.Default, calibrated: false),
+            new RiderProfile(75, 10));
+
+        // PredictionResult's generated equality compares its Segments/Warnings collections by reference,
+        // so two independently-built instances never compare equal as a whole; assert field by field.
+        Assert.Equal(expected.Confidence, actual.Confidence);
+        Assert.Equal(expected.Warnings, actual.Warnings);
+        Assert.Equal(expected.MovingTime, actual.MovingTime);
+        Assert.Equal(expected.Segments, actual.Segments);
+    }
+
     // Break caught: solving each segment independently discards acceleration and terminal speed.
     [Fact]
     public void Predict_carries_exact_terminal_speed_into_the_next_accelerating_segment()

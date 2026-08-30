@@ -45,7 +45,7 @@ public sealed class PredictionJobHandler(
             var parsed = await parser.ParseAsync(content, cancellationToken);
             var route = processor.Process(parsed.Points);
             await progress.ReportAsync(job, 45, JobProgressStages.SimulatingRoute, cancellationToken);
-            var result = predictor.Predict(route, prediction.Profile, model.Model);
+            var result = predictor.Predict(PredictionRoute.FromProcessed(route), prediction.Profile, model.Model, cancellationToken);
             PredictionPublication publication;
             try
             {

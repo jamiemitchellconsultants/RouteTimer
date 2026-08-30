@@ -91,7 +91,7 @@ public sealed class ModelValidator(
             PredictionResult prediction;
             try
             {
-                prediction = predictor.Predict(route, profile, foldModel);
+                prediction = predictor.Predict(PredictionRoute.FromProcessed(route), profile, foldModel);
             }
             catch (PredictionCalculationException)
             {
