@@ -28,6 +28,7 @@ using RouteTimer.Services.Models;
 using RouteTimer.Services.Physics;
 using RouteTimer.Services.Persistence;
 using RouteTimer.Services.Predictions;
+using RouteTimer.Services.Adjustments;
 using RouteTimer.Services.Security;
 using RouteTimer.Services.Settings;
 using RouteTimer.Services.Training;
@@ -171,6 +172,14 @@ builder.Services.AddSingleton<IModelValidator, ModelValidator>();
 builder.Services.AddScoped<IJobHandler, ParseTrainingJobHandler>();
 builder.Services.AddScoped<IJobHandler, BuildModelJobHandler>();
 builder.Services.AddScoped<IJobHandler, PredictionJobHandler>();
+builder.Services.AddScoped<IPredictionAdjustmentRepository, PredictionAdjustmentRepository>();
+// No strategy handlers are registered yet (each strategy's own delivery task adds one), so no type
+// can be enabled here yet either - both lists become non-empty together as strategies are delivered.
+builder.Services.AddScoped(sp => new PacingStrategyDispatcher(sp.GetServices<IPacingStrategyHandler>(), enabledTypes: []));
+builder.Services.AddScoped<PredictionAdjustmentService>();
+builder.Services.AddScoped<PredictionAdjustmentQueryService>();
+builder.Services.AddScoped<PredictionAdjustmentDeletionService>();
+builder.Services.AddScoped<IJobHandler, PredictionAdjustmentJobHandler>();
 builder.Services.AddHostedService<AnalysisWorker>();
 var authMode = AuthModeResolver.Resolve(builder.Configuration);
 if (authMode == AuthMode.Keycloak)

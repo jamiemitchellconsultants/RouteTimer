@@ -60,6 +60,11 @@ public static class JobProgressStages
     public const string SimulatingRoute = "simulating-route";
     public const string SavingResult = "saving-result";
 
+    public const string LoadingBaseline = "loading-baseline";
+    public const string PreparingStrategy = "preparing-strategy";
+    public const string Simulating = "simulating";
+    public const string Publishing = "publishing";
+
     private static readonly HashSet<string> KnownStages = new(StringComparer.Ordinal)
     {
         Queued,
@@ -81,7 +86,11 @@ public static class JobProgressStages
         LoadingPrediction,
         ProcessingRoute,
         SimulatingRoute,
-        SavingResult
+        SavingResult,
+        LoadingBaseline,
+        PreparingStrategy,
+        Simulating,
+        Publishing
     };
 
     public static bool IsKnown(string stage) => KnownStages.Contains(stage);
