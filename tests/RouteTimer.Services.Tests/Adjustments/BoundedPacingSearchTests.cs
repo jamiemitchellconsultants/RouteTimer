@@ -9,14 +9,14 @@ public class BoundedPacingSearchTests
     [Fact]
     public void Monotonic_function_finds_exact_target()
     {
-        double m = BoundedPacingSearch.FindMultiplier(0.5, 2.0, 250, m => 200 * m);
+        double m = BoundedPacingSearch.FindMultiplier(0.5, 2.0, 250, m => 200 * m, tolerance: 0.001);
         Assert.Equal(1.25, m, 3);
     }
 
     [Fact]
     public void Non_monotonic_function_finds_closest_local_minimum()
     {
-        double m = BoundedPacingSearch.FindMultiplier(0.5, 2.0, 288, m => 200 * Math.Pow(m, 2));
+        double m = BoundedPacingSearch.FindMultiplier(0.5, 2.0, 288, m => 200 * Math.Pow(m, 2), tolerance: 0.001);
         Assert.Equal(1.2, m, 2);
     }
 

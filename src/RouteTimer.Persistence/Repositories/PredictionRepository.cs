@@ -199,6 +199,30 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
         var predictType = JobType.PredictRoute.ToString();
         var adjustType = JobType.AdjustPrediction.ToString();
 
+        // 1. Lock baseline prediction row first to serialize with child adjustment creation.
+        if (context.Database.IsRelational())
+        {
+            var matchingPrediction = await context.Database.SqlQuery<Guid>(
+                $"""
+                SELECT "Id" AS "Value" FROM predictions
+                WHERE "Id" = {predictionId}
+                FOR UPDATE
+                """).ToListAsync(cancellationToken);
+            if (matchingPrediction.Count == 0)
+            {
+                if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
+                return false;
+            }
+        }
+
+        var prediction = await context.Predictions.SingleOrDefaultAsync(entity => entity.Id == predictionId, cancellationToken);
+        if (prediction is null)
+        {
+            if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
+            return false;
+        }
+
+        // 2. Snapshot and lock child adjustment rows and active jobs in the same transaction.
         List<Guid> childAdjustmentIds;
         if (context.Database.IsRelational())
         {
@@ -245,28 +269,6 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
                                  (childAdjustmentIds.Contains(entity.SubjectId) && entity.Type == adjustType && (entity.State == queuedState || entity.State == runningState)))
                 .Select(entity => entity.Id)
                 .ToListAsync(cancellationToken);
-        }
-
-        if (context.Database.IsRelational())
-        {
-            var matchingPrediction = await context.Database.SqlQuery<Guid>(
-                $"""
-                SELECT "Id" AS "Value" FROM predictions
-                WHERE "Id" = {predictionId}
-                FOR UPDATE
-                """).ToListAsync(cancellationToken);
-            if (matchingPrediction.Count == 0)
-            {
-                if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
-                return false;
-            }
-        }
-
-        var prediction = await context.Predictions.SingleOrDefaultAsync(entity => entity.Id == predictionId, cancellationToken);
-        if (prediction is null)
-        {
-            if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
-            return false;
         }
 
         var uploadId = prediction.UploadId;
