@@ -6,7 +6,7 @@ public sealed class PredictionAdjustmentEntity
     public Guid PredictionId { get; set; }
     public required string StrategyType { get; set; }
     public required string StrategyJson { get; set; }
-    public required string StrategyAlgorithmVersion { get; set; }
+    public string? StrategyAlgorithmVersion { get; set; }
     public string State { get; set; } = string.Empty;
     public double? MovingSeconds { get; set; }
     public double? AverageSpeedMetresPerSecond { get; set; }

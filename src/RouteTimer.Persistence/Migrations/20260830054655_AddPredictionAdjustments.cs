@@ -19,7 +19,7 @@ namespace RouteTimer.Persistence.Migrations
                     PredictionId = table.Column<Guid>(type: "uuid", nullable: false),
                     StrategyType = table.Column<string>(type: "character varying(50)", maxLength: 50, nullable: false),
                     StrategyJson = table.Column<string>(type: "jsonb", nullable: false),
-                    StrategyAlgorithmVersion = table.Column<string>(type: "character varying(128)", maxLength: 128, nullable: false),
+                    StrategyAlgorithmVersion = table.Column<string>(type: "character varying(128)", maxLength: 128, nullable: true),
                     State = table.Column<string>(type: "character varying(32)", maxLength: 32, nullable: false),
                     MovingSeconds = table.Column<double>(type: "double precision", nullable: true),
                     AverageSpeedMetresPerSecond = table.Column<double>(type: "double precision", nullable: true),

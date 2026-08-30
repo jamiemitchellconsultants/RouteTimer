@@ -351,7 +351,6 @@ namespace RouteTimer.Persistence.Migrations
                         .HasColumnType("character varying(32)");
 
                     b.Property<string>("StrategyAlgorithmVersion")
-                        .IsRequired()
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)");
 
