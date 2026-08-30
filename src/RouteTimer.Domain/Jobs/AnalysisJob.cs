@@ -1,6 +1,6 @@
 namespace RouteTimer.Domain.Jobs;
 
-public enum JobType { ParseTraining, BuildModel, PredictRoute }
+public enum JobType { ParseTraining, BuildModel, PredictRoute, AdjustPrediction }
 public enum JobState { Queued, Running, Succeeded, Failed, Cancelled }
 
 public sealed record AnalysisJob(
