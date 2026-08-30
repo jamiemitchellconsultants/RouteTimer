@@ -11,10 +11,41 @@
 - Create: `src/RouteTimer.Services/Adjustments/PredictionAdjustmentQueryService.cs`
 - Create: `src/RouteTimer.Services/Adjustments/PredictionAdjustmentDeletionService.cs`
 - Create: `src/RouteTimer.Services/Adjustments/PredictionAdjustmentJobHandler.cs`
-- Modify: `src/RouteTimer.Api/Workers/AnalysisWorker.cs`
+- ~~Modify: `src/RouteTimer.Api/Workers/AnalysisWorker.cs`~~ not needed (see note below)
 - Modify: `src/RouteTimer.Api/Program.cs`
 - Test: `tests/RouteTimer.Services.Tests/Adjustments/PredictionAdjustmentWorkflowTests.cs`
-- Modify: `tests/RouteTimer.Api.Tests/Workers/AnalysisWorkerTests.cs`
+- ~~Modify: `tests/RouteTimer.Api.Tests/Workers/AnalysisWorkerTests.cs`~~ not needed (see note below)
+
+**Implementation notes (deviations from plan):**
+
+- **`AnalysisWorker` needed no change.** It already dispatches by matching `job.Type` against every
+  registered `IJobHandler.Handles` (`handlers.FirstOrDefault(candidate => candidate.Handles == job.Type)`)
+  — fully generic, with no per-job-type switch to extend. Registering
+  `AddScoped<IJobHandler, PredictionAdjustmentJobHandler>()` in `Program.cs` is the only wiring needed.
+  Its own test file needed no change either: `AnalysisWorkerTests.cs` already parameterizes every test
+  by an arbitrary `JobType` via `FakeJobHandler(JobType, ...)`, so the existing `ParseTraining`/
+  `BuildModel`/`PredictRoute` cases already prove the generic dispatch path works for any type.
+- **`IPacingStrategyHandler` grew three methods beyond the design's `Run`-only interface**:
+  `Canonicalize`, `Deserialize`, and `CanonicalizeReport`. Per [Task 3](03-adjustment-domain-contracts.md)'s
+  deviation, no concrete `PacingStrategyDefinition`/`PacingStrategyReport` subtypes exist yet, so nothing
+  can canonicalize or deserialize a strategy's JSON generically the way `PacingStrategyJson.Canonicalize<T>`
+  requires a compile-time-known `T`. Since each strategy's own handler is the only place that *does* know
+  its own concrete type, the handler owns serialization for its own strategy instead of a shared
+  polymorphic root — `PredictionAdjustmentService` and `PredictionAdjustmentJobHandler` never need to know
+  a concrete type. `PacingStrategyDispatcher` gained `TryGetHandlerForCreation`/`GetHandlerForProcessing`
+  (rather than a single lookup) so a disabled strategy blocks new adjustments (creation lookup respects
+  the enabled set) without stranding an already-queued job for that strategy (processing lookup does not).
+- **`PredictionAdjustmentJobHandler`'s step order differs from the design's numbered list**: it maps the
+  baseline's persisted segments to a `PredictionRoute` *before* resolving the strategy handler and
+  deserializing (the design lists "map ordered persisted baseline segments" as step 5 and "deserialize...
+  dispatch" as steps 6-7, which is the order implemented — a malformed/corrupt persisted baseline fails
+  with `invalid-prediction-adjustment-result` before ever touching the dispatcher, which also makes it
+  independent of whether any handler is registered for the strategy at all).
+- **`PacingStrategyDispatcher` is registered with an empty handler list and an empty enabled-types list**
+  in `Program.cs` for now, since no concrete handlers exist yet (nothing to register, nothing that could
+  be enabled). Task 6 replaces the literal `enabledTypes: []` with the set derived from
+  `PacingStrategyOptions`, and each strategy's delivery task (8, 10, 11, 12, 13) adds its own handler
+  registration.
 
 **Step 1: Add failing workflow tests**
 
