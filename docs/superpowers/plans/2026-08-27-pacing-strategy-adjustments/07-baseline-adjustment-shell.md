@@ -9,10 +9,38 @@
 - Create: `src/RouteTimer.Client/Components/Adjustments/AdjustmentComparison.razor`
 - Create: `src/RouteTimer.Client/Components/Adjustments/AdjustmentSummaryCard.razor`
 - Modify: `src/RouteTimer.Client/Pages/PredictionDetail.razor`
-- Modify: `src/RouteTimer.Client/Pages/PredictionDetail.razor.css`
-- Modify: `src/RouteTimer.Client/Jobs/JobPoller.cs`
+- ~~Modify: `src/RouteTimer.Client/Pages/PredictionDetail.razor.css`~~ not needed (see note below)
+- ~~Modify: `src/RouteTimer.Client/Jobs/JobPoller.cs`~~ not needed (see note below)
 - Test: `tests/RouteTimer.Client.Tests/PredictionAdjustmentShellTests.cs`
 - Modify: `tests/RouteTimer.Client.Tests/PredictionDetailPageTests.cs`
+
+**Implementation notes (deviations from plan):**
+
+- **`JobPoller` needed no change.** `PollAsync(jobId, onUpdate, cancellationToken)` is already
+  per-job-id and stateless between calls — `Predictions.razor` already runs it concurrently, once per
+  in-flight baseline submission, via its own fire-and-forget `PollPredictionJobAsync` per prediction id.
+  The same pattern already gives "queued/running children poll independently and terminal children stop
+  polling" for free once a create flow exists to capture each new adjustment's job id — no shared state
+  in `JobPoller` needed touching.
+- **No live polling for pre-existing queued/running children, by design — matching existing precedent.**
+  `Predictions.razor`'s own baseline list does not resume polling a queued prediction that was already
+  in flight before the current page load either (`queuedPredictionIds` is only populated at the moment
+  *this* session submits one); a pre-existing queued baseline just shows its static state until the next
+  manual reload. The adjustment shell follows the same convention. Since `AdjustmentBuilder` cannot yet
+  submit anything (see below), there is no create flow yet to capture a job id from in the first place —
+  this becomes exercisable once a strategy is deliverable (Task 8+).
+- **`AdjustmentBuilder` cannot create anything yet.** With zero concrete strategies delivered (see
+  [Task 3](03-adjustment-domain-contracts.md)'s, [Task 5](05-adjustment-job-orchestration.md)'s, and
+  [Task 6](06-nested-apis-and-capabilities.md)'s deviations), there is no strategy editor to plug in and
+  every capability flag is `false` by default — so today it only ever renders its
+  "not enabled"/"no strategies available" messages. It does already read `Capabilities` correctly and
+  lists enabled strategy display names once any flag is `true`, ready for each strategy's own delivery
+  task to register a real editor into it.
+- **`PredictionDetail.razor.css` was not touched.** New markup in the adjustment components reuses the
+  existing shared classes (`prediction-detail-panel`, `prediction-detail-grid`, `prediction-detail-list`,
+  `prediction-detail-actions`, `predictions-button`/`--secondary`/`--danger`) rather than introducing new
+  scoped styles, since Blazor CSS isolation only applies a page's own `.razor.css` to markup literally
+  inside that page — new selectors there would not reach the new child components anyway.
 
 **Step 1: Add failing bUnit tests for primary/secondary behavior**
 
