@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  alignComparisonSegments,
+  buildComparisonProfileDatasets,
   buildProfileDatasets,
+  downsampleComparisonPoints,
   nearestSegmentSequence,
   normalizeSegments
 } from "./route-visualization-core.mjs";
@@ -98,4 +101,200 @@ test("nearestSegmentSequence resolves equal distances to the lower sequence", ()
   const sequence = nearestSegmentSequence(tied, 51.5, -0.124);
 
   assert.equal(sequence, 2);
+});
+
+const rawAdjustment = [
+  {
+    sequence: 2,
+    powerWatts: 275,
+    speedMetresPerSecond: 9.2,
+    segmentMovingSeconds: 58,
+    cumulativeMovingSeconds: 116,
+    zoneNumber: 4,
+    strategyPhase: null,
+    wPrimeBalanceJoules: null
+  },
+  {
+    sequence: 1,
+    powerWatts: 260,
+    speedMetresPerSecond: 8.5,
+    segmentMovingSeconds: 58,
+    cumulativeMovingSeconds: 58,
+    zoneNumber: 3,
+    strategyPhase: null,
+    wPrimeBalanceJoules: null
+  }
+];
+
+function comparisonSegments(count, mutate = () => ({})) {
+  const baseline = [];
+  const adjustment = [];
+  for (let index = 0; index < count; index++) {
+    const sequence = index + 1;
+    baseline.push({
+      sequence,
+      latitude: 51.5 + (index * 0.0001),
+      longitude: -0.12 + (index * 0.0001),
+      elevationMetres: 100 + index,
+      cumulativeDistanceMetres: (index + 1) * 100,
+      segmentDistanceMetres: 100,
+      gradient: 0.01,
+      curvaturePerMetre: 0,
+      predictedPowerWatts: 200,
+      predictedSpeedMetresPerSecond: 8,
+      segmentMovingSeconds: 12.5,
+      cumulativeMovingSeconds: (index + 1) * 12.5,
+      confidence: "High"
+    });
+    adjustment.push({
+      sequence,
+      powerWatts: 220,
+      speedMetresPerSecond: 8.4,
+      segmentMovingSeconds: 11.9,
+      cumulativeMovingSeconds: (index + 1) * 11.9,
+      zoneNumber: 3,
+      strategyPhase: null,
+      wPrimeBalanceJoules: null,
+      ...mutate(index)
+    });
+  }
+
+  return { baseline, adjustment };
+}
+
+test("buildComparisonProfileDatasets aligns adjustment by sequence", () => {
+  const datasets = buildComparisonProfileDatasets(rawSegments, rawAdjustment);
+
+  assert.deepEqual(datasets[2].adjustmentPoints.map(point => point.sequence), [1, 2]);
+});
+
+test("alignComparisonSegments rejects missing, duplicate, and extra sequences", () => {
+  assert.throws(() => alignComparisonSegments(rawSegments, [rawAdjustment[0]]), /sequence/i);
+  assert.throws(
+    () => alignComparisonSegments(rawSegments, [rawAdjustment[0], { ...rawAdjustment[0] }]),
+    /duplicate/i
+  );
+  assert.throws(
+    () => alignComparisonSegments(rawSegments, [...rawAdjustment, { ...rawAdjustment[0], sequence: 3 }]),
+    /sequence/i
+  );
+});
+
+test("alignComparisonSegments rejects non-finite adjusted metrics", () => {
+  const invalid = [rawAdjustment[0], { ...rawAdjustment[1], powerWatts: Number.NaN }];
+
+  assert.throws(() => alignComparisonSegments(rawSegments, invalid), /powerWatts/i);
+});
+
+test("alignComparisonSegments rejects a non-finite W-prime balance when present", () => {
+  const invalid = [rawAdjustment[0], { ...rawAdjustment[1], wPrimeBalanceJoules: Number.POSITIVE_INFINITY }];
+
+  assert.throws(() => alignComparisonSegments(rawSegments, invalid), /wPrimeBalanceJoules/i);
+  assert.doesNotThrow(() => alignComparisonSegments(rawSegments, rawAdjustment));
+});
+
+test("buildComparisonProfileDatasets returns four groups with baseline before adjustment", () => {
+  const datasets = buildComparisonProfileDatasets(rawSegments, rawAdjustment);
+
+  assert.deepEqual(datasets.map(dataset => dataset.label), ["Elevation", "Gradient", "Power", "Speed"]);
+  assert.deepEqual(datasets.map(dataset => dataset.suffix), [" m", "%", " W", " km/h"]);
+  assert.deepEqual(datasets[0].adjustmentPoints, []);
+  assert.deepEqual(datasets[1].adjustmentPoints, []);
+  assert.equal(datasets[2].baselinePoints.length, 2);
+  assert.equal(datasets[2].adjustmentPoints.length, 2);
+});
+
+test("buildComparisonProfileDatasets converts distance to km and speed to km/h", () => {
+  const datasets = buildComparisonProfileDatasets(rawSegments, rawAdjustment);
+
+  assert.deepEqual(datasets[2].baselinePoints[0], {
+    sequence: 1,
+    x: 0.5,
+    y: 246,
+    baselineSegmentMovingSeconds: 60
+  });
+  assert.deepEqual(datasets[2].adjustmentPoints[0], {
+    sequence: 1,
+    x: 0.5,
+    y: 260,
+    baselineY: 246,
+    delta: 14,
+    baselineSegmentMovingSeconds: 60,
+    adjustmentSegmentMovingSeconds: 58,
+    segmentMovingSecondsDelta: -2,
+    zoneNumber: 3,
+    strategyPhase: null,
+    wPrimeBalanceJoules: null
+  });
+  assert.deepEqual(datasets[3].adjustmentPoints[1], {
+    sequence: 2,
+    x: 1,
+    y: 33.12,
+    baselineY: 32.04,
+    delta: 1.08,
+    baselineSegmentMovingSeconds: 62,
+    adjustmentSegmentMovingSeconds: 58,
+    segmentMovingSecondsDelta: -4,
+    zoneNumber: 4,
+    strategyPhase: null,
+    wPrimeBalanceJoules: null
+  });
+});
+
+test("downsampleComparisonPoints preserves the first and last points", () => {
+  const points = Array.from({ length: 4000 }, (_, index) => ({ sequence: index + 1 }));
+
+  const sampled = downsampleComparisonPoints(points);
+
+  assert.equal(sampled[0].sequence, 1);
+  assert.equal(sampled[sampled.length - 1].sequence, 4000);
+  assert.ok(sampled.length <= 1500);
+});
+
+test("downsampleComparisonPoints returns short inputs untouched", () => {
+  const points = Array.from({ length: 10 }, (_, index) => ({ sequence: index + 1 }));
+
+  assert.deepEqual(downsampleComparisonPoints(points), points);
+});
+
+test("downsampleComparisonPoints keeps both sides of every zone and phase change", () => {
+  const points = Array.from({ length: 3000 }, (_, index) => ({
+    sequence: index + 1,
+    zoneNumber: index < 1500 ? 2 : 5,
+    strategyPhase: index < 2000 ? "baseline" : "burn"
+  }));
+
+  const sampled = downsampleComparisonPoints(points);
+  const sequences = sampled.map(point => point.sequence);
+
+  assert.ok(sequences.includes(1500), "last sequence before the zone change");
+  assert.ok(sequences.includes(1501), "first sequence after the zone change");
+  assert.ok(sequences.includes(2000), "last sequence before the phase change");
+  assert.ok(sequences.includes(2001), "first sequence after the phase change");
+  assert.deepEqual(sequences, [...sequences].sort((left, right) => left - right));
+  assert.equal(new Set(sequences).size, sequences.length);
+});
+
+test("downsampleComparisonPoints keeps every mandatory point even past the soft cap", () => {
+  const points = Array.from({ length: 4000 }, (_, index) => ({
+    sequence: index + 1,
+    zoneNumber: index % 2 === 0 ? 2 : 5,
+    strategyPhase: null
+  }));
+
+  const sampled = downsampleComparisonPoints(points);
+
+  assert.equal(sampled.length, 4000);
+});
+
+test("buildComparisonProfileDatasets downsamples every group to the same sequences", () => {
+  const { baseline, adjustment } = comparisonSegments(4000);
+
+  const datasets = buildComparisonProfileDatasets(baseline, adjustment);
+  const powerSequences = datasets[2].baselinePoints.map(point => point.sequence);
+
+  assert.ok(powerSequences.length <= 1500);
+  assert.deepEqual(datasets[0].baselinePoints.map(point => point.sequence), powerSequences);
+  assert.deepEqual(datasets[2].adjustmentPoints.map(point => point.sequence), powerSequences);
+  assert.deepEqual(datasets[3].adjustmentPoints.map(point => point.sequence), powerSequences);
 });
