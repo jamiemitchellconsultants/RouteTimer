@@ -1,0 +1,52 @@
+@using RouteTimer.Client.Formatting
+@using RouteTimer.Contracts.Adjustments
+
+<div class="prediction-detail-grid" data-testid="@($"adjustment-card-{Summary.Id}")">
+    <div>
+        <dt>Strategy</dt>
+        <dd>@RouteTimerText.Sentence(Summary.StrategyType)</dd>
+    </div>
+    <div>
+        <dt>State</dt>
+        <dd data-testid="@($"adjustment-card-state-{Summary.Id}")">@RouteTimerText.Sentence(Summary.State)</dd>
+    </div>
+    <div>
+        <dt>Moving time</dt>
+        <dd>@RouteTimerFormat.DetailedDuration(Summary.MovingSeconds)</dd>
+    </div>
+    <div>
+        <dt>Average power</dt>
+        <dd>@RouteTimerFormat.Power(Summary.AveragePowerWatts)</dd>
+    </div>
+    <div>
+        <dt>Created</dt>
+        <dd>@RouteTimerFormat.Timestamp(Summary.CreatedAt)</dd>
+    </div>
+</div>
+<div class="prediction-detail-actions">
+    <button type="button" class="predictions-button predictions-button--secondary"
+            data-testid="@($"adjustment-compare-{Summary.Id}")"
+            @onclick="() => OnSelect.InvokeAsync(Summary.Id)"
+            disabled="@IsSelected">
+        @(IsSelected ? "Comparing" : "Compare")
+    </button>
+    <button type="button" class="predictions-button predictions-button--danger"
+            data-testid="@($"adjustment-delete-{Summary.Id}")"
+            @onclick="() => OnDelete.InvokeAsync(Summary.Id)">
+        Delete
+    </button>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public PredictionAdjustmentSummaryResponse Summary { get; set; } = null!;
+
+    [Parameter]
+    public bool IsSelected { get; set; }
+
+    [Parameter]
+    public EventCallback<Guid> OnSelect { get; set; }
+
+    [Parameter]
+    public EventCallback<Guid> OnDelete { get; set; }
+}

@@ -7,6 +7,7 @@ using RouteTimer.Client.Api;
 using RouteTimer.Client.Pages;
 using RouteTimer.Client.RouteBuilder;
 using RouteTimer.Client.Tests.Fakes;
+using RouteTimer.Contracts.Adjustments;
 using RouteTimer.Contracts.Predictions;
 
 namespace RouteTimer.Client.Tests;
@@ -38,6 +39,11 @@ public sealed class PredictionDetailPageTests : BunitContext
         module.SetupVoid("selectProfileSequence", _ => true).SetVoidResult();
         module.SetupVoid("disposeMap", _ => true).SetVoidResult();
         module.SetupVoid("disposeProfiles", _ => true).SetVoidResult();
+
+        // Every succeeded-prediction test triggers a pacing-adjustment load; default to "nothing
+        // enabled, no children yet" so tests unrelated to adjustments don't each need to configure it.
+        api.OnGetPacingStrategiesAsync = (_) => Task.FromResult(new PacingStrategyCapabilityResponse(false, false, false, false, false, false, 65536, 10, 10));
+        api.OnGetPredictionAdjustmentsAsync = (_, _) => Task.FromResult<IReadOnlyList<PredictionAdjustmentSummaryResponse>>([]);
     }
 
     [Fact]

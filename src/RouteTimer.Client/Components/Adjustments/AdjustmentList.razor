@@ -1,0 +1,52 @@
+@using RouteTimer.Client.Api
+@using RouteTimer.Client.Components
+@using RouteTimer.Contracts.Adjustments
+
+<section class="prediction-detail-panel" data-testid="adjustment-list">
+    <h2>Pacing adjustments</h2>
+
+    @if (Problem is not null || FallbackProblem)
+    {
+        <div data-testid="adjustment-list-error">
+            <ProblemMessage Problem="@Problem" FallbackMessage="We could not load pacing adjustments." />
+        </div>
+    }
+
+    @if (Summaries.Count == 0)
+    {
+        <p data-testid="adjustment-list-empty">No adjustments yet.</p>
+    }
+    else
+    {
+        <div class="prediction-detail-list" data-testid="adjustment-list-items">
+            @foreach (var summary in Summaries)
+            {
+                <AdjustmentSummaryCard
+                    Summary="summary"
+                    IsSelected="summary.Id == SelectedAdjustmentId"
+                    OnSelect="OnSelect"
+                    OnDelete="OnDelete" />
+            }
+        </div>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<PredictionAdjustmentSummaryResponse> Summaries { get; set; } = [];
+
+    [Parameter]
+    public Guid? SelectedAdjustmentId { get; set; }
+
+    [Parameter]
+    public ApiProblemException? Problem { get; set; }
+
+    [Parameter]
+    public bool FallbackProblem { get; set; }
+
+    [Parameter]
+    public EventCallback<Guid> OnSelect { get; set; }
+
+    [Parameter]
+    public EventCallback<Guid> OnDelete { get; set; }
+}

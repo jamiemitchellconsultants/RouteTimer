@@ -3,7 +3,9 @@
 @implements IDisposable
 @using RouteTimer.Client.Api
 @using RouteTimer.Client.Components
+@using RouteTimer.Client.Components.Adjustments
 @using RouteTimer.Client.Formatting
+@using RouteTimer.Contracts.Adjustments
 @using RouteTimer.Contracts.Predictions
 @inject IRouteTimerApiClient Api
 
@@ -247,6 +249,27 @@ else
             </p>
         }
     </section>
+
+    @if (prediction.Summary.State.Equals("Succeeded", StringComparison.OrdinalIgnoreCase))
+    {
+        <AdjustmentBuilder Capabilities="capabilities" PredictionId="Id" />
+
+        <AdjustmentList
+            Summaries="adjustmentSummaries"
+            SelectedAdjustmentId="selectedAdjustmentId"
+            Problem="adjustmentListProblem"
+            FallbackProblem="adjustmentListFallbackProblem"
+            OnSelect="SelectAdjustmentAsync"
+            OnDelete="DeleteAdjustmentAsync" />
+
+        @if (selectedAdjustmentDetail is not null)
+        {
+            <AdjustmentComparison
+                Baseline="prediction.Summary"
+                Selected="selectedAdjustmentDetail"
+                OnBackToBaseline="BackToBaseline" />
+        }
+    }
 }
 
 @code {
@@ -263,6 +286,12 @@ else
     private bool confirmingGarminResend;
     private ApiProblemException? garminCourseProblem;
     private bool garminCourseFallbackProblem;
+    private PacingStrategyCapabilityResponse? capabilities;
+    private IReadOnlyList<PredictionAdjustmentSummaryResponse> adjustmentSummaries = [];
+    private ApiProblemException? adjustmentListProblem;
+    private bool adjustmentListFallbackProblem;
+    private Guid? selectedAdjustmentId;
+    private PredictionAdjustmentDetailResponse? selectedAdjustmentDetail;
 
     [Parameter]
     public Guid Id { get; set; }
@@ -275,6 +304,12 @@ else
         orderedSegments = [];
         segmentsReceivedOutOfOrder = false;
         visualizationReady = false;
+        capabilities = null;
+        adjustmentSummaries = [];
+        adjustmentListProblem = null;
+        adjustmentListFallbackProblem = false;
+        selectedAdjustmentId = null;
+        selectedAdjustmentDetail = null;
 
         try
         {
@@ -285,8 +320,12 @@ else
                 segmentsReceivedOutOfOrder = prediction.Segments
                     .Select(segment => segment.Sequence)
                     .SequenceEqual(orderedSegments.Select(segment => segment.Sequence)) is false;
-                visualizationReady = prediction.Summary.State.Equals("Succeeded", StringComparison.OrdinalIgnoreCase)
-                    && orderedSegments.Count > 0;
+                var succeeded = prediction.Summary.State.Equals("Succeeded", StringComparison.OrdinalIgnoreCase);
+                visualizationReady = succeeded && orderedSegments.Count > 0;
+                if (succeeded)
+                {
+                    await LoadAdjustmentsAsync();
+                }
             }
         }
         catch (ApiProblemException apiProblem)
@@ -365,6 +404,81 @@ else
                 sendingToGarmin = false;
             }
         }
+    }
+
+    /// <summary>
+    /// Failures here are captured into their own fields, never the page's own <see cref="problem"/>/
+    /// <see cref="fallbackProblem"/> - an adjustment-list failure is a secondary, inline error that must
+    /// not hide the (already successfully loaded) baseline.
+    /// </summary>
+    private async Task LoadAdjustmentsAsync()
+    {
+        try
+        {
+            capabilities = await Api.GetPacingStrategiesAsync(pageCancellation.Token);
+            adjustmentSummaries = await Api.GetPredictionAdjustmentsAsync(Id, pageCancellation.Token);
+        }
+        catch (ApiProblemException apiProblem)
+        {
+            adjustmentListProblem = apiProblem;
+        }
+        catch (HttpRequestException)
+        {
+            adjustmentListFallbackProblem = true;
+        }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task SelectAdjustmentAsync(Guid adjustmentId)
+    {
+        selectedAdjustmentId = adjustmentId;
+        selectedAdjustmentDetail = null;
+        try
+        {
+            selectedAdjustmentDetail = await Api.GetPredictionAdjustmentAsync(Id, adjustmentId, pageCancellation.Token);
+        }
+        catch (ApiProblemException)
+        {
+        }
+        catch (HttpRequestException)
+        {
+        }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+        }
+    }
+
+    private void BackToBaseline()
+    {
+        selectedAdjustmentId = null;
+        selectedAdjustmentDetail = null;
+    }
+
+    private async Task DeleteAdjustmentAsync(Guid adjustmentId)
+    {
+        try
+        {
+            await Api.DeletePredictionAdjustmentAsync(Id, adjustmentId, pageCancellation.Token);
+        }
+        catch (ApiProblemException)
+        {
+        }
+        catch (HttpRequestException)
+        {
+        }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (selectedAdjustmentId == adjustmentId)
+        {
+            BackToBaseline();
+        }
+
+        await LoadAdjustmentsAsync();
     }
 
     private static string DisplayBoolean(bool value) => value ? "Yes" : "No";
