@@ -13,6 +13,7 @@ using RouteTimer.Api.Auth;
 using RouteTimer.Api.Health;
 using RouteTimer.Api.Routing;
 using RouteTimer.Contracts.Errors;
+using RouteTimer.Api.Adjustments;
 using RouteTimer.Api.Endpoints;
 using RouteTimer.Api.Garmin;
 using RouteTimer.Api.Security;
@@ -173,9 +174,12 @@ builder.Services.AddScoped<IJobHandler, ParseTrainingJobHandler>();
 builder.Services.AddScoped<IJobHandler, BuildModelJobHandler>();
 builder.Services.AddScoped<IJobHandler, PredictionJobHandler>();
 builder.Services.AddScoped<IPredictionAdjustmentRepository, PredictionAdjustmentRepository>();
-// No strategy handlers are registered yet (each strategy's own delivery task adds one), so no type
-// can be enabled here yet either - both lists become non-empty together as strategies are delivered.
-builder.Services.AddScoped(sp => new PacingStrategyDispatcher(sp.GetServices<IPacingStrategyHandler>(), enabledTypes: []));
+var pacingStrategyOptions = PacingStrategyOptions.Bind(builder.Configuration);
+builder.Services.AddSingleton(pacingStrategyOptions);
+// No strategy handlers are registered yet (each strategy's own delivery task adds one). Sourcing
+// enabledTypes from configuration here (rather than a literal []) is already correct for when they
+// are: every strategy flag defaults to false, so this stays empty until an operator turns one on.
+builder.Services.AddScoped(sp => new PacingStrategyDispatcher(sp.GetServices<IPacingStrategyHandler>(), pacingStrategyOptions.EnabledTypes));
 builder.Services.AddScoped<PredictionAdjustmentService>();
 builder.Services.AddScoped<PredictionAdjustmentQueryService>();
 builder.Services.AddScoped<PredictionAdjustmentDeletionService>();
@@ -395,6 +399,7 @@ app.MapProfileEndpoints();
 app.MapTrainingEndpoints();
 app.MapModelsEndpoints();
 app.MapPredictionEndpoints();
+app.MapPredictionAdjustmentEndpoints();
 app.MapJobEndpoints();
 app.MapGarminEndpoints();
 app.MapRouteEndpoints();

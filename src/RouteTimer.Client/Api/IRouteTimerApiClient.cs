@@ -1,3 +1,4 @@
+using RouteTimer.Contracts.Adjustments;
 using RouteTimer.Contracts.Garmin;
 using RouteTimer.Contracts.Jobs;
 using RouteTimer.Contracts.Models;
@@ -23,6 +24,11 @@ public interface IRouteTimerApiClient
     Task<PredictionSubmissionResponse> SubmitPredictionAsync(ClientFileUpload file, CancellationToken ct);
     Task<PredictionDetailResponse?> GetPredictionAsync(Guid id, CancellationToken ct);
     Task<bool> DeletePredictionAsync(Guid id, CancellationToken ct);
+    Task<PacingStrategyCapabilityResponse> GetPacingStrategiesAsync(CancellationToken ct);
+    Task<PredictionAdjustmentSubmissionResponse> CreatePredictionAdjustmentAsync(Guid predictionId, PacingStrategyRequest request, CancellationToken ct);
+    Task<IReadOnlyList<PredictionAdjustmentSummaryResponse>> GetPredictionAdjustmentsAsync(Guid predictionId, CancellationToken ct);
+    Task<PredictionAdjustmentDetailResponse?> GetPredictionAdjustmentAsync(Guid predictionId, Guid adjustmentId, CancellationToken ct);
+    Task<bool> DeletePredictionAdjustmentAsync(Guid predictionId, Guid adjustmentId, CancellationToken ct);
     Task<JobResponse?> GetJobAsync(Guid id, CancellationToken ct);
     Task<GarminConnectionResponse> GetGarminConnectionAsync(CancellationToken ct);
     Task<GarminConnectionResponse> LoginGarminAsync(GarminLoginRequest request, CancellationToken ct);

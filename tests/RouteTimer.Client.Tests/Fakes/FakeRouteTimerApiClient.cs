@@ -1,4 +1,5 @@
 using RouteTimer.Client.Api;
+using RouteTimer.Contracts.Adjustments;
 using RouteTimer.Contracts.Garmin;
 using RouteTimer.Contracts.Jobs;
 using RouteTimer.Contracts.Models;
@@ -24,6 +25,11 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
     public Func<ClientFileUpload, CancellationToken, Task<PredictionSubmissionResponse>>? OnSubmitPredictionAsync { get; set; }
     public Func<Guid, CancellationToken, Task<PredictionDetailResponse?>>? OnGetPredictionAsync { get; set; }
     public Func<Guid, CancellationToken, Task<bool>>? OnDeletePredictionAsync { get; set; }
+    public Func<CancellationToken, Task<PacingStrategyCapabilityResponse>>? OnGetPacingStrategiesAsync { get; set; }
+    public Func<Guid, PacingStrategyRequest, CancellationToken, Task<PredictionAdjustmentSubmissionResponse>>? OnCreatePredictionAdjustmentAsync { get; set; }
+    public Func<Guid, CancellationToken, Task<IReadOnlyList<PredictionAdjustmentSummaryResponse>>>? OnGetPredictionAdjustmentsAsync { get; set; }
+    public Func<Guid, Guid, CancellationToken, Task<PredictionAdjustmentDetailResponse?>>? OnGetPredictionAdjustmentAsync { get; set; }
+    public Func<Guid, Guid, CancellationToken, Task<bool>>? OnDeletePredictionAdjustmentAsync { get; set; }
     public Func<Guid, CancellationToken, Task<JobResponse?>>? OnGetJobAsync { get; set; }
     public Func<CancellationToken, Task<GarminConnectionResponse>>? OnGetGarminConnectionAsync { get; set; }
     public Func<GarminLoginRequest, CancellationToken, Task<GarminConnectionResponse>>? OnLoginGarminAsync { get; set; }
@@ -60,6 +66,11 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
     public List<(ClientFileUpload File, CancellationToken CancellationToken)> SubmittedPredictions { get; } = [];
     public List<(Guid PredictionId, CancellationToken CancellationToken)> RequestedPredictionDetails { get; } = [];
     public List<(Guid PredictionId, CancellationToken CancellationToken)> DeletedPredictions { get; } = [];
+    public List<CancellationToken> RequestedPacingStrategies { get; } = [];
+    public List<(Guid PredictionId, PacingStrategyRequest Request, CancellationToken CancellationToken)> CreatedPredictionAdjustments { get; } = [];
+    public List<(Guid PredictionId, CancellationToken CancellationToken)> RequestedPredictionAdjustmentLists { get; } = [];
+    public List<(Guid PredictionId, Guid AdjustmentId, CancellationToken CancellationToken)> RequestedPredictionAdjustmentDetails { get; } = [];
+    public List<(Guid PredictionId, Guid AdjustmentId, CancellationToken CancellationToken)> DeletedPredictionAdjustments { get; } = [];
     public List<CancellationToken> RequestedGarminConnections { get; } = [];
     public List<(GarminLoginRequest Request, CancellationToken CancellationToken)> GarminLoginRequests { get; } = [];
     public List<(GarminMfaRequest Request, CancellationToken CancellationToken)> GarminMfaRequests { get; } = [];
@@ -160,6 +171,46 @@ public sealed class FakeRouteTimerApiClient : IRouteTimerApiClient
         DeletedPredictions.Add((id, ct));
         return OnDeletePredictionAsync is not null
             ? OnDeletePredictionAsync(id, ct)
+            : throw new NotSupportedException();
+    }
+
+    public Task<PacingStrategyCapabilityResponse> GetPacingStrategiesAsync(CancellationToken ct)
+    {
+        RequestedPacingStrategies.Add(ct);
+        return OnGetPacingStrategiesAsync is not null
+            ? OnGetPacingStrategiesAsync(ct)
+            : throw new NotSupportedException();
+    }
+
+    public Task<PredictionAdjustmentSubmissionResponse> CreatePredictionAdjustmentAsync(Guid predictionId, PacingStrategyRequest request, CancellationToken ct)
+    {
+        CreatedPredictionAdjustments.Add((predictionId, request, ct));
+        return OnCreatePredictionAdjustmentAsync is not null
+            ? OnCreatePredictionAdjustmentAsync(predictionId, request, ct)
+            : throw new NotSupportedException();
+    }
+
+    public Task<IReadOnlyList<PredictionAdjustmentSummaryResponse>> GetPredictionAdjustmentsAsync(Guid predictionId, CancellationToken ct)
+    {
+        RequestedPredictionAdjustmentLists.Add((predictionId, ct));
+        return OnGetPredictionAdjustmentsAsync is not null
+            ? OnGetPredictionAdjustmentsAsync(predictionId, ct)
+            : throw new NotSupportedException();
+    }
+
+    public Task<PredictionAdjustmentDetailResponse?> GetPredictionAdjustmentAsync(Guid predictionId, Guid adjustmentId, CancellationToken ct)
+    {
+        RequestedPredictionAdjustmentDetails.Add((predictionId, adjustmentId, ct));
+        return OnGetPredictionAdjustmentAsync is not null
+            ? OnGetPredictionAdjustmentAsync(predictionId, adjustmentId, ct)
+            : throw new NotSupportedException();
+    }
+
+    public Task<bool> DeletePredictionAdjustmentAsync(Guid predictionId, Guid adjustmentId, CancellationToken ct)
+    {
+        DeletedPredictionAdjustments.Add((predictionId, adjustmentId, ct));
+        return OnDeletePredictionAdjustmentAsync is not null
+            ? OnDeletePredictionAdjustmentAsync(predictionId, adjustmentId, ct)
             : throw new NotSupportedException();
     }
 

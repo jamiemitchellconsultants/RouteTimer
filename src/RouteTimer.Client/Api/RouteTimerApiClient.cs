@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using RouteTimer.Contracts.Adjustments;
 using RouteTimer.Contracts.Auth;
 using RouteTimer.Contracts.Garmin;
 using RouteTimer.Contracts.Jobs;
@@ -58,6 +59,31 @@ public sealed class RouteTimerApiClient(HttpClient httpClient) : IRouteTimerApiC
 
     public Task<bool> DeletePredictionAsync(Guid id, CancellationToken ct) =>
         DeleteAsync($"/api/predictions/{id}", ct);
+
+    public Task<PacingStrategyCapabilityResponse> GetPacingStrategiesAsync(CancellationToken ct) =>
+        GetRequiredAsync<PacingStrategyCapabilityResponse>("/api/pacing-strategies", ct);
+
+    public async Task<PredictionAdjustmentSubmissionResponse> CreatePredictionAdjustmentAsync(Guid predictionId, PacingStrategyRequest request, CancellationToken ct)
+    {
+        // The request must serialize as its declared PacingStrategyRequest base type, not its runtime
+        // concrete type, so the [JsonPolymorphic]/[JsonDerivedType] discriminator on the base type is
+        // actually applied - SendJsonAsync's `object` parameter would otherwise serialize by runtime
+        // type and silently omit the discriminator.
+        using var content = JsonContent.Create(request, options: JsonOptions);
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"/api/predictions/{predictionId}/adjustments") { Content = content };
+        using var response = await httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, ct);
+        await EnsureSuccessAsync(response, ct);
+        return await ReadRequiredJsonAsync<PredictionAdjustmentSubmissionResponse>(response, ct);
+    }
+
+    public Task<IReadOnlyList<PredictionAdjustmentSummaryResponse>> GetPredictionAdjustmentsAsync(Guid predictionId, CancellationToken ct) =>
+        GetRequiredAsync<IReadOnlyList<PredictionAdjustmentSummaryResponse>>($"/api/predictions/{predictionId}/adjustments", ct);
+
+    public Task<PredictionAdjustmentDetailResponse?> GetPredictionAdjustmentAsync(Guid predictionId, Guid adjustmentId, CancellationToken ct) =>
+        GetOptionalAsync<PredictionAdjustmentDetailResponse>($"/api/predictions/{predictionId}/adjustments/{adjustmentId}", ct);
+
+    public Task<bool> DeletePredictionAdjustmentAsync(Guid predictionId, Guid adjustmentId, CancellationToken ct) =>
+        DeleteAsync($"/api/predictions/{predictionId}/adjustments/{adjustmentId}", ct);
 
     public Task<JobResponse?> GetJobAsync(Guid id, CancellationToken ct) =>
         GetOptionalAsync<JobResponse>($"/api/jobs/{id}", ct);

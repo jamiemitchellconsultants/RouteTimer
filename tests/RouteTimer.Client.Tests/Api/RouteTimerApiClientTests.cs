@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using RouteTimer.Client.Api;
+using RouteTimer.Contracts.Adjustments;
 using RouteTimer.Contracts.Auth;
 using RouteTimer.Contracts.Garmin;
 using RouteTimer.Contracts.Jobs;
@@ -269,6 +270,108 @@ public sealed class RouteTimerApiClientTests
 
         var deleted = await client.DeletePredictionAsync(id, CancellationToken.None);
         var missing = await client.DeletePredictionAsync(id, CancellationToken.None);
+
+        Assert.True(deleted);
+        Assert.False(missing);
+    }
+
+    [Fact]
+    public async Task GetPacingStrategiesAsync_gets_the_capability_response()
+    {
+        var expected = new PacingStrategyCapabilityResponse(true, false, false, true, false, false, 65536, 10, 10);
+        var client = CreateApiClient((request, _) =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Equal("/api/pacing-strategies", request.RequestUri!.AbsolutePath);
+            return Task.FromResult(JsonResponse(expected));
+        });
+
+        var result = await client.GetPacingStrategiesAsync(CancellationToken.None);
+
+        AssertJsonEquivalent(expected, result);
+    }
+
+    // Break caught: posting a request typed only as its concrete record (not the declared PacingStrategyRequest
+    // base) serializes without the "type" discriminator, since System.Text.Json picks JSON shape by the
+    // caller's declared/generic type, not always the runtime type.
+    [Fact]
+    public async Task CreatePredictionAdjustmentAsync_posts_the_request_with_its_type_discriminator()
+    {
+        var predictionId = Guid.NewGuid();
+        var expected = new PredictionAdjustmentSubmissionResponse(Guid.NewGuid(), Guid.NewGuid(), predictionId);
+        var client = CreateApiClient(async (request, cancellationToken) =>
+        {
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal($"/api/predictions/{predictionId}/adjustments", request.RequestUri!.AbsolutePath);
+            var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+            Assert.Contains("\"type\":\"time-target\"", body, StringComparison.Ordinal);
+            Assert.Contains("\"targetMovingSeconds\":1200", body, StringComparison.Ordinal);
+            return JsonResponse(expected, HttpStatusCode.Accepted);
+        });
+
+        var result = await client.CreatePredictionAdjustmentAsync(
+            predictionId, new TimeTargetRequest(1200, "proportional", null, false), CancellationToken.None);
+
+        AssertJsonEquivalent(expected, result);
+    }
+
+    [Fact]
+    public async Task GetPredictionAdjustmentsAsync_gets_the_summary_list()
+    {
+        var predictionId = Guid.NewGuid();
+        var expected = new[] { AdjustmentSummary(predictionId), AdjustmentSummary(predictionId) };
+        var client = CreateApiClient((request, _) =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Equal($"/api/predictions/{predictionId}/adjustments", request.RequestUri!.AbsolutePath);
+            return Task.FromResult(JsonResponse<IReadOnlyList<PredictionAdjustmentSummaryResponse>>(expected));
+        });
+
+        var result = await client.GetPredictionAdjustmentsAsync(predictionId, CancellationToken.None);
+
+        AssertJsonEquivalent(expected, result);
+    }
+
+    [Fact]
+    public async Task GetPredictionAdjustmentAsync_gets_detail_and_maps_not_found_to_null()
+    {
+        var predictionId = Guid.NewGuid();
+        var adjustmentId = Guid.NewGuid();
+        var expected = new PredictionAdjustmentDetailResponse(AdjustmentSummary(predictionId, adjustmentId), JsonDocument.Parse("{}").RootElement, null, []);
+        var calls = 0;
+        var client = CreateApiClient((request, _) =>
+        {
+            calls++;
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Equal($"/api/predictions/{predictionId}/adjustments/{adjustmentId}", request.RequestUri!.AbsolutePath);
+            return Task.FromResult(calls == 1
+                ? JsonResponse(expected)
+                : new HttpResponseMessage(HttpStatusCode.NotFound));
+        });
+
+        var found = await client.GetPredictionAdjustmentAsync(predictionId, adjustmentId, CancellationToken.None);
+        var missing = await client.GetPredictionAdjustmentAsync(predictionId, adjustmentId, CancellationToken.None);
+
+        AssertJsonEquivalent(expected, found);
+        Assert.Null(missing);
+    }
+
+    [Fact]
+    public async Task DeletePredictionAdjustmentAsync_uses_delete_and_maps_not_found_to_false()
+    {
+        var predictionId = Guid.NewGuid();
+        var adjustmentId = Guid.NewGuid();
+        var calls = 0;
+        var client = CreateApiClient((request, _) =>
+        {
+            calls++;
+            Assert.Equal(HttpMethod.Delete, request.Method);
+            Assert.Equal($"/api/predictions/{predictionId}/adjustments/{adjustmentId}", request.RequestUri!.AbsolutePath);
+            return Task.FromResult(new HttpResponseMessage(calls == 1 ? HttpStatusCode.NoContent : HttpStatusCode.NotFound));
+        });
+
+        var deleted = await client.DeletePredictionAdjustmentAsync(predictionId, adjustmentId, CancellationToken.None);
+        var missing = await client.DeletePredictionAdjustmentAsync(predictionId, adjustmentId, CancellationToken.None);
 
         Assert.True(deleted);
         Assert.False(missing);
@@ -600,6 +703,20 @@ public sealed class RouteTimerApiClientTests
         16,
         2,
         Job(Guid.NewGuid(), "Running", 70, "building-power-model"));
+
+    private static PredictionAdjustmentSummaryResponse AdjustmentSummary(Guid predictionId, Guid? id = null) => new(
+        id ?? Guid.NewGuid(),
+        predictionId,
+        "TimeTarget",
+        "Queued",
+        null,
+        null,
+        null,
+        null,
+        [],
+        null,
+        DateTimeOffset.UtcNow,
+        null);
 
     private static PredictionSummaryResponse PredictionSummary(Guid? id = null) => new(
         id ?? Guid.NewGuid(),
