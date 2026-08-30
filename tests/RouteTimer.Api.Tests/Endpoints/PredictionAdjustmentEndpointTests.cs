@@ -172,6 +172,77 @@ public sealed class PredictionAdjustmentEndpointTests
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    // Break caught: the first real strategy's own vertical slice never reaches a genuine 202, only NotImplementedException.
+    [Fact]
+    public async Task Create_accepts_a_SegmentSpecificGains_request_once_its_flags_are_enabled()
+    {
+        await using var app = CreateRiderApp()
+            .WithSetting("PacingStrategies:Enabled", "true")
+            .WithSetting("PacingStrategies:SegmentSpecificGains", "true");
+        var predictionId = await SeedSucceededBaselineAsync(app.Services);
+        using var client = app.CreateClient();
+
+        using var response = await client.PostAsJsonAsync<PacingStrategyRequest>(
+            $"/api/predictions/{predictionId}/adjustments",
+            new SegmentSpecificGainsRequest([new SegmentGainsRuleRequest(.02, null, null, null, null, null, 1.1, null)]));
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var submission = await response.Content.ReadFromJsonAsync<PredictionAdjustmentSubmissionResponse>();
+        Assert.NotNull(submission);
+
+        var detail = await client.GetFromJsonAsync<PredictionAdjustmentDetailResponse>($"/api/predictions/{predictionId}/adjustments/{submission.AdjustmentId}");
+        Assert.NotNull(detail);
+        Assert.Equal("segmentSpecificGains", detail.Strategy.GetProperty("type").GetString());
+        Assert.Equal(AdjustmentState.Queued.ToString(), detail.Summary.State);
+    }
+
+    // Break caught: an over-specified rule (more than one selector, or neither/both of factor and delta) is accepted and silently misbehaves later.
+    [Fact]
+    public async Task Create_returns_SegmentSpecificGains_field_errors_next_to_the_offending_rule()
+    {
+        await using var app = CreateRiderApp()
+            .WithSetting("PacingStrategies:Enabled", "true")
+            .WithSetting("PacingStrategies:SegmentSpecificGains", "true");
+        var predictionId = await SeedSucceededBaselineAsync(app.Services);
+        using var client = app.CreateClient();
+
+        using var response = await client.PostAsJsonAsync<PacingStrategyRequest>(
+            $"/api/predictions/{predictionId}/adjustments",
+            new SegmentSpecificGainsRequest([
+                new SegmentGainsRuleRequest(.02, null, null, null, null, null, 1.1, null),
+                new SegmentGainsRuleRequest(.02, null, 1, null, null, null, 1.1, null),
+                new SegmentGainsRuleRequest(null, .05, null, null, null, null, 1.1, 5),
+            ]));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("pacing-strategy-invalid", body);
+        Assert.Contains("rules[1]", body);
+        Assert.Contains("rules[2]", body);
+        Assert.DoesNotContain("\"rules[0]\"", body);
+    }
+
+    // Break caught: the ten-rule limit is only documented, never enforced, once a strategy is actually deliverable.
+    [Fact]
+    public async Task Create_rejects_more_than_ten_SegmentSpecificGains_rules()
+    {
+        await using var app = CreateRiderApp()
+            .WithSetting("PacingStrategies:Enabled", "true")
+            .WithSetting("PacingStrategies:SegmentSpecificGains", "true");
+        var predictionId = await SeedSucceededBaselineAsync(app.Services);
+        using var client = app.CreateClient();
+        var rules = Enumerable.Range(0, 11)
+            .Select(index => new SegmentGainsRuleRequest(null, null, index, index, null, null, 1.1, null))
+            .ToList();
+
+        using var response = await client.PostAsJsonAsync<PacingStrategyRequest>(
+            $"/api/predictions/{predictionId}/adjustments",
+            new SegmentSpecificGainsRequest(rules));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("\"rules\"", await response.Content.ReadAsStringAsync());
+    }
+
     private static RouteTimerApiFactory CreateRiderApp(Action<Microsoft.Extensions.DependencyInjection.IServiceCollection>? configure = null)
         => new RouteTimerApiFactory().WithRiderAuthentication(configure);
 

@@ -14,6 +14,11 @@
     else
     {
         <p data-testid="adjustment-builder-available">Available strategies: @string.Join(", ", EnabledStrategyNames)</p>
+
+        @if (Capabilities.SegmentSpecificGains)
+        {
+            <SegmentGainsEditor PredictionId="PredictionId" OnCreated="id => OnAdjustmentCreated.InvokeAsync(id)" />
+        }
     }
 </section>
 
@@ -23,6 +28,9 @@
 
     [Parameter]
     public Guid PredictionId { get; set; }
+
+    [Parameter]
+    public EventCallback<Guid> OnAdjustmentCreated { get; set; }
 
     private IReadOnlyList<string> EnabledStrategyNames => Capabilities is null
         ? []

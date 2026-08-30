@@ -68,4 +68,23 @@ public static class PacingStrategyJson
             throw new PacingStrategyValidationException("pacing-strategy-invalid", "Pacing strategy definition is malformed.");
         }
     }
+
+    /// <summary>
+    /// Serializes a strategy's report to canonical JSON, mirroring <see cref="Canonicalize{T}"/> but for
+    /// <see cref="PacingStrategyReport"/> subtypes. Reports are handler-produced, not user-submitted, so
+    /// no byte-size limit is enforced here.
+    /// </summary>
+    public static string CanonicalizeReport<T>(T value)
+        where T : PacingStrategyReport
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        try
+        {
+            return JsonSerializer.Serialize(value, Options);
+        }
+        catch (Exception exception) when (exception is JsonException or ArgumentException or NotSupportedException)
+        {
+            throw new PacingStrategyValidationException("pacing-strategy-invalid", "Pacing strategy report contains a non-finite value.");
+        }
+    }
 }
