@@ -2,10 +2,21 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Npgsql;
+using RouteTimer.Domain.Adjustments;
+using RouteTimer.Domain.Adjustments.TimeTarget;
+using RouteTimer.Domain.Jobs;
 using RouteTimer.Domain.Models;
 using RouteTimer.Domain.Physics;
+using RouteTimer.Domain.Predictions;
 using RouteTimer.Domain.Profile;
+using RouteTimer.Persistence.Entities;
 using RouteTimer.Persistence.Repositories;
+using RouteTimer.Services.Adjustments;
+using RouteTimer.Services.Adjustments.TimeTarget;
+using RouteTimer.Services.Jobs;
+using RouteTimer.Services.Persistence;
+using RouteTimer.Services.Predictions;
+using RouteTimer.Services.Routes;
 using Testcontainers.PostgreSql;
 
 namespace RouteTimer.Persistence.Tests;
@@ -436,5 +447,122 @@ public sealed class PostgresMigrationTests
     {
         public bool Equals(double x, double y) => Math.Round(x, precision) == Math.Round(y, precision);
         public int GetHashCode(double obj) => Math.Round(obj, precision).GetHashCode();
+    }
+
+    // Break caught: a baseline that succeeded before pacing adjustments existed cannot be adjusted
+    // afterwards, because the feature quietly depends on something only newer baselines captured.
+    [Fact]
+    public async Task A_baseline_succeeded_before_the_adjustments_migration_can_still_be_adjusted()
+    {
+        await using var database = new PostgreSqlBuilder("postgres:16-alpine").Build();
+        await database.StartAsync();
+        var options = new DbContextOptionsBuilder<RouteTimerDbContext>().UseNpgsql(database.GetConnectionString()).Options;
+
+        Guid predictionId;
+        await using (var legacy = new RouteTimerDbContext(options))
+        {
+            // The schema immediately before pacing adjustments shipped.
+            await legacy.GetService<IMigrator>().MigrateAsync("20260826195057_AddPredictionGarminCourse");
+            predictionId = await SeedSucceededBaselineAsync(legacy);
+
+            Assert.Empty(await legacy.Database.SqlQuery<string>($"""
+                SELECT table_name AS "Value" FROM information_schema.tables WHERE table_name = 'prediction_adjustments'
+                """).ToListAsync());
+        }
+
+        await using (var upgrade = new RouteTimerDbContext(options))
+        {
+            await upgrade.Database.MigrateAsync();
+        }
+
+        Guid adjustmentId, jobId;
+        await using (var create = new RouteTimerDbContext(options))
+        {
+            var strategyJson = PacingStrategyJson.Canonicalize(
+                new TimeTargetDefinition(18, TimeTargetDistribution.Proportional, null, includeFeasibilityReport: false));
+            adjustmentId = (await new PredictionAdjustmentRepository(create).CreateQueuedAsync(
+                new QueuedAdjustmentCreation(predictionId, PacingStrategyType.TimeTarget, strategyJson, DateTimeOffset.UtcNow),
+                CancellationToken.None)).AdjustmentId!.Value;
+
+            var job = new AnalysisJobEntity
+            {
+                Id = Guid.NewGuid(),
+                Type = "AdjustPrediction",
+                SubjectId = adjustmentId,
+                State = "Running",
+                ProgressPercent = 0,
+                ProgressStage = "running",
+                WorkerId = "migration-worker",
+                LeaseExpiresAt = DateTimeOffset.UtcNow.AddMinutes(2),
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            create.Jobs.Add(job);
+            await create.SaveChangesAsync();
+            jobId = job.Id;
+        }
+
+        await using (var process = new RouteTimerDbContext(options))
+        {
+            // Reconstructed purely from the retained prediction segments; the GPX is never reparsed.
+            var handler = new PredictionAdjustmentJobHandler(
+                new PredictionAdjustmentRepository(process),
+                new PredictionRepository(process),
+                new RiderModelRepository(process),
+                new PacingStrategyDispatcher(
+                    [new TimeTargetHandler(new RoutePredictor(new DescentSpeedLimiter()))],
+                    [PacingStrategyType.TimeTarget]),
+                new NoopProgressReporter());
+
+            await handler.HandleAsync(
+                new AnalysisJob(
+                    jobId, JobType.AdjustPrediction, adjustmentId, JobState.Running, 0, "running", 1,
+                    DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, null, "migration-worker",
+                    DateTimeOffset.UtcNow.AddMinutes(2)),
+                CancellationToken.None);
+        }
+
+        await using var verify = new RouteTimerDbContext(options);
+        var detail = await new PredictionAdjustmentRepository(verify).GetAsync(predictionId, adjustmentId, CancellationToken.None);
+        Assert.NotNull(detail);
+        Assert.Equal(AdjustmentState.Succeeded, detail.State);
+        Assert.Equal("time-target-v1", detail.StrategyAlgorithmVersion);
+        Assert.NotEmpty(detail.Segments);
+        Assert.All(detail.Segments, segment => Assert.True(segment.PowerWatts > 0));
+    }
+
+    private static async Task<Guid> SeedSucceededBaselineAsync(RouteTimerDbContext context)
+    {
+        var models = new RiderModelRepository(context);
+        var profile = new RiderProfile(75, 10);
+        var modelId = await models.SaveAsync(
+            new RiderModel(new PowerModel([], 200), PhysicalCoefficients.Default, DescentLimitModel.Conservative, true, "v1"),
+            profile, new ModelValidationSummary(ModelValidationStatus.Passed, .05, .08), CancellationToken.None);
+        var model = (await models.GetAsync(modelId, CancellationToken.None))!;
+
+        var predictions = new PredictionRepository(context);
+        var created = await predictions.CreateQueuedAsync(new QueuedPredictionCreation(
+            new StoredUpload(Guid.NewGuid(), "route.gpx", "gpx", [1, 2, 3], Enumerable.Repeat((byte)9, 32).ToArray(), DateTimeOffset.UtcNow),
+            model, profile, PredictionAssumptions.RoadCalmDryMovingOnly, DateTimeOffset.UtcNow), CancellationToken.None);
+
+        var job = await context.Jobs.SingleAsync(entity => entity.Id == created.JobId);
+        job.State = "Running";
+        job.WorkerId = "legacy-worker";
+        await context.SaveChangesAsync();
+
+        await predictions.TryPublishAsync(created.PredictionId, created.JobId, "legacy-worker",
+            new PredictionPublication(200, 5, TimeSpan.FromSeconds(40), 5, 200, ConfidenceLevel.Medium, [],
+            [
+                new PersistedPredictionSegment(1, 51.1, -2.1, 100, 100, 100, .02, 0, 200, 5, TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(20), ConfidenceLevel.Medium),
+                new PersistedPredictionSegment(2, 51.2, -2.2, 102, 200, 100, .02, 0, 200, 5, TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(40), ConfidenceLevel.Medium),
+            ]),
+            CancellationToken.None);
+        return created.PredictionId;
+    }
+
+    private sealed class NoopProgressReporter : IJobProgressReporter
+    {
+        public Task ReportAsync(AnalysisJob job, int progressPercent, string stage, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
     }
 }
