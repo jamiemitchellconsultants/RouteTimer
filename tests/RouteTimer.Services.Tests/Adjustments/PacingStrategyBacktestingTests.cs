@@ -64,7 +64,8 @@ public class PacingStrategyBacktestingTests
         Assert.True(
             report.AbsoluteMissSeconds <= Math.Abs(baseline.MovingTime.TotalSeconds - target),
             $"Adjusted result ({report.AchievedMovingSeconds:F1}s) is further from the target than the baseline.");
-        Assert.True(report.EvaluationCount <= BoundedPacingSearch.GridSteps + 1 + BoundedPacingSearch.MaximumBisectionIterations);
+        // The bounded search caps itself at 40 route simulations per adjustment.
+        Assert.True(report.EvaluationCount <= 40, $"{report.EvaluationCount} evaluations exceeds the search budget.");
     }
 
     [Theory]

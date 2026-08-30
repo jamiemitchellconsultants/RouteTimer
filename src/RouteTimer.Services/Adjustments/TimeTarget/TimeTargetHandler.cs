@@ -113,12 +113,17 @@ public sealed class TimeTargetHandler(IRoutePredictor routePredictor) : IPacingS
             return movingTime;
         }
 
+        // A flat 30-second tolerance is meaningless on a route whose whole duration is a minute: the
+        // coarse grid returns its first "close enough" point and can land further from the target
+        // than leaving the baseline alone. Scale the tolerance to the target instead.
+        double toleranceSeconds = ConvergenceToleranceSeconds(timeTargetDef.TargetMovingSeconds);
+
         double foundScale = BoundedPacingSearch.FindMultiplier(
             0.3,
             4.0,
             timeTargetDef.TargetMovingSeconds,
             EvaluateScale,
-            30.0);
+            toleranceSeconds);
 
         if (bestResult is null)
         {
@@ -128,7 +133,7 @@ public sealed class TimeTargetHandler(IRoutePredictor routePredictor) : IPacingS
         double achievedSeconds = bestResult.MovingTime.TotalSeconds;
         double absoluteMiss = Math.Abs(achievedSeconds - timeTargetDef.TargetMovingSeconds);
         double percentageMiss = absoluteMiss / timeTargetDef.TargetMovingSeconds * 100.0;
-        bool converged = absoluteMiss <= 30.0;
+        bool converged = absoluteMiss <= toleranceSeconds;
         bool bracketed = fastestBound is not null && slowestBound is not null;
 
         if (!converged)
@@ -253,6 +258,10 @@ public sealed class TimeTargetHandler(IRoutePredictor routePredictor) : IPacingS
             warnings,
             AlgorithmVersion);
     }
+
+    /// <summary>One percent of the target, capped at 30 seconds - the documented rollout gate is 5%.</summary>
+    internal static double ConvergenceToleranceSeconds(double targetMovingSeconds) =>
+        Math.Min(30.0, targetMovingSeconds * 0.01);
 
     private static (double AverageSpeedMetresPerSecond, double AveragePowerWatts) RouteAverages(PredictionRoute route, PredictionResult result)
     {
