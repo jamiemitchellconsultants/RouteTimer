@@ -99,6 +99,7 @@ There is no stage that deletes adjustments. Rollback is a gate change only.
 | Search evaluation count | count | Time-target and NP/IF run a bounded search capped at 40 route simulations. Counts pinned at the cap mean the search is not converging. |
 | Cancellation and failure count by diagnostic code | count | Grouped by the stable codes below, never by message text. |
 | Publication conflict count | count | A publish rejected for stale ownership. A non-zero rate is expected under lease expiry; a rising rate means leases are too short or workers are stalling. |
+| Adjustments warning `strategy-power-below-sustainable-speed` | count | The strategy asked for a power some segment could not hold above the model's slowest describable speed, so that stretch was carried at the floor. A rising rate means riders are requesting targets the model cannot express — a UI guidance problem, not a fault. |
 
 Stable diagnostic codes to group by — API: `pacing-strategy-disabled`, `pacing-strategy-invalid`,
 `pacing-strategy-too-large`, `pacing-strategy-capacity-required`, `pacing-strategy-target-infeasible`,

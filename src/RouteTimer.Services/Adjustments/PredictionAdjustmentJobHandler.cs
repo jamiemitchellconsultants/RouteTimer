@@ -196,8 +196,19 @@ public sealed class PredictionAdjustmentJobHandler(
             throw new PredictionAdjustmentJobException("invalid-prediction-adjustment-result", "The strategy report could not be canonicalized.", exception);
         }
 
+        // The predictor's own warnings are not part of a strategy's report, but one of them describes
+        // the strategy's request rather than the route: a target power some segment could not hold. It
+        // is translated once here so every strategy surfaces it, instead of five handlers each
+        // remembering to look for it.
+        var warnings = computation.Warnings;
+        if (computation.Adjusted.Warnings.Contains(PredictionWarningCodes.PowerBelowSustainableSpeed, StringComparer.Ordinal)
+            && !warnings.Contains(AdjustmentWarningCodes.StrategyPowerBelowSustainableSpeed, StringComparer.Ordinal))
+        {
+            warnings = [.. warnings, AdjustmentWarningCodes.StrategyPowerBelowSustainableSpeed];
+        }
+
         return new AdjustmentPublication(
             computation.Adjusted.MovingTime, averageSpeed, averagePower, computation.Adjusted.Confidence,
-            computation.Warnings, reportJson, computation.AlgorithmVersion, persisted);
+            warnings, reportJson, computation.AlgorithmVersion, persisted);
     }
 }

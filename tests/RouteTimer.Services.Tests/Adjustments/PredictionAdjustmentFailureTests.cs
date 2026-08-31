@@ -137,6 +137,48 @@ public sealed class PredictionAdjustmentFailureTests
         Assert.Equal(wPrime, segment.WPrimeBalanceJoules);
     }
 
+    // Break caught: the predictor flags a target it could not hold, but the adjustment publishes
+    // without it, so a rider sees a slow result with no explanation. The translation happens once at
+    // the publication boundary, so it must apply whichever strategy produced the result.
+    [Fact]
+    public async Task A_power_limited_replay_publishes_the_strategy_warning()
+    {
+        var handler = new RecordingHandler(PacingStrategyType.TimeTarget)
+        {
+            RunResult = new PacingStrategyComputation(
+                new PredictionResult(
+                    [new PredictionSegment(1, 100, .02, 5, .5, TimeSpan.FromSeconds(200), ConfidenceLevel.Low)],
+                    TimeSpan.FromSeconds(200),
+                    ConfidenceLevel.Low,
+                    [PredictionWarningCodes.PowerBelowSustainableSpeed]),
+                new AdjustmentJobHandlerHarness.TestReport(PacingStrategyType.TimeTarget),
+                new Dictionary<int, PredictionAdjustmentAnnotation>(),
+                [],
+                "time-target-v1"),
+        };
+        var harness = new AdjustmentJobHandlerHarness(handler);
+
+        await harness.HandleAsync();
+
+        var published = Assert.Single(harness.Adjustments.PublishCalls);
+        Assert.Contains(AdjustmentWarningCodes.StrategyPowerBelowSustainableSpeed, published.Publication.Warnings);
+    }
+
+    [Fact]
+    public async Task A_replay_that_held_its_targets_publishes_no_power_warning()
+    {
+        var handler = new RecordingHandler(PacingStrategyType.TimeTarget)
+        {
+            RunResult = Computation(new Dictionary<int, PredictionAdjustmentAnnotation>()),
+        };
+        var harness = new AdjustmentJobHandlerHarness(handler);
+
+        await harness.HandleAsync();
+
+        var published = Assert.Single(harness.Adjustments.PublishCalls);
+        Assert.DoesNotContain(AdjustmentWarningCodes.StrategyPowerBelowSustainableSpeed, published.Publication.Warnings);
+    }
+
     private static IPacingStrategyHandler RealTimeTargetHandler() =>
         new TimeTargetHandler(new RoutePredictor(new DescentSpeedLimiter()));
 
