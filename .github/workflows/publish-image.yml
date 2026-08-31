@@ -11,7 +11,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   test:
@@ -48,19 +47,28 @@ jobs:
           pytest
 
   build-and-push:
+    name: Build ${{ matrix.image.name }} (${{ matrix.target.arch }})
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.target.runner }}
+    permissions:
+      contents: read
+      packages: write
     strategy:
       matrix:
-        include:
-          - image: routetimer
+        image:
+          - name: routetimer
             context: .
-          - image: routetimer-garmin-adapter
+          - name: routetimer-garmin-adapter
             context: ./garmin-adapter
+        target:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
-
-      - uses: docker/setup-qemu-action@v3
 
       - uses: docker/setup-buildx-action@v3
 
@@ -73,16 +81,133 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image.name }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=short,prefix=sha-
             type=ref,event=tag
 
       - uses: docker/build-push-action@v6
+        id: build
         with:
-          context: ${{ matrix.context }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          context: ${{ matrix.image.context }}
+          platforms: ${{ matrix.target.platform }}
           labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/${{ matrix.image.name }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.image.name }}-${{ matrix.target.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}-${{ matrix.target.arch }}
+
+      - name: Export image digest
+        run: |
+          digest="${{ steps.build.outputs.digest }}"
+          test -n "$digest"
+          mkdir -p "${RUNNER_TEMP}/digests"
+          touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.target.arch }}-${{ matrix.image.name }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  create-manifests:
+    name: Publish multi-platform manifests
+    needs: build-and-push
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # Keep each image's digests in its own directory: the image names share a prefix.
+      - name: Download RouteTimer digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests/routetimer
+          pattern: digests-*-routetimer
+          merge-multiple: true
+
+      - name: Download Garmin adapter digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests/routetimer-garmin-adapter
+          pattern: digests-*-routetimer-garmin-adapter
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate RouteTimer metadata
+        uses: docker/metadata-action@v5
+        id: routetimer_meta
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/routetimer
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short,prefix=sha-
+            type=ref,event=tag
+
+      - name: Generate Garmin adapter metadata
+        uses: docker/metadata-action@v5
+        id: garmin_meta
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/routetimer-garmin-adapter
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short,prefix=sha-
+            type=ref,event=tag
+
+      - name: Validate digests and publish multi-platform manifests
+        env:
+          ROUTETIMER_METADATA: ${{ steps.routetimer_meta.outputs.json }}
+          GARMIN_METADATA: ${{ steps.garmin_meta.outputs.json }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          validate_digests() {
+            local image="$1"
+            local digest_dir="$2"
+            local digest_files=("${digest_dir}"/*)
+
+            if (( ${#digest_files[@]} != 2 )); then
+              echo "Expected 2 platform digests for ${image}, found ${#digest_files[@]}" >&2
+              return 1
+            fi
+          }
+
+          publish_manifest() {
+            local image="$1"
+            local digest_dir="$2"
+            local metadata="$3"
+            local digest_files=("${digest_dir}"/*)
+            local tags=()
+            local args=()
+
+            mapfile -t tags < <(jq -r '.tags[]' <<< "$metadata")
+            for tag in "${tags[@]}"; do
+              args+=(--tag "$tag")
+            done
+            for digest_file in "${digest_files[@]}"; do
+              args+=("${image}@sha256:${digest_file##*/}")
+            done
+
+            docker buildx imagetools create "${args[@]}"
+          }
+
+          routetimer_image="ghcr.io/${{ github.repository_owner }}/routetimer"
+          garmin_image="ghcr.io/${{ github.repository_owner }}/routetimer-garmin-adapter"
+          routetimer_digests="${RUNNER_TEMP}/digests/routetimer"
+          garmin_digests="${RUNNER_TEMP}/digests/routetimer-garmin-adapter"
+
+          # Validate every build result before publishing either image's tags.
+          validate_digests "$routetimer_image" "$routetimer_digests"
+          validate_digests "$garmin_image" "$garmin_digests"
+
+          publish_manifest "$routetimer_image" "$routetimer_digests" "$ROUTETIMER_METADATA"
+          publish_manifest "$garmin_image" "$garmin_digests" "$GARMIN_METADATA"
