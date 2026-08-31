@@ -152,9 +152,21 @@ public sealed class RoutePredictorTests
 
     // Break caught: endlessly halving after a zero-power uphill stall returns partial output or loops forever.
     [Fact]
-    public void Predict_rejects_a_zero_power_uphill_that_cannot_make_progress()
+    // Break caught: a target power too low to hold the gradient fails the whole route instead of
+    // producing a slow, flagged answer. The model floors the speed it derives driving force from, so
+    // below that speed it has no opinion - the segment is carried at that floor and reported, and only
+    // a genuinely non-convergent route still fails.
+    public void Predict_floors_a_zero_power_uphill_and_reports_it()
     {
-        Assert.Throws<PredictionCalculationException>(PredictionFixtures.PredictZeroPowerUphill);
+        var result = PredictionFixtures.PredictZeroPowerUphill();
+
+        // The decaying part of the segment is covered before the floor takes over, so the segment
+        // average sits at or below the floor rather than exactly on it.
+        var segment = Assert.Single(result.Segments);
+        Assert.InRange(segment.SpeedMetresPerSecond, 0.05, 0.5);
+        Assert.Equal(ConfidenceLevel.Low, segment.Confidence);
+        Assert.True(segment.MovingTime > TimeSpan.Zero);
+        Assert.Contains(PredictionWarningCodes.PowerBelowSustainableSpeed, result.Warnings);
     }
 
     // Break caught: removing the bounded iteration guard lets impractically slow routes run without convergence.

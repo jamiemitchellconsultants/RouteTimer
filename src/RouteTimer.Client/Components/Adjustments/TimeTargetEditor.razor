@@ -1,0 +1,166 @@
+@using System.Globalization
+@using RouteTimer.Client.Api
+@using RouteTimer.Client.Components
+@using RouteTimer.Contracts.Adjustments
+@inject IRouteTimerApiClient Api
+
+<div data-testid="time-target-editor">
+    @if (Problem is not null)
+    {
+        <div data-testid="time-target-error">
+            <ProblemMessage Problem="@Problem" FallbackMessage="We could not create the time target adjustment." />
+        </div>
+    }
+
+    <div class="prediction-detail-grid">
+        <div>
+            <label for="time-target-duration">Target Duration (hh:mm:ss)</label>
+            <input id="time-target-duration" data-testid="time-target-duration"
+                   value="@TargetDurationText" @oninput="OnDurationInput" />
+            @if (DurationError is not null)
+            {
+                <span class="prediction-detail-list" style="color: var(--danger-color, red);">@DurationError</span>
+            }
+        </div>
+        <div>
+            <label for="time-target-distribution">Distribution</label>
+            <select id="time-target-distribution" data-testid="time-target-distribution"
+                    value="@Distribution" @onchange="OnDistributionChanged">
+                <option value="proportional">Proportional</option>
+                <option value="climb-focused">Climb Focused</option>
+            </select>
+        </div>
+        @if (Distribution == "climb-focused")
+        {
+            <div>
+                <label for="time-target-climb-bias">Climb Bias (1.0 - 2.0)</label>
+                <input id="time-target-climb-bias" data-testid="time-target-climb-bias"
+                       value="@ClimbBiasText" @oninput="e => ClimbBiasText = e.Value?.ToString()" />
+            </div>
+        }
+        <div>
+            <label for="time-target-feasibility">Include Feasibility Report</label>
+            <input type="checkbox" id="time-target-feasibility" data-testid="time-target-feasibility"
+                   checked="@IncludeFeasibility" @onchange="e => IncludeFeasibility = (bool)(e.Value ?? false)" />
+        </div>
+    </div>
+
+    <div class="prediction-detail-actions">
+        <button type="button" class="predictions-button"
+                data-testid="time-target-submit"
+                @onclick="SubmitAsync"
+                disabled="@(isSubmitting || DurationError is not null)">
+            Create time target adjustment
+        </button>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public Guid PredictionId { get; set; }
+
+    [Parameter]
+    public EventCallback<Guid> OnCreated { get; set; }
+
+    private string TargetDurationText { get; set; } = "01:00:00";
+    private string Distribution { get; set; } = "proportional";
+    private string? ClimbBiasText { get; set; }
+    private bool IncludeFeasibility { get; set; } = true;
+
+    private ApiProblemException? Problem { get; set; }
+    private bool isSubmitting;
+    private string? DurationError { get; set; }
+
+    protected override void OnInitialized()
+    {
+        ValidateDuration(TargetDurationText);
+    }
+
+    private void OnDurationInput(ChangeEventArgs e)
+    {
+        TargetDurationText = e.Value?.ToString() ?? "";
+        ValidateDuration(TargetDurationText);
+    }
+
+    private void ValidateDuration(string text)
+    {
+        if (!TryParseDuration(text, out _))
+        {
+            DurationError = "Enter duration as hh:mm:ss between 00:00:01 and 48:00:00.";
+        }
+        else
+        {
+            DurationError = null;
+        }
+    }
+
+    private void OnDistributionChanged(ChangeEventArgs e)
+    {
+        Distribution = e.Value?.ToString() ?? "proportional";
+        if (Distribution == "proportional")
+        {
+            ClimbBiasText = null;
+        }
+        else if (string.IsNullOrWhiteSpace(ClimbBiasText))
+        {
+            ClimbBiasText = "1.5";
+        }
+    }
+
+    private async Task SubmitAsync()
+    {
+        Problem = null;
+        if (!TryParseDuration(TargetDurationText, out var totalSeconds))
+        {
+            DurationError = "Enter duration as hh:mm:ss between 00:00:01 and 48:00:00.";
+            return;
+        }
+
+        double? climbBias = null;
+        if (Distribution == "climb-focused")
+        {
+            if (double.TryParse(ClimbBiasText, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedBias))
+            {
+                climbBias = parsedBias;
+            }
+        }
+
+        isSubmitting = true;
+        try
+        {
+            var request = new TimeTargetRequest(
+                totalSeconds,
+                Distribution,
+                climbBias,
+                IncludeFeasibility);
+
+            var submission = await Api.CreatePredictionAdjustmentAsync(PredictionId, request, CancellationToken.None);
+            await OnCreated.InvokeAsync(submission.AdjustmentId);
+        }
+        catch (ApiProblemException problem)
+        {
+            Problem = problem;
+        }
+        finally
+        {
+            isSubmitting = false;
+        }
+    }
+
+    private static bool TryParseDuration(string? value, out double totalSeconds)
+    {
+        totalSeconds = 0;
+        var parts = value?.Split(':');
+        if (parts is not { Length: 3 } || parts.Any(part => part.Length != 2) ||
+            !int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var hours) ||
+            !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var minutes) ||
+            !int.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out var seconds) ||
+            hours is < 0 or > 48 || minutes is < 0 or > 59 || seconds is < 0 or > 59)
+        {
+            return false;
+        }
+
+        totalSeconds = (hours * 3600d) + (minutes * 60d) + seconds;
+        return totalSeconds is >= 1 and <= 172800;
+    }
+}

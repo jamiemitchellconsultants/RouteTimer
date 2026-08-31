@@ -26,10 +26,27 @@ public static class SegmentGainsRequestMapper
         ArgumentNullException.ThrowIfNull(request);
 
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
+
+        // Malformed JSON reaches here with the collection absent or null rather than empty; that is a
+        // field error on the collection, not a dereference.
+        if (request.Rules is null)
+        {
+            throw new SegmentGainsRequestValidationException(new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["rules"] = ["Rules collection is required."],
+            });
+        }
+
         var rules = new List<SegmentGainsRule>(request.Rules.Count);
         for (var index = 0; index < request.Rules.Count; index++)
         {
             var ruleRequest = request.Rules[index];
+            if (ruleRequest is null)
+            {
+                errors[$"rules[{index}]"] = ["Rule cannot be null."];
+                continue;
+            }
+
             try
             {
                 rules.Add(new SegmentGainsRule(

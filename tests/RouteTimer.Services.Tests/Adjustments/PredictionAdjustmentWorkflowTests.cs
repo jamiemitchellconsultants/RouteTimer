@@ -222,14 +222,14 @@ public sealed class PredictionAdjustmentJobHandlerTests
     [Fact]
     public async Task HandleAsync_reports_the_four_stages_in_order_and_publishes_the_computation()
     {
-        var adjustments = new FakeAdjustmentRepository { ForProcessing = AdjustmentFor(PacingStrategyType.TimeTarget) };
-        var predictions = new FakePredictionRepository { Detail = SucceededBaseline() };
-        var models = new FakeRiderModelRepository { Model = ModelSnapshot() };
-        var progress = new FakeProgressReporter();
+        var adjustments = new HarnessAdjustmentRepository { ForProcessing = AdjustmentFor(PacingStrategyType.TimeTarget) };
+        var predictions = new HarnessPredictionRepository { Detail = SucceededBaseline() };
+        var models = new HarnessRiderModelRepository { Model = ModelSnapshot() };
+        var progress = new HarnessProgressReporter();
         var handlerRun = new PacingStrategyComputation(
             new PredictionResult([new PredictionSegment(1, 100, .02, 200, 5, TimeSpan.FromSeconds(20), ConfidenceLevel.Medium)],
                 TimeSpan.FromSeconds(20), ConfidenceLevel.Medium, []),
-            new TestReport(PacingStrategyType.TimeTarget), new Dictionary<int, PredictionAdjustmentAnnotation> { [1] = new(2, "burn", 500) }, [], "time-target-v1");
+            new AdjustmentJobHandlerHarness.TestReport(PacingStrategyType.TimeTarget), new Dictionary<int, PredictionAdjustmentAnnotation> { [1] = new(2, "burn", 500) }, [], "time-target-v1");
         var handler = new RecordingHandler(PacingStrategyType.TimeTarget) { RunResult = handlerRun };
         var dispatcher = new PacingStrategyDispatcher([handler], []);
         var jobHandler = new PredictionAdjustmentJobHandler(adjustments, predictions, models, dispatcher, progress);
@@ -254,8 +254,8 @@ public sealed class PredictionAdjustmentJobHandlerTests
     [Fact]
     public async Task HandleAsync_fails_when_the_adjustment_no_longer_exists()
     {
-        var adjustments = new FakeAdjustmentRepository { ForProcessing = null };
-        var jobHandler = new PredictionAdjustmentJobHandler(adjustments, new FakePredictionRepository(), new FakeRiderModelRepository(), new PacingStrategyDispatcher([], []), new FakeProgressReporter());
+        var adjustments = new HarnessAdjustmentRepository { ForProcessing = null };
+        var jobHandler = new PredictionAdjustmentJobHandler(adjustments, new HarnessPredictionRepository(), new HarnessRiderModelRepository(), new PacingStrategyDispatcher([], []), new HarnessProgressReporter());
 
         var exception = await Assert.ThrowsAsync<PredictionAdjustmentJobException>(() => jobHandler.HandleAsync(Job(), CancellationToken.None));
         Assert.Equal("adjustment-missing", exception.Code);
@@ -264,9 +264,9 @@ public sealed class PredictionAdjustmentJobHandlerTests
     [Fact]
     public async Task HandleAsync_fails_when_the_baseline_no_longer_exists()
     {
-        var adjustments = new FakeAdjustmentRepository { ForProcessing = AdjustmentFor(PacingStrategyType.TimeTarget) };
-        var predictions = new FakePredictionRepository { Detail = null };
-        var jobHandler = new PredictionAdjustmentJobHandler(adjustments, predictions, new FakeRiderModelRepository(), new PacingStrategyDispatcher([], []), new FakeProgressReporter());
+        var adjustments = new HarnessAdjustmentRepository { ForProcessing = AdjustmentFor(PacingStrategyType.TimeTarget) };
+        var predictions = new HarnessPredictionRepository { Detail = null };
+        var jobHandler = new PredictionAdjustmentJobHandler(adjustments, predictions, new HarnessRiderModelRepository(), new PacingStrategyDispatcher([], []), new HarnessProgressReporter());
 
         var exception = await Assert.ThrowsAsync<PredictionAdjustmentJobException>(() => jobHandler.HandleAsync(Job(), CancellationToken.None));
         Assert.Equal("baseline-missing", exception.Code);
@@ -275,9 +275,9 @@ public sealed class PredictionAdjustmentJobHandlerTests
     [Fact]
     public async Task HandleAsync_fails_when_the_baseline_has_not_succeeded()
     {
-        var adjustments = new FakeAdjustmentRepository { ForProcessing = AdjustmentFor(PacingStrategyType.TimeTarget) };
-        var predictions = new FakePredictionRepository { Detail = SucceededBaseline() with { State = PredictionState.Queued } };
-        var jobHandler = new PredictionAdjustmentJobHandler(adjustments, predictions, new FakeRiderModelRepository(), new PacingStrategyDispatcher([], []), new FakeProgressReporter());
+        var adjustments = new HarnessAdjustmentRepository { ForProcessing = AdjustmentFor(PacingStrategyType.TimeTarget) };
+        var predictions = new HarnessPredictionRepository { Detail = SucceededBaseline() with { State = PredictionState.Queued } };
+        var jobHandler = new PredictionAdjustmentJobHandler(adjustments, predictions, new HarnessRiderModelRepository(), new PacingStrategyDispatcher([], []), new HarnessProgressReporter());
 
         var exception = await Assert.ThrowsAsync<PredictionAdjustmentJobException>(() => jobHandler.HandleAsync(Job(), CancellationToken.None));
         Assert.Equal("baseline-not-ready", exception.Code);
@@ -286,10 +286,10 @@ public sealed class PredictionAdjustmentJobHandlerTests
     [Fact]
     public async Task HandleAsync_fails_when_the_captured_model_no_longer_exists()
     {
-        var adjustments = new FakeAdjustmentRepository { ForProcessing = AdjustmentFor(PacingStrategyType.TimeTarget) };
-        var predictions = new FakePredictionRepository { Detail = SucceededBaseline() };
-        var models = new FakeRiderModelRepository { Model = null };
-        var jobHandler = new PredictionAdjustmentJobHandler(adjustments, predictions, models, new PacingStrategyDispatcher([], []), new FakeProgressReporter());
+        var adjustments = new HarnessAdjustmentRepository { ForProcessing = AdjustmentFor(PacingStrategyType.TimeTarget) };
+        var predictions = new HarnessPredictionRepository { Detail = SucceededBaseline() };
+        var models = new HarnessRiderModelRepository { Model = null };
+        var jobHandler = new PredictionAdjustmentJobHandler(adjustments, predictions, models, new PacingStrategyDispatcher([], []), new HarnessProgressReporter());
 
         var exception = await Assert.ThrowsAsync<PredictionAdjustmentJobException>(() => jobHandler.HandleAsync(Job(), CancellationToken.None));
         Assert.Equal("model-missing", exception.Code);
@@ -299,10 +299,10 @@ public sealed class PredictionAdjustmentJobHandlerTests
     [Fact]
     public async Task HandleAsync_fails_on_malformed_persisted_baseline_segments()
     {
-        var adjustments = new FakeAdjustmentRepository { ForProcessing = AdjustmentFor(PacingStrategyType.TimeTarget) };
-        var predictions = new FakePredictionRepository { Detail = SucceededBaseline() with { MovingTime = null } };
-        var models = new FakeRiderModelRepository { Model = ModelSnapshot() };
-        var jobHandler = new PredictionAdjustmentJobHandler(adjustments, predictions, models, new PacingStrategyDispatcher([], []), new FakeProgressReporter());
+        var adjustments = new HarnessAdjustmentRepository { ForProcessing = AdjustmentFor(PacingStrategyType.TimeTarget) };
+        var predictions = new HarnessPredictionRepository { Detail = SucceededBaseline() with { MovingTime = null } };
+        var models = new HarnessRiderModelRepository { Model = ModelSnapshot() };
+        var jobHandler = new PredictionAdjustmentJobHandler(adjustments, predictions, models, new PacingStrategyDispatcher([], []), new HarnessProgressReporter());
 
         var exception = await Assert.ThrowsAsync<PredictionAdjustmentJobException>(() => jobHandler.HandleAsync(Job(), CancellationToken.None));
         Assert.Equal("invalid-prediction-adjustment-result", exception.Code);
@@ -312,11 +312,11 @@ public sealed class PredictionAdjustmentJobHandlerTests
     [Fact]
     public async Task HandleAsync_translates_a_calculation_failure_from_the_handler()
     {
-        var adjustments = new FakeAdjustmentRepository { ForProcessing = AdjustmentFor(PacingStrategyType.TimeTarget) };
-        var predictions = new FakePredictionRepository { Detail = SucceededBaseline() };
-        var models = new FakeRiderModelRepository { Model = ModelSnapshot() };
+        var adjustments = new HarnessAdjustmentRepository { ForProcessing = AdjustmentFor(PacingStrategyType.TimeTarget) };
+        var predictions = new HarnessPredictionRepository { Detail = SucceededBaseline() };
+        var models = new HarnessRiderModelRepository { Model = ModelSnapshot() };
         var handler = new RecordingHandler(PacingStrategyType.TimeTarget) { RunException = new PredictionCalculationException("no solution") };
-        var jobHandler = new PredictionAdjustmentJobHandler(adjustments, predictions, models, new PacingStrategyDispatcher([handler], []), new FakeProgressReporter());
+        var jobHandler = new PredictionAdjustmentJobHandler(adjustments, predictions, models, new PacingStrategyDispatcher([handler], []), new HarnessProgressReporter());
 
         var exception = await Assert.ThrowsAsync<PredictionAdjustmentJobException>(() => jobHandler.HandleAsync(Job(), CancellationToken.None));
         Assert.Equal("invalid-prediction-adjustment-result", exception.Code);
@@ -326,15 +326,15 @@ public sealed class PredictionAdjustmentJobHandlerTests
     [Fact]
     public async Task HandleAsync_rejects_an_unknown_warning_code_from_the_computation()
     {
-        var adjustments = new FakeAdjustmentRepository { ForProcessing = AdjustmentFor(PacingStrategyType.TimeTarget) };
-        var predictions = new FakePredictionRepository { Detail = SucceededBaseline() };
-        var models = new FakeRiderModelRepository { Model = ModelSnapshot() };
+        var adjustments = new HarnessAdjustmentRepository { ForProcessing = AdjustmentFor(PacingStrategyType.TimeTarget) };
+        var predictions = new HarnessPredictionRepository { Detail = SucceededBaseline() };
+        var models = new HarnessRiderModelRepository { Model = ModelSnapshot() };
         var handlerRun = new PacingStrategyComputation(
             new PredictionResult([new PredictionSegment(1, 100, .02, 200, 5, TimeSpan.FromSeconds(20), ConfidenceLevel.Medium)],
                 TimeSpan.FromSeconds(20), ConfidenceLevel.Medium, []),
-            new TestReport(PacingStrategyType.TimeTarget), new Dictionary<int, PredictionAdjustmentAnnotation>(), ["not-a-real-warning"], "time-target-v1");
+            new AdjustmentJobHandlerHarness.TestReport(PacingStrategyType.TimeTarget), new Dictionary<int, PredictionAdjustmentAnnotation>(), ["not-a-real-warning"], "time-target-v1");
         var handler = new RecordingHandler(PacingStrategyType.TimeTarget) { RunResult = handlerRun };
-        var jobHandler = new PredictionAdjustmentJobHandler(adjustments, predictions, models, new PacingStrategyDispatcher([handler], []), new FakeProgressReporter());
+        var jobHandler = new PredictionAdjustmentJobHandler(adjustments, predictions, models, new PacingStrategyDispatcher([handler], []), new HarnessProgressReporter());
 
         var exception = await Assert.ThrowsAsync<PredictionAdjustmentJobException>(() => jobHandler.HandleAsync(Job(), CancellationToken.None));
         Assert.Equal("invalid-prediction-adjustment-result", exception.Code);
@@ -345,15 +345,15 @@ public sealed class PredictionAdjustmentJobHandlerTests
     [Fact]
     public async Task HandleAsync_rejects_a_sequence_mismatch_between_adjusted_segments_and_the_baseline_route()
     {
-        var adjustments = new FakeAdjustmentRepository { ForProcessing = AdjustmentFor(PacingStrategyType.TimeTarget) };
-        var predictions = new FakePredictionRepository { Detail = SucceededBaseline() };
-        var models = new FakeRiderModelRepository { Model = ModelSnapshot() };
+        var adjustments = new HarnessAdjustmentRepository { ForProcessing = AdjustmentFor(PacingStrategyType.TimeTarget) };
+        var predictions = new HarnessPredictionRepository { Detail = SucceededBaseline() };
+        var models = new HarnessRiderModelRepository { Model = ModelSnapshot() };
         var handlerRun = new PacingStrategyComputation(
             new PredictionResult([new PredictionSegment(99, 100, .02, 200, 5, TimeSpan.FromSeconds(20), ConfidenceLevel.Medium)],
                 TimeSpan.FromSeconds(20), ConfidenceLevel.Medium, []),
-            new TestReport(PacingStrategyType.TimeTarget), new Dictionary<int, PredictionAdjustmentAnnotation>(), [], "time-target-v1");
+            new AdjustmentJobHandlerHarness.TestReport(PacingStrategyType.TimeTarget), new Dictionary<int, PredictionAdjustmentAnnotation>(), [], "time-target-v1");
         var handler = new RecordingHandler(PacingStrategyType.TimeTarget) { RunResult = handlerRun };
-        var jobHandler = new PredictionAdjustmentJobHandler(adjustments, predictions, models, new PacingStrategyDispatcher([handler], []), new FakeProgressReporter());
+        var jobHandler = new PredictionAdjustmentJobHandler(adjustments, predictions, models, new PacingStrategyDispatcher([handler], []), new HarnessProgressReporter());
 
         var exception = await Assert.ThrowsAsync<PredictionAdjustmentJobException>(() => jobHandler.HandleAsync(Job(), CancellationToken.None));
         Assert.Equal("prediction-adjustment-sequence-mismatch", exception.Code);
@@ -363,15 +363,15 @@ public sealed class PredictionAdjustmentJobHandlerTests
     [Fact]
     public async Task HandleAsync_does_not_throw_when_publish_reports_stale_ownership()
     {
-        var adjustments = new FakeAdjustmentRepository { ForProcessing = AdjustmentFor(PacingStrategyType.TimeTarget), PublishResult = false };
-        var predictions = new FakePredictionRepository { Detail = SucceededBaseline() };
-        var models = new FakeRiderModelRepository { Model = ModelSnapshot() };
+        var adjustments = new HarnessAdjustmentRepository { ForProcessing = AdjustmentFor(PacingStrategyType.TimeTarget), PublishResult = false };
+        var predictions = new HarnessPredictionRepository { Detail = SucceededBaseline() };
+        var models = new HarnessRiderModelRepository { Model = ModelSnapshot() };
         var handlerRun = new PacingStrategyComputation(
             new PredictionResult([new PredictionSegment(1, 100, .02, 200, 5, TimeSpan.FromSeconds(20), ConfidenceLevel.Medium)],
                 TimeSpan.FromSeconds(20), ConfidenceLevel.Medium, []),
-            new TestReport(PacingStrategyType.TimeTarget), new Dictionary<int, PredictionAdjustmentAnnotation>(), [], "time-target-v1");
+            new AdjustmentJobHandlerHarness.TestReport(PacingStrategyType.TimeTarget), new Dictionary<int, PredictionAdjustmentAnnotation>(), [], "time-target-v1");
         var handler = new RecordingHandler(PacingStrategyType.TimeTarget) { RunResult = handlerRun };
-        var jobHandler = new PredictionAdjustmentJobHandler(adjustments, predictions, models, new PacingStrategyDispatcher([handler], []), new FakeProgressReporter());
+        var jobHandler = new PredictionAdjustmentJobHandler(adjustments, predictions, models, new PacingStrategyDispatcher([handler], []), new HarnessProgressReporter());
 
         await jobHandler.HandleAsync(Job(), CancellationToken.None);
 
@@ -395,77 +395,4 @@ public sealed class PredictionAdjustmentJobHandlerTests
         new RiderModel(new PowerModel([], 200), PhysicalCoefficients.Default, DescentLimitModel.Conservative, true, "v1"),
         new ModelValidationSummary(ModelValidationStatus.Passed, .05, .08));
 
-    private sealed record TestReport(PacingStrategyType Type) : PacingStrategyReport(Type);
-
-    private sealed class RecordingHandler(PacingStrategyType type) : IPacingStrategyHandler
-    {
-        public PacingStrategyComputation? RunResult { get; set; }
-        public Exception? RunException { get; set; }
-
-        public PacingStrategyType Type => type;
-        public string Canonicalize(PacingStrategyDefinition strategy) => throw new NotSupportedException();
-        public PacingStrategyDefinition Deserialize(string canonicalJson) => new TestDefinition(type);
-        public string CanonicalizeReport(PacingStrategyReport report) => "report-json";
-
-        public PacingStrategyComputation Run(PacingStrategyContext context, PacingStrategyDefinition strategy, CancellationToken cancellationToken) =>
-            RunException is not null ? throw RunException : RunResult ?? throw new InvalidOperationException("No result configured.");
-    }
-
-    private sealed record TestDefinition(PacingStrategyType Type) : PacingStrategyDefinition(Type);
-
-    private sealed class FakeAdjustmentRepository : IPredictionAdjustmentRepository
-    {
-        public AdjustmentForProcessing? ForProcessing { get; set; }
-        public bool PublishResult { get; set; } = true;
-        public List<(Guid AdjustmentId, Guid JobId, string WorkerId, AdjustmentPublication Publication)> PublishCalls { get; } = [];
-
-        public Task<QueuedAdjustmentCreationResult> CreateQueuedAsync(QueuedAdjustmentCreation creation, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<AdjustmentForProcessing?> GetForProcessingAsync(Guid adjustmentId, CancellationToken cancellationToken) => Task.FromResult(ForProcessing);
-
-        public Task<bool> TryPublishAsync(Guid adjustmentId, Guid jobId, string workerId, AdjustmentPublication publication, CancellationToken cancellationToken)
-        {
-            PublishCalls.Add((adjustmentId, jobId, workerId, publication));
-            return Task.FromResult(PublishResult);
-        }
-
-        public Task<bool> DeleteAsync(Guid predictionId, Guid adjustmentId, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task FailAsync(Guid adjustmentId, string code, string message, CancellationToken cancellationToken) => Task.CompletedTask;
-        public Task<IReadOnlyList<PredictionAdjustmentSummary>> GetSummariesAsync(Guid predictionId, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<PredictionAdjustmentDetail?> GetAsync(Guid predictionId, Guid adjustmentId, CancellationToken cancellationToken) => throw new NotSupportedException();
-    }
-
-    private sealed class FakePredictionRepository : IPredictionRepository
-    {
-        public PredictionDetail? Detail { get; set; }
-
-        public Task<QueuedPredictionSubmission> CreateQueuedAsync(QueuedPredictionCreation creation, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<PredictionForProcessing?> GetForProcessingAsync(Guid predictionId, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<bool> TryPublishAsync(Guid predictionId, Guid jobId, string workerId, PredictionPublication publication, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<bool> DeleteAsync(Guid predictionId, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task FailAsync(Guid predictionId, string code, string message, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<IReadOnlyList<PredictionSummary>> GetSummariesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<PredictionDetail?> GetAsync(Guid predictionId, CancellationToken cancellationToken) => Task.FromResult(Detail);
-        public Task<RouteTimer.Services.Routes.PredictionGpxSource?> GetGpxSourceAsync(Guid predictionId, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task RecordGarminCourseAsync(Guid predictionId, long courseId, DateTimeOffset uploadedAt, CancellationToken cancellationToken) => throw new NotSupportedException();
-    }
-
-    private sealed class FakeRiderModelRepository : IRiderModelRepository
-    {
-        public RiderModelSnapshot? Model { get; set; }
-
-        public Task<Guid> SaveAsync(RiderModel model, RiderProfile profileSnapshot, ModelValidationSummary validation, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<RiderModelSnapshot?> GetCurrentAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<RiderModelSnapshot?> GetAsync(Guid modelId, CancellationToken cancellationToken) => Task.FromResult(Model);
-    }
-
-    private sealed class FakeProgressReporter : IJobProgressReporter
-    {
-        public List<(int Percent, string Stage)> Calls { get; } = [];
-
-        public Task ReportAsync(AnalysisJob job, int progressPercent, string stage, CancellationToken cancellationToken)
-        {
-            Calls.Add((progressPercent, stage));
-            return Task.CompletedTask;
-        }
-    }
 }

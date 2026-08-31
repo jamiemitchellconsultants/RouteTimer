@@ -1,3 +1,6 @@
+@using System.Globalization
+@using System.Text
+@using RouteTimer.Contracts.Adjustments
 @using RouteTimer.Contracts.Predictions
 @implements IAsyncDisposable
 @inject IJSRuntime JS
@@ -46,6 +49,13 @@
     [Parameter]
     public IReadOnlyList<PredictionSegmentResponse> Segments { get; set; } = [];
 
+    /// <summary>
+    /// Zero or one adjustment's segments, already aligned to <see cref="Segments"/> by the parent.
+    /// Empty keeps the baseline-only chart path and its existing interop call.
+    /// </summary>
+    [Parameter]
+    public IReadOnlyList<PredictionAdjustmentSegmentResponse> AdjustmentSegments { get; set; } = [];
+
     [Parameter]
     public int SelectedSequence { get; set; }
 
@@ -62,26 +72,61 @@
         module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/route-visualization.js");
         dotNetReference ??= DotNetObjectReference.Create(this);
 
-        var signature = string.Join(',', Segments.Select(segment => segment.Sequence));
+        var signature = BuildSignature();
         if (!string.Equals(signature, initializedSignature, StringComparison.Ordinal))
         {
-            await module.InvokeVoidAsync(
-                "initializeProfiles",
-                componentId,
-                new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["elevation"] = elevationCanvasId,
-                    ["gradient"] = gradientCanvasId,
-                    ["power"] = powerCanvasId,
-                    ["speed"] = speedCanvasId
-                },
-                Segments,
-                dotNetReference);
+            var containerIds = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["elevation"] = elevationCanvasId,
+                ["gradient"] = gradientCanvasId,
+                ["power"] = powerCanvasId,
+                ["speed"] = speedCanvasId
+            };
+
+            if (AdjustmentSegments.Count > 0)
+            {
+                await module.InvokeVoidAsync(
+                    "initializeComparisonProfiles", componentId, containerIds, Segments, AdjustmentSegments, dotNetReference);
+            }
+            else
+            {
+                await module.InvokeVoidAsync(
+                    "initializeProfiles", componentId, containerIds, Segments, dotNetReference);
+            }
+
             initializedSignature = signature;
             sequenceSentToJs = null;
         }
 
         await SelectAsync(SelectedSequence);
+    }
+
+    /// <summary>
+    /// Charts reinitialize whenever the drawn values change, not only when the sequences do: two
+    /// completed adjustments on the same baseline share every sequence but plot different lines.
+    /// </summary>
+    private string BuildSignature()
+    {
+        var builder = new StringBuilder();
+        foreach (var segment in Segments)
+        {
+            builder.Append(segment.Sequence.ToString(CultureInfo.InvariantCulture)).Append(',');
+        }
+
+        builder.Append('|');
+        foreach (var segment in AdjustmentSegments)
+        {
+            builder
+                .Append(segment.Sequence.ToString(CultureInfo.InvariantCulture)).Append(':')
+                .Append(segment.PowerWatts.ToString("R", CultureInfo.InvariantCulture)).Append(':')
+                .Append(segment.SpeedMetresPerSecond.ToString("R", CultureInfo.InvariantCulture)).Append(':')
+                .Append(segment.SegmentMovingSeconds.ToString("R", CultureInfo.InvariantCulture)).Append(':')
+                .Append(segment.ZoneNumber?.ToString(CultureInfo.InvariantCulture) ?? "-").Append(':')
+                .Append(segment.StrategyPhase ?? "-").Append(':')
+                .Append(segment.WPrimeBalanceJoules?.ToString("R", CultureInfo.InvariantCulture) ?? "-").Append(',');
+        }
+
+        return builder.ToString();
     }
 
     [JSInvokable]

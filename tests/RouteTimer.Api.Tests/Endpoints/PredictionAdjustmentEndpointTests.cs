@@ -16,7 +16,7 @@ using RouteTimer.Services.Persistence;
 
 namespace RouteTimer.Api.Tests.Endpoints;
 
-public sealed class PredictionAdjustmentEndpointTests
+public sealed partial class PredictionAdjustmentEndpointTests
 {
     // Break caught: the newly exposed adjustment resources accidentally bypass the fallback rider policy.
     [Theory]

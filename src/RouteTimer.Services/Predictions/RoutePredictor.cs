@@ -12,6 +12,22 @@ public sealed class RoutePredictor : IRoutePredictor
     private const double InitialSpeedMetresPerSecond = .5;
     private const double MaximumSubstepSeconds = 1;
     private const int MaximumIterationsPerSegment = 100_000;
+
+    /// <summary>
+    /// Below this the model has no opinion: <see cref="TryAdvance"/> already floors the speed it uses to
+    /// turn power into driving force at <see cref="InitialSpeedMetresPerSecond"/>, so under it the
+    /// simulation understates the force a real rider would get and can never recover. A segment whose
+    /// target power cannot hold this speed is traversed at it and reported, rather than failing the whole
+    /// route: the request is at the edge of what the model can describe, not invalid.
+    /// </summary>
+    private const double MinimumSustainableSpeedMetresPerSecond = InitialSpeedMetresPerSecond;
+
+    /// <summary>
+    /// A segment needs a handful of halvings to satisfy the substep rule. Tens of them mean the substep
+    /// is collapsing towards zero because the rider is decelerating to a stop, which is the power-limited
+    /// case - detected here rather than after a hundred thousand iterations of the same conclusion.
+    /// </summary>
+    private const int MaximumHalvingsPerSegment = 40;
     private readonly IDescentSpeedLimiter _descentLimiter;
 
     public RoutePredictor(IDescentSpeedLimiter descentLimiter) =>
@@ -57,17 +73,30 @@ public sealed class RoutePredictor : IRoutePredictor
             var proposal = remainingDistance;
             var segmentSeconds = 0d;
             var iterations = 0;
+            var halvings = 0;
+            var powerLimited = false;
 
             while (remainingDistance > 0)
             {
+                // The iteration limit still fails: it guards a segment so long that simulating it at
+                // one-second substeps is impractical, which is a different problem from a rider who
+                // cannot hold the gradient. Only the collapsing substep means power-limited.
                 if (++iterations > MaximumIterationsPerSegment)
                     throw new PredictionCalculationException("Prediction exceeded the segment iteration limit.");
+
+                if (halvings > MaximumHalvingsPerSegment)
+                {
+                    powerLimited = true;
+                    break;
+                }
+
                 if (!double.IsFinite(proposal) || proposal <= 0 || proposal > remainingDistance)
                     throw new PredictionCalculationException("Prediction could not make progress along the route.");
 
                 var advanced = TryAdvance(entrySpeed, proposal, sample.Gradient, estimate.Watts, mass, model.Coefficients);
                 if (advanced is null)
                 {
+                    halvings++;
                     proposal = HalveProposal(proposal);
                     continue;
                 }
@@ -82,6 +111,7 @@ public sealed class RoutePredictor : IRoutePredictor
                     throw new PredictionCalculationException("Prediction produced invalid speed or time.");
                 if (seconds > MaximumSubstepSeconds)
                 {
+                    halvings++;
                     proposal = HalveProposal(proposal);
                     continue;
                 }
@@ -96,6 +126,18 @@ public sealed class RoutePredictor : IRoutePredictor
                 remainingDistance = nextRemaining;
                 entrySpeed = exitSpeed;
                 proposal = Math.Min(proposal, remainingDistance);
+            }
+
+            if (powerLimited)
+            {
+                // Carry whatever distance the simulation could not cover at the slowest speed the model
+                // is willing to describe. The result is deliberately pessimistic and flagged, so a
+                // caller can offer a slow answer with a warning instead of no answer at all.
+                segmentSeconds += remainingDistance / MinimumSustainableSpeedMetresPerSecond;
+                remainingDistance = 0;
+                entrySpeed = MinimumSustainableSpeedMetresPerSecond;
+                segmentConfidence = ConfidenceLevel.Low;
+                AddWarning(PredictionWarningCodes.PowerBelowSustainableSpeed, warnings, warningSet);
             }
 
             var duration = ToDuration(segmentSeconds);

@@ -239,7 +239,9 @@ else
         @if (visualizationReady)
         {
             <div data-testid="prediction-detail-visualization">
-                <PredictionVisualization Segments="orderedSegments" />
+                <PredictionVisualization
+                    Segments="orderedSegments"
+                    AdjustmentSegments="@(selectedAdjustmentDetail?.Segments ?? [])" />
             </div>
         }
         else

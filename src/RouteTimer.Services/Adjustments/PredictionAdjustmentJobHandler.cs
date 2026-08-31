@@ -89,7 +89,13 @@ public sealed class PredictionAdjustmentJobHandler(
         var publication = BuildPublication(route, computation, handler);
         var workerId = job.WorkerId ?? throw new InvalidOperationException("A claimed adjustment job is required.");
         await progress.ReportAsync(job, 90, JobProgressStages.Publishing, cancellationToken);
-        await adjustments.TryPublishAsync(adjustment.Id, job.Id, workerId, publication, cancellationToken);
+        // False means this worker no longer owns the adjustment - its lease expired, the baseline was
+        // deleted underneath it, or the child already reached a terminal state - so the result is
+        // discarded rather than written over whoever does own it. Mirrors PredictionJobHandler.
+        if (!await adjustments.TryPublishAsync(adjustment.Id, job.Id, workerId, publication, cancellationToken))
+        {
+            return;
+        }
     }
 
     private static (PredictionRoute Route, PredictionResult Baseline) MapBaseline(PredictionDetail baseline)
@@ -145,6 +151,22 @@ public sealed class PredictionAdjustmentJobHandler(
             }
 
             computation.Annotations.TryGetValue(segment.Sequence, out var annotation);
+            if (annotation is not null)
+            {
+                if (annotation.WPrimeBalanceJoules is not null && (!double.IsFinite(annotation.WPrimeBalanceJoules.Value) || annotation.WPrimeBalanceJoules.Value < 0))
+                {
+                    throw new PredictionAdjustmentJobException("invalid-prediction-adjustment-result", "Annotation W-prime balance must be non-negative finite.");
+                }
+                if (annotation.ZoneNumber is not null && annotation.ZoneNumber.Value < 1)
+                {
+                    throw new PredictionAdjustmentJobException("invalid-prediction-adjustment-result", "Annotation zone number must be positive.");
+                }
+                if (annotation.StrategyPhase is not null && annotation.StrategyPhase is not ("baseline" or "conservation" or "recovery" or "burn"))
+                {
+                    throw new PredictionAdjustmentJobException("invalid-prediction-adjustment-result", "Annotation strategy phase is invalid.");
+                }
+            }
+
             persisted.Add(new PersistedAdjustmentSegment(
                 segment.Sequence, segment.PowerWatts, segment.SpeedMetresPerSecond, segment.MovingTime, cumulative, segment.Confidence,
                 annotation?.ZoneNumber, annotation?.StrategyPhase, annotation?.WPrimeBalanceJoules));
@@ -174,8 +196,19 @@ public sealed class PredictionAdjustmentJobHandler(
             throw new PredictionAdjustmentJobException("invalid-prediction-adjustment-result", "The strategy report could not be canonicalized.", exception);
         }
 
+        // The predictor's own warnings are not part of a strategy's report, but one of them describes
+        // the strategy's request rather than the route: a target power some segment could not hold. It
+        // is translated once here so every strategy surfaces it, instead of five handlers each
+        // remembering to look for it.
+        var warnings = computation.Warnings;
+        if (computation.Adjusted.Warnings.Contains(PredictionWarningCodes.PowerBelowSustainableSpeed, StringComparer.Ordinal)
+            && !warnings.Contains(AdjustmentWarningCodes.StrategyPowerBelowSustainableSpeed, StringComparer.Ordinal))
+        {
+            warnings = [.. warnings, AdjustmentWarningCodes.StrategyPowerBelowSustainableSpeed];
+        }
+
         return new AdjustmentPublication(
             computation.Adjusted.MovingTime, averageSpeed, averagePower, computation.Adjusted.Confidence,
-            computation.Warnings, reportJson, computation.AlgorithmVersion, persisted);
+            warnings, reportJson, computation.AlgorithmVersion, persisted);
     }
 }

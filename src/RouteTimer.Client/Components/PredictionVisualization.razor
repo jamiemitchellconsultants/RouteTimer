@@ -1,6 +1,8 @@
+@using System.Globalization
 @using System.Net
 @using RouteTimer.Client.Api
 @using RouteTimer.Client.Formatting
+@using RouteTimer.Contracts.Adjustments
 @using RouteTimer.Contracts.Predictions
 @inject IConfiguration Configuration
 
@@ -21,8 +23,52 @@
                 · @RouteTimerFormat.SpeedKilometresPerHour(SelectedSegment.PredictedSpeedMetresPerSecond)
                 · @RouteTimerText.Sentence(SelectedSegment.Confidence) confidence
             </p>
+
+            @if (SelectedAdjustmentSegment is { } adjustment)
+            {
+                <dl class="prediction-visualization__comparison" data-testid="prediction-visualization-comparison">
+                    <div>
+                        <dt>Baseline</dt>
+                        <dd>
+                            @RouteTimerFormat.Power(SelectedSegment.PredictedPowerWatts)
+                            · @RouteTimerFormat.SpeedKilometresPerHour(SelectedSegment.PredictedSpeedMetresPerSecond)
+                            · @RouteTimerFormat.DetailedDuration(SelectedSegment.SegmentMovingSeconds)
+                        </dd>
+                    </div>
+                    <div>
+                        <dt>Adjustment</dt>
+                        <dd>
+                            @RouteTimerFormat.Power(adjustment.PowerWatts)
+                            · @RouteTimerFormat.SpeedKilometresPerHour(adjustment.SpeedMetresPerSecond)
+                            · @RouteTimerFormat.DetailedDuration(adjustment.SegmentMovingSeconds)
+                        </dd>
+                    </div>
+                    <div>
+                        <dt>Delta</dt>
+                        <dd data-testid="prediction-visualization-comparison-delta">
+                            @SignedPower(adjustment.PowerWatts - SelectedSegment.PredictedPowerWatts)
+                            · @SignedSpeed(adjustment.SpeedMetresPerSecond - SelectedSegment.PredictedSpeedMetresPerSecond)
+                            · @SignedSeconds(adjustment.SegmentMovingSeconds - SelectedSegment.SegmentMovingSeconds)
+                        </dd>
+                    </div>
+                    @if (HasAnnotations(adjustment))
+                    {
+                        <div data-testid="prediction-visualization-comparison-annotations">
+                            <dt>Annotations</dt>
+                            <dd>@AnnotationText(adjustment)</dd>
+                        </div>
+                    }
+                </dl>
+            }
         }
     </div>
+
+    @if (comparisonMismatched)
+    {
+        <p class="prediction-visualization__comparison-problem" data-testid="prediction-visualization-comparison-problem">
+            The selected adjustment does not match the baseline route.
+        </p>
+    }
 
     @if (configurationProblem is not null)
     {
@@ -41,6 +87,7 @@
 
         <RouteProfiles @ref="routeProfiles"
                        Segments="orderedSegments"
+                       AdjustmentSegments="alignedAdjustmentSegments"
                        SelectedSequence="@selectedSequence"
                        SequenceSelected="HandleProfileSequenceSelected" />
     }
@@ -50,6 +97,9 @@
     private RouteMap? routeMap;
     private RouteProfiles? routeProfiles;
     private IReadOnlyList<PredictionSegmentResponse> orderedSegments = [];
+    private IReadOnlyList<PredictionAdjustmentSegmentResponse> alignedAdjustmentSegments = [];
+    private Dictionary<int, PredictionAdjustmentSegmentResponse> adjustmentBySequence = [];
+    private bool comparisonMismatched;
     private ApiProblemException? configurationProblem;
     private string tileUrl = string.Empty;
     private string tileAttribution = string.Empty;
@@ -58,13 +108,22 @@
     [Parameter]
     public IReadOnlyList<PredictionSegmentResponse> Segments { get; set; } = [];
 
+    /// <summary>Zero or one adjustment's segments; anything else is not a comparison this view renders.</summary>
+    [Parameter]
+    public IReadOnlyList<PredictionAdjustmentSegmentResponse> AdjustmentSegments { get; set; } = [];
+
     private PredictionSegmentResponse? SelectedSegment => orderedSegments.FirstOrDefault(segment => segment.Sequence == selectedSequence);
+
+    private PredictionAdjustmentSegmentResponse? SelectedAdjustmentSegment =>
+        adjustmentBySequence.GetValueOrDefault(selectedSequence);
 
     protected override void OnParametersSet()
     {
         orderedSegments = Segments
             .OrderBy(segment => segment.Sequence)
             .ToArray();
+
+        AlignAdjustment();
 
         tileUrl = Configuration["MapTiles:Url"] ?? string.Empty;
         tileAttribution = Configuration["MapTiles:Attribution"] ?? string.Empty;
@@ -89,6 +148,69 @@
 
         selectedSequence = orderedSegments[0].Sequence;
     }
+
+    /// <summary>
+    /// Sorts the adjustment once and requires exact sequence equality with the baseline, so the
+    /// selected readout and the comparison charts both work from a single dictionary lookup rather
+    /// than joining inside a render loop.
+    /// </summary>
+    private void AlignAdjustment()
+    {
+        if (AdjustmentSegments.Count == 0)
+        {
+            alignedAdjustmentSegments = [];
+            adjustmentBySequence = [];
+            comparisonMismatched = false;
+            return;
+        }
+
+        var ordered = AdjustmentSegments.OrderBy(segment => segment.Sequence).ToArray();
+        var bySequence = new Dictionary<int, PredictionAdjustmentSegmentResponse>(ordered.Length);
+        var aligned = ordered.Length == orderedSegments.Count;
+
+        for (var index = 0; aligned && index < ordered.Length; index++)
+        {
+            aligned = ordered[index].Sequence == orderedSegments[index].Sequence
+                && bySequence.TryAdd(ordered[index].Sequence, ordered[index]);
+        }
+
+        alignedAdjustmentSegments = aligned ? ordered : [];
+        adjustmentBySequence = aligned ? bySequence : [];
+        comparisonMismatched = !aligned;
+    }
+
+    private static bool HasAnnotations(PredictionAdjustmentSegmentResponse segment) =>
+        segment.ZoneNumber is not null || segment.StrategyPhase is not null || segment.WPrimeBalanceJoules is not null;
+
+    private static string AnnotationText(PredictionAdjustmentSegmentResponse segment)
+    {
+        var parts = new List<string>(3);
+        if (segment.ZoneNumber is { } zone)
+        {
+            parts.Add($"Zone {zone.ToString(CultureInfo.CurrentCulture)}");
+        }
+
+        if (segment.StrategyPhase is { } phase)
+        {
+            parts.Add($"{RouteTimerText.Sentence(phase)} phase");
+        }
+
+        if (segment.WPrimeBalanceJoules is { } wPrime)
+        {
+            parts.Add($"W' {wPrime.ToString("N0", CultureInfo.CurrentCulture)} J");
+        }
+
+        return string.Join(" · ", parts);
+    }
+
+    private static string SignedPower(double delta) => Sign(delta) + RouteTimerFormat.Power(Math.Abs(delta));
+
+    private static string SignedSpeed(double delta) => Sign(delta) + RouteTimerFormat.SpeedKilometresPerHour(Math.Abs(delta));
+
+    private static string SignedSeconds(double delta) =>
+        $"{Sign(delta)}{Math.Abs(delta).ToString("0.#", CultureInfo.CurrentCulture)} s";
+
+    private static string Sign(double delta) => delta < 0 ? "-" : "+";
 
     private async Task HandleMapSequenceSelected(int sequence)
     {

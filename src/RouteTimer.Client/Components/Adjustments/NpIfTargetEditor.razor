@@ -1,0 +1,97 @@
+@using System.Globalization
+@using RouteTimer.Client.Api
+@using RouteTimer.Client.Components
+@using RouteTimer.Contracts.Adjustments
+@inject IRouteTimerApiClient Api
+
+<div data-testid="np-if-editor">
+    @if (Problem is not null)
+    {
+        <div data-testid="np-if-error">
+            <ProblemMessage Problem="@Problem" FallbackMessage="We could not create the NP/IF target adjustment." />
+        </div>
+    }
+
+    <div class="prediction-detail-grid">
+        <div>
+            <label for="np-if-target">Target Intensity Factor (0.01 - 1.50)</label>
+            <input id="np-if-target" data-testid="np-if-target"
+                   value="@TargetIfText" @oninput="OnTargetIfInput" />
+        </div>
+        <div>
+            <label for="np-if-ftp">FTP Watts (1 - 2000)</label>
+            <input id="np-if-ftp" data-testid="np-if-ftp"
+                   value="@FtpWattsText" @oninput="OnFtpWattsInput" />
+            <small style="display: block; color: var(--muted-color, gray);">
+                FTP is used only for this adjustment; it does not change your rider model.
+            </small>
+        </div>
+        <div>
+            <label for="np-if-mode">Scaling Mode</label>
+            <select id="np-if-mode" data-testid="np-if-mode"
+                    value="@Mode" @onchange="OnModeChanged">
+                <option value="proportional">Proportional</option>
+                <option value="additive">Additive</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="prediction-detail-actions">
+        <button type="button" class="predictions-button"
+                data-testid="np-if-submit"
+                @onclick="SubmitAsync"
+                disabled="@(isSubmitting || !IsValid)">
+            Create NP/IF target adjustment
+        </button>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public Guid PredictionId { get; set; }
+
+    [Parameter]
+    public EventCallback<Guid> OnCreated { get; set; }
+
+    private string TargetIfText { get; set; } = "0.85";
+    private string FtpWattsText { get; set; } = "";
+    private string Mode { get; set; } = "proportional";
+
+    private ApiProblemException? Problem { get; set; }
+    private bool isSubmitting;
+
+    private void OnTargetIfInput(ChangeEventArgs e) => TargetIfText = e.Value?.ToString() ?? "";
+    private void OnFtpWattsInput(ChangeEventArgs e) => FtpWattsText = e.Value?.ToString() ?? "";
+    private void OnModeChanged(ChangeEventArgs e) => Mode = e.Value?.ToString() ?? "proportional";
+
+    private bool IsValid =>
+        double.TryParse(TargetIfText, NumberStyles.Float, CultureInfo.InvariantCulture, out var targetIf) &&
+        targetIf is > 0 and <= 1.5 &&
+        double.TryParse(FtpWattsText, NumberStyles.Float, CultureInfo.InvariantCulture, out var ftp) &&
+        ftp is >= 1 and <= 2000;
+
+    private async Task SubmitAsync()
+    {
+        Problem = null;
+        if (!IsValid) return;
+
+        double targetIf = double.Parse(TargetIfText, CultureInfo.InvariantCulture);
+        double ftp = double.Parse(FtpWattsText, CultureInfo.InvariantCulture);
+
+        isSubmitting = true;
+        try
+        {
+            var request = new NpIfTargetRequest(targetIf, ftp, Mode);
+            var submission = await Api.CreatePredictionAdjustmentAsync(PredictionId, request, CancellationToken.None);
+            await OnCreated.InvokeAsync(submission.AdjustmentId);
+        }
+        catch (ApiProblemException problem)
+        {
+            Problem = problem;
+        }
+        finally
+        {
+            isSubmitting = false;
+        }
+    }
+}

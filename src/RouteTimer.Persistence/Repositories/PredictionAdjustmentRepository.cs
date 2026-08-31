@@ -90,6 +90,7 @@ public sealed class PredictionAdjustmentRepository(RouteTimerDbContext context) 
                 """).ToListAsync(cancellationToken);
             if (matchingJob.Count == 0)
             {
+                if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
                 return false;
             }
         }
@@ -116,6 +117,15 @@ public sealed class PredictionAdjustmentRepository(RouteTimerDbContext context) 
         var adjustment = await context.PredictionAdjustments.Include(entity => entity.Segments)
             .SingleOrDefaultAsync(entity => entity.Id == adjustmentId, cancellationToken);
         if (adjustment is null)
+        {
+            if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
+            return false;
+        }
+
+        // A duplicate delivery arrives with the same still-Running job and worker, so job ownership
+        // alone does not distinguish it from the first. A child that already reached a terminal state
+        // is immutable: report stale rather than overwriting a published result.
+        if (adjustment.State != AdjustmentState.Queued.ToString() && adjustment.State != AdjustmentState.Running.ToString())
         {
             if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
             return false;

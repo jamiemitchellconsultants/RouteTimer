@@ -8,6 +8,7 @@ public static class PredictionWarningCodes
     public const string ModelValidationFailed = "model-validation-failed";
     public const string ModelValidationInsufficientData = "model-validation-insufficient-data";
     public const string ModelValidationNotValidated = "model-validation-not-validated";
+    public const string PowerBelowSustainableSpeed = "power-below-sustainable-speed";
 
     public static IReadOnlyList<string> All { get; } = Array.AsReadOnly(
     [
@@ -17,6 +18,7 @@ public static class PredictionWarningCodes
         ModelValidationFailed,
         ModelValidationInsufficientData,
         ModelValidationNotValidated,
+        PowerBelowSustainableSpeed,
     ]);
 
     public static bool IsKnown(string? code) =>

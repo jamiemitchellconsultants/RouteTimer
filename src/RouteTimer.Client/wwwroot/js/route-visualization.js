@@ -1,4 +1,5 @@
 import {
+  buildComparisonProfileDatasets,
   buildProfileDatasets,
   nearestSegmentSequence,
   normalizeSegments
@@ -28,57 +29,133 @@ function getTileOption(source, name) {
 }
 
 function selectedPoint(points, sequence) {
-  return points.find(point => point.sequence === sequence) ?? points[0];
+  const exact = points.find(point => point.sequence === sequence);
+  if (exact) {
+    return exact;
+  }
+
+  // A downsampled comparison series may not carry the selected sequence, so fall back to the
+  // nearest point that survived rather than snapping the cursor back to the start of the route.
+  return points.reduce(
+    (best, point) =>
+      Math.abs(point.sequence - sequence) < Math.abs(best.sequence - sequence) ? point : best,
+    points[0]);
 }
 
-function createProfileChart(Chart, canvasId, title, suffix, points, dotNetReference) {
+const baselineLine = {
+  borderColor: "#2f5d62",
+  backgroundColor: "rgba(47, 93, 98, 0.15)",
+  borderWidth: 2,
+  pointRadius: 0,
+  pointHoverRadius: 5,
+  tension: 0.2
+};
+
+const adjustmentLine = {
+  borderColor: "#d1495b",
+  backgroundColor: "transparent",
+  borderWidth: 2,
+  fill: false,
+  pointRadius: 0,
+  pointHoverRadius: 5,
+  tension: 0.2
+};
+
+function signed(value, suffix) {
+  return `${value < 0 ? "" : "+"}${value}${suffix}`;
+}
+
+function annotationRows(point) {
+  const rows = [];
+  if (point.zoneNumber !== null && point.zoneNumber !== undefined) {
+    rows.push(`Zone: ${point.zoneNumber}`);
+  }
+
+  if (point.strategyPhase) {
+    rows.push(`Phase: ${point.strategyPhase}`);
+  }
+
+  if (point.wPrimeBalanceJoules !== null && point.wPrimeBalanceJoules !== undefined) {
+    rows.push(`W' balance: ${Math.round(point.wPrimeBalanceJoules)} J`);
+  }
+
+  return rows;
+}
+
+function createProfileChart(Chart, canvasId, config, dotNetReference) {
   const context = document.getElementById(canvasId)?.getContext("2d");
   if (!context) {
     throw new Error(`Canvas '${canvasId}' was not found.`);
   }
 
-  return new Chart(context, {
+  const { title, suffix, points, comparisonPoints } = config;
+  const comparison = comparisonPoints.length > 0;
+
+  const toData = source => source.map(point => ({ x: point.x, y: point.y, sequence: point.sequence }));
+
+  const datasets = [
+    { ...baselineLine, label: comparison ? `${title} (baseline)` : title, data: toData(points), $points: points }
+  ];
+
+  if (comparison) {
+    datasets.push({
+      ...adjustmentLine,
+      label: `${title} (adjustment)`,
+      data: toData(comparisonPoints),
+      $points: comparisonPoints
+    });
+  }
+
+  const cursorDatasetIndex = datasets.length;
+  datasets.push({
+    label: `${title} cursor`,
+    data: [],
+    borderColor: "#d1495b",
+    backgroundColor: "#d1495b",
+    pointRadius: 5,
+    pointHoverRadius: 5,
+    showLine: false
+  });
+
+  const chart = new Chart(context, {
     type: "line",
-    data: {
-      datasets: [
-        {
-          label: title,
-          data: points.map(point => ({ x: point.x, y: point.y, sequence: point.sequence })),
-          borderColor: "#2f5d62",
-          backgroundColor: "rgba(47, 93, 98, 0.15)",
-          borderWidth: 2,
-          pointRadius: 0,
-          pointHoverRadius: 5,
-          tension: 0.2
-        },
-        {
-          label: `${title} cursor`,
-          data: [],
-          borderColor: "#d1495b",
-          backgroundColor: "#d1495b",
-          pointRadius: 5,
-          pointHoverRadius: 5,
-          showLine: false
-        }
-      ]
-    },
+    data: { datasets },
     options: {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
       interaction: {
-        mode: "nearest",
+        // Comparison charts report both lines for one x so a single hover reads as one block.
+        mode: comparison ? "index" : "nearest",
         intersect: false
       },
       parsing: false,
       plugins: {
         legend: {
-          display: false
+          display: comparison,
+          labels: {
+            filter: item => item.datasetIndex !== cursorDatasetIndex
+          }
         },
         tooltip: {
+          filter: item => item.datasetIndex !== cursorDatasetIndex,
           callbacks: {
-            label(context) {
-              return `${title}: ${context.parsed.y}${suffix}`;
+            label(item) {
+              const point = item.dataset.$points?.[item.dataIndex];
+              if (!comparison || !point) {
+                return `${title}: ${item.parsed.y}${suffix}`;
+              }
+
+              if (item.datasetIndex === 0) {
+                return `Baseline ${title.toLowerCase()}: ${point.y}${suffix}`;
+              }
+
+              return [
+                `Adjustment ${title.toLowerCase()}: ${point.y}${suffix}`,
+                `Delta: ${signed(point.delta, suffix)}`,
+                `Segment time: ${signed(point.segmentMovingSecondsDelta, " s")}`,
+                ...annotationRows(point)
+              ];
             }
           }
         }
@@ -99,12 +176,12 @@ function createProfileChart(Chart, canvasId, title, suffix, points, dotNetRefere
         }
       },
       onHover(_event, activeElements) {
-        const active = activeElements.find(element => element.datasetIndex === 0);
+        const active = activeElements.find(element => element.datasetIndex !== cursorDatasetIndex);
         if (!active) {
           return;
         }
 
-        const dataPoint = points[active.index];
+        const dataPoint = chart.data.datasets[active.datasetIndex].$points?.[active.index];
         if (!dataPoint) {
           return;
         }
@@ -113,6 +190,8 @@ function createProfileChart(Chart, canvasId, title, suffix, points, dotNetRefere
       }
     }
   });
+
+  return { chart, points, cursorDatasetIndex };
 }
 
 export function initializeMap(componentId, containerId, rawSegments, tileOptions, dotNetReference) {
@@ -190,20 +269,45 @@ export function initializeProfiles(componentId, containerIds, rawSegments, dotNe
   const Chart = requireChartJs();
   const segments = normalizeSegments(rawSegments);
   const datasets = buildProfileDatasets(segments);
-
-  const charts = [
-    createProfileChart(Chart, containerIds.elevation, "Elevation", " m", datasets[0].points, dotNetReference),
-    createProfileChart(Chart, containerIds.gradient, "Gradient", "%", datasets[1].points, dotNetReference),
-    createProfileChart(Chart, containerIds.power, "Power", " W", datasets[2].points, dotNetReference),
-    createProfileChart(Chart, containerIds.speed, "Speed", " km/h", datasets[3].points, dotNetReference)
+  const configs = [
+    { key: "elevation", title: "Elevation", suffix: " m", points: datasets[0].points, comparisonPoints: [] },
+    { key: "gradient", title: "Gradient", suffix: "%", points: datasets[1].points, comparisonPoints: [] },
+    { key: "power", title: "Power", suffix: " W", points: datasets[2].points, comparisonPoints: [] },
+    { key: "speed", title: "Speed", suffix: " km/h", points: datasets[3].points, comparisonPoints: [] }
   ];
 
-  profileRegistry.set(componentId, {
-    charts,
-    datasets
-  });
+  registerProfiles(componentId, Chart, containerIds, configs, dotNetReference);
+}
 
-  selectProfileSequence(componentId, segments[0].sequence);
+export function initializeComparisonProfiles(
+  componentId,
+  containerIds,
+  rawBaselineSegments,
+  rawAdjustmentSegments,
+  dotNetReference
+) {
+  disposeProfiles(componentId);
+
+  const Chart = requireChartJs();
+  const datasets = buildComparisonProfileDatasets(rawBaselineSegments, rawAdjustmentSegments);
+  const keys = ["elevation", "gradient", "power", "speed"];
+  const configs = datasets.map((dataset, index) => ({
+    key: keys[index],
+    title: dataset.label,
+    suffix: dataset.suffix,
+    points: dataset.baselinePoints,
+    comparisonPoints: dataset.adjustmentPoints
+  }));
+
+  registerProfiles(componentId, Chart, containerIds, configs, dotNetReference);
+}
+
+function registerProfiles(componentId, Chart, containerIds, configs, dotNetReference) {
+  const charts = configs.map(config =>
+    createProfileChart(Chart, containerIds[config.key], config, dotNetReference));
+
+  profileRegistry.set(componentId, { charts });
+  selectProfileSequence(componentId, charts[0].points[0].sequence);
 }
 
 export function selectProfileSequence(componentId, sequence) {
@@ -212,11 +316,16 @@ export function selectProfileSequence(componentId, sequence) {
     return;
   }
 
-  entry.charts.forEach((chart, index) => {
-    const point = selectedPoint(entry.datasets[index].points, sequence);
-    chart.data.datasets[1].data = [{ x: point.x, y: point.y, sequence: point.sequence }];
+  entry.charts.forEach(({ chart, points, cursorDatasetIndex }) => {
+    const point = selectedPoint(points, sequence);
+    chart.data.datasets[cursorDatasetIndex].data = [{ x: point.x, y: point.y, sequence: point.sequence }];
     chart.update("none");
   });
+}
+
+/** Test seam: the chart entries registered for a component, or undefined once disposed. */
+export function __profileChartsForTest(componentId) {
+  return profileRegistry.get(componentId)?.charts;
 }
 
 export function disposeProfiles(componentId) {
@@ -225,6 +334,6 @@ export function disposeProfiles(componentId) {
     return;
   }
 
-  entry.charts.forEach(chart => chart.destroy());
+  entry.charts.forEach(({ chart }) => chart.destroy());
   profileRegistry.delete(componentId);
 }

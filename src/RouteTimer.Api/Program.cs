@@ -30,7 +30,11 @@ using RouteTimer.Services.Physics;
 using RouteTimer.Services.Persistence;
 using RouteTimer.Services.Predictions;
 using RouteTimer.Services.Adjustments;
+using RouteTimer.Services.Adjustments.MatchBurning;
+using RouteTimer.Services.Adjustments.NpIf;
 using RouteTimer.Services.Adjustments.SegmentGains;
+using RouteTimer.Services.Adjustments.TimeTarget;
+using RouteTimer.Services.Adjustments.Zones;
 using RouteTimer.Services.Security;
 using RouteTimer.Services.Settings;
 using RouteTimer.Services.Training;
@@ -178,10 +182,10 @@ builder.Services.AddScoped<IPredictionAdjustmentRepository, PredictionAdjustment
 var pacingStrategyOptions = PacingStrategyOptions.Bind(builder.Configuration);
 builder.Services.AddSingleton(pacingStrategyOptions);
 builder.Services.AddSingleton<IPacingStrategyHandler, SegmentGainsHandler>();
-// The remaining strategies still have no registered handler (each strategy's own delivery task adds
-// one). Sourcing enabledTypes from configuration here (rather than a literal []) is already correct
-// for when they are: every strategy flag defaults to false, so this only grows as an operator turns
-// one on and its handler exists.
+builder.Services.AddSingleton<IPacingStrategyHandler, TimeTargetHandler>();
+builder.Services.AddSingleton<IPacingStrategyHandler, NpIfTargetHandler>();
+builder.Services.AddSingleton<IPacingStrategyHandler, ZoneShiftHandler>();
+builder.Services.AddSingleton<IPacingStrategyHandler, MatchBurningHandler>();
 builder.Services.AddScoped(sp => new PacingStrategyDispatcher(sp.GetServices<IPacingStrategyHandler>(), pacingStrategyOptions.EnabledTypes));
 builder.Services.AddScoped<PredictionAdjustmentService>();
 builder.Services.AddScoped<PredictionAdjustmentQueryService>();

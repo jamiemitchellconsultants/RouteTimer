@@ -194,21 +194,58 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
             ? await context.Database.BeginTransactionAsync(cancellationToken)
             : null;
 
-        // Lock all matching jobs before reading or deleting the prediction. This serializes
-        // cancellation/deletion with a worker's owner-guarded publication transaction.
-        var jobIds = context.Database.IsRelational()
-            ? await context.Database.SqlQuery<Guid>($"""
-                SELECT "Id" AS "Value" FROM analysis_jobs
-                WHERE "SubjectId" = {predictionId} AND "Type" = {JobType.PredictRoute.ToString()}
-                  AND "State" IN ({JobState.Queued.ToString()}, {JobState.Running.ToString()})
-                FOR UPDATE
-                """).ToListAsync(cancellationToken)
-            : await context.Jobs
-                .Where(entity => entity.SubjectId == predictionId && entity.Type == JobType.PredictRoute.ToString() &&
-                    (entity.State == JobState.Queued.ToString() || entity.State == JobState.Running.ToString()))
+        var queuedState = JobState.Queued.ToString();
+        var runningState = JobState.Running.ToString();
+        var predictType = JobType.PredictRoute.ToString();
+        var adjustType = JobType.AdjustPrediction.ToString();
+
+        // Lock order across this aggregate is analysis_jobs -> predictions -> prediction_adjustments
+        // -> stored_uploads, and every path that takes more than one of these must follow it.
+        // TryPublishAsync (baseline and child) and PredictionAdjustmentRepository.DeleteAsync all take
+        // their job row first, so acquiring anything else before the jobs here deadlocks against a
+        // worker publishing while a baseline is deleted. Reading the child ids is not a lock, so it can
+        // precede the jobs; only the FOR UPDATE ordering matters.
+        var childAdjustmentIds = await context.PredictionAdjustments.AsNoTracking()
+            .Where(entity => entity.PredictionId == predictionId)
+            .Select(entity => entity.Id)
+            .ToListAsync(cancellationToken);
+
+        // 1. Lock this baseline's own active job and every active job of its children. This serializes
+        //    cancellation/deletion with a worker's owner-guarded publication transaction.
+        List<Guid> jobIds;
+        if (context.Database.IsRelational())
+        {
+            if (childAdjustmentIds.Count > 0)
+            {
+                var adjArray = childAdjustmentIds.ToArray();
+                jobIds = await context.Database.SqlQuery<Guid>($"""
+                    SELECT "Id" AS "Value" FROM analysis_jobs
+                    WHERE ("SubjectId" = {predictionId} AND "Type" = {predictType} AND "State" IN ({queuedState}, {runningState}))
+                       OR ("SubjectId" = ANY({adjArray}) AND "Type" = {adjustType} AND "State" IN ({queuedState}, {runningState}))
+                    ORDER BY "Id"
+                    FOR UPDATE
+                    """).ToListAsync(cancellationToken);
+            }
+            else
+            {
+                jobIds = await context.Database.SqlQuery<Guid>($"""
+                    SELECT "Id" AS "Value" FROM analysis_jobs
+                    WHERE "SubjectId" = {predictionId} AND "Type" = {predictType} AND "State" IN ({queuedState}, {runningState})
+                    ORDER BY "Id"
+                    FOR UPDATE
+                    """).ToListAsync(cancellationToken);
+            }
+        }
+        else
+        {
+            jobIds = await context.Jobs
+                .Where(entity => (entity.SubjectId == predictionId && entity.Type == predictType && (entity.State == queuedState || entity.State == runningState)) ||
+                                 (childAdjustmentIds.Contains(entity.SubjectId) && entity.Type == adjustType && (entity.State == queuedState || entity.State == runningState)))
                 .Select(entity => entity.Id)
                 .ToListAsync(cancellationToken);
+        }
 
+        // 2. Lock the baseline row, which is what serializes against child adjustment creation.
         if (context.Database.IsRelational())
         {
             var matchingPrediction = await context.Database.SqlQuery<Guid>(
@@ -229,6 +266,18 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
         {
             if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
             return false;
+        }
+
+        // 3. Lock the child rows the cascade will remove, so a concurrent child publish that already
+        //    passed its own job check cannot commit underneath the delete.
+        if (context.Database.IsRelational() && childAdjustmentIds.Count > 0)
+        {
+            await context.Database.SqlQuery<Guid>($"""
+                SELECT "Id" AS "Value" FROM prediction_adjustments
+                WHERE "PredictionId" = {predictionId}
+                ORDER BY "Id"
+                FOR UPDATE
+                """).ToListAsync(cancellationToken);
         }
 
         var uploadId = prediction.UploadId;

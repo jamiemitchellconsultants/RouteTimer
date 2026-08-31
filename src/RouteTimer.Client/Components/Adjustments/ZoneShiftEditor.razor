@@ -1,0 +1,242 @@
+@using System.Globalization
+@using RouteTimer.Client.Api
+@using RouteTimer.Client.Components
+@using RouteTimer.Contracts.Adjustments
+@inject IRouteTimerApiClient Api
+
+<div data-testid="zone-shift-editor">
+    @if (Problem is not null)
+    {
+        <div data-testid="zone-shift-error">
+            <ProblemMessage Problem="@Problem" FallbackMessage="We could not create the zone shift adjustment." />
+        </div>
+    }
+
+    <div class="prediction-detail-grid">
+        <div>
+            <label for="zone-shift-threshold-mode">Threshold Mode</label>
+            <select id="zone-shift-threshold-mode" data-testid="zone-shift-threshold-mode"
+                    value="@ThresholdMode" @onchange="OnThresholdModeChanged">
+                <option value="model-inferred">Model Inferred</option>
+                <option value="ftp-based">FTP Based</option>
+            </select>
+        </div>
+        @if (ThresholdMode == "ftp-based")
+        {
+            <div>
+                <label for="zone-shift-ftp">FTP Watts (1 - 2000)</label>
+                <input id="zone-shift-ftp" data-testid="zone-shift-ftp"
+                       value="@FtpWattsText" @oninput="e => FtpWattsText = e.Value?.ToString()" />
+            </div>
+        }
+    </div>
+
+    @for (int index = 0; index < Rows.Count; index++)
+    {
+        int rowIndex = index;
+        var row = Rows[rowIndex];
+        <div class="prediction-detail-grid" @key="row" data-testid="@($"zone-shift-row-{rowIndex}")">
+            <div>
+                <label for="@($"zone-shift-selector-{rowIndex}")">Selector</label>
+                <select id="@($"zone-shift-selector-{rowIndex}")" data-testid="@($"zone-shift-selector-{rowIndex}")"
+                        value="@row.Selector" @onchange="e => ChangeSelector(row, e.Value?.ToString())">
+                    <option value="gradient">Gradient</option>
+                    <option value="all-segments">All Segments</option>
+                </select>
+            </div>
+            @if (row.Selector == "gradient")
+            {
+                <div>
+                    <label for="@($"zone-shift-min-{rowIndex}")">Min Gradient</label>
+                    <input id="@($"zone-shift-min-{rowIndex}")" data-testid="@($"zone-shift-min-{rowIndex}")"
+                           value="@row.MinGradientText" @oninput="e => row.MinGradientText = e.Value?.ToString()" />
+                </div>
+                <div>
+                    <label for="@($"zone-shift-max-{rowIndex}")">Max Gradient</label>
+                    <input id="@($"zone-shift-max-{rowIndex}")" data-testid="@($"zone-shift-max-{rowIndex}")"
+                           value="@row.MaxGradientText" @oninput="e => row.MaxGradientText = e.Value?.ToString()" />
+                </div>
+            }
+            <div>
+                <label for="@($"zone-shift-zone-{rowIndex}")">Zone</label>
+                <select id="@($"zone-shift-zone-{rowIndex}")" data-testid="@($"zone-shift-zone-{rowIndex}")"
+                        value="@row.Zone" @onchange="e => OnZoneChanged(row, e.Value?.ToString())">
+                    @for (int z = 1; z <= MaxZone; z++)
+                    {
+                        <option value="@z">Zone @z</option>
+                    }
+                </select>
+            </div>
+            <div>
+                <label for="@($"zone-shift-placement-{rowIndex}")">Placement</label>
+                <select id="@($"zone-shift-placement-{rowIndex}")" data-testid="@($"zone-shift-placement-{rowIndex}")"
+                        value="@row.Placement" @onchange="e => OnPlacementChanged(row, e.Value?.ToString())">
+                    <option value="lower-bound">Lower Bound</option>
+                    <option value="midpoint">Midpoint</option>
+                    <option value="upper-bound">Upper Bound</option>
+                </select>
+            </div>
+            <div class="prediction-detail-actions">
+                <button type="button" class="predictions-button predictions-button--danger"
+                        data-testid="@($"zone-shift-remove-{rowIndex}")"
+                        @onclick="() => RemoveRow(rowIndex)">
+                    Remove
+                </button>
+            </div>
+        </div>
+    }
+
+    <div class="prediction-detail-actions">
+        <button type="button" class="predictions-button predictions-button--secondary"
+                data-testid="zone-shift-add-assignment"
+                @onclick="AddRow"
+                disabled="@(Rows.Count >= 10)">
+            Add assignment
+        </button>
+        <button type="button" class="predictions-button"
+                data-testid="zone-shift-submit"
+                @onclick="SubmitAsync"
+                disabled="@(isSubmitting || Rows.Count == 0 || !IsValid)">
+            Create zone shift adjustment
+        </button>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public Guid PredictionId { get; set; }
+
+    [Parameter]
+    public EventCallback<Guid> OnCreated { get; set; }
+
+    private string ThresholdMode { get; set; } = "model-inferred";
+    private string? FtpWattsText { get; set; }
+    private List<AssignmentRow> Rows { get; } = [new AssignmentRow { Selector = "all-segments", Zone = 3, Placement = "midpoint" }];
+
+    private ApiProblemException? Problem { get; set; }
+    private bool isSubmitting;
+
+    private int MaxZone => ThresholdMode == "ftp-based" ? 7 : 5;
+
+    private void OnThresholdModeChanged(ChangeEventArgs e)
+    {
+        ThresholdMode = e.Value?.ToString() ?? "model-inferred";
+        if (ThresholdMode == "model-inferred")
+        {
+            FtpWattsText = null;
+            foreach (var r in Rows)
+            {
+                if (r.Zone > 5) r.Zone = 5;
+            }
+        }
+    }
+
+    private void AddRow()
+    {
+        if (Rows.Count >= 10) return;
+        Rows.Add(new AssignmentRow());
+    }
+
+    private void RemoveRow(int index) => Rows.RemoveAt(index);
+
+    private static void OnZoneChanged(AssignmentRow row, string? value)
+    {
+        if (int.TryParse(value, out var z)) row.Zone = z;
+    }
+
+    private static void OnPlacementChanged(AssignmentRow row, string? value)
+    {
+        row.Placement = value ?? "midpoint";
+    }
+
+    private static void ChangeSelector(AssignmentRow row, string? selector)
+    {
+        row.Selector = selector ?? "gradient";
+        if (row.Selector == "all-segments")
+        {
+            row.MinGradientText = null;
+            row.MaxGradientText = null;
+        }
+    }
+
+    private bool IsValid
+    {
+        get
+        {
+            if (ThresholdMode == "ftp-based")
+            {
+                if (!double.TryParse(FtpWattsText, NumberStyles.Float, CultureInfo.InvariantCulture, out var ftp) || ftp < 1 || ftp > 2000)
+                    return false;
+            }
+
+            int allSegmentsCount = Rows.Count(r => r.Selector == "all-segments");
+            if (allSegmentsCount > 1) return false;
+
+            foreach (var r in Rows)
+            {
+                if (r.Zone < 1 || r.Zone > MaxZone) return false;
+
+                // A gradient row with neither bound set is rejected by the domain, so keep submit
+                // disabled rather than round-tripping to a guaranteed 400. Text that cannot be parsed
+                // is a mistyped bound, not an absent one: submitting it would silently widen the rule.
+                if (r.Selector == "gradient")
+                {
+                    var minBlank = string.IsNullOrWhiteSpace(r.MinGradientText);
+                    var maxBlank = string.IsNullOrWhiteSpace(r.MaxGradientText);
+                    if (minBlank && maxBlank) return false;
+                    if (!minBlank && ParseDouble(r.MinGradientText) is null) return false;
+                    if (!maxBlank && ParseDouble(r.MaxGradientText) is null) return false;
+                }
+            }
+
+            return true;
+        }
+    }
+
+    private async Task SubmitAsync()
+    {
+        Problem = null;
+        if (!IsValid) return;
+
+        double? ftpWatts = null;
+        if (ThresholdMode == "ftp-based" && double.TryParse(FtpWattsText, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedFtp))
+        {
+            ftpWatts = parsedFtp;
+        }
+
+        var reqAssignments = Rows.Select(r => new ZoneAssignmentRequest(
+            r.Selector == "all-segments",
+            ParseDouble(r.MinGradientText),
+            ParseDouble(r.MaxGradientText),
+            r.Zone,
+            r.Placement)).ToList();
+
+        isSubmitting = true;
+        try
+        {
+            var request = new RpeZoneShiftRequest(ThresholdMode, ftpWatts, reqAssignments);
+            var submission = await Api.CreatePredictionAdjustmentAsync(PredictionId, request, CancellationToken.None);
+            await OnCreated.InvokeAsync(submission.AdjustmentId);
+        }
+        catch (ApiProblemException problem)
+        {
+            Problem = problem;
+        }
+        finally
+        {
+            isSubmitting = false;
+        }
+    }
+
+    private static double? ParseDouble(string? value) =>
+        double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
+
+    public sealed class AssignmentRow
+    {
+        public string Selector { get; set; } = "gradient";
+        public string? MinGradientText { get; set; }
+        public string? MaxGradientText { get; set; }
+        public int Zone { get; set; } = 1;
+        public string Placement { get; set; } = "midpoint";
+    }
+}
