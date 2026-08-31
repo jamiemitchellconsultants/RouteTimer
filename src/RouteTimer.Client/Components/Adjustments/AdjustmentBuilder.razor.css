@@ -1,0 +1,80 @@
+.prediction-detail-panel {
+    display: grid;
+    gap: 0.85rem;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+    border: 1px solid #d8e0eb;
+    border-radius: 1rem;
+    background: #fff;
+    box-shadow: 0 14px 30px rgba(15, 23, 42, 0.06);
+}
+
+.prediction-detail-panel h2,
+.prediction-detail-panel p {
+    margin: 0;
+}
+
+.adjustment-strategy-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(28rem, 100%), 1fr));
+    gap: 1rem;
+    align-items: start;
+}
+
+.adjustment-strategy-card {
+    display: grid;
+    gap: 1rem;
+    min-width: 0;
+    padding: 1rem;
+    border: 1px solid #c9d5e5;
+    border-radius: 0.85rem;
+    background: #f8fbff;
+}
+
+.adjustment-strategy-card h3 {
+    margin: 0;
+    padding-bottom: 0.65rem;
+    border-bottom: 1px solid #d8e0eb;
+    color: #10243f;
+    font-size: 1.1rem;
+}
+
+.adjustment-strategy-card ::deep > div {
+    display: grid;
+    gap: 0.85rem;
+}
+
+.adjustment-strategy-card ::deep .prediction-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(12rem, 100%), 1fr));
+    gap: 0.75rem;
+}
+
+.adjustment-strategy-card ::deep .prediction-detail-grid > div {
+    display: grid;
+    gap: 0.3rem;
+    min-width: 0;
+    padding: 0.75rem;
+    border: 1px solid #d8e0eb;
+    border-radius: 0.7rem;
+    background: #fff;
+}
+
+.adjustment-strategy-card ::deep input:not([type="checkbox"]):not([type="range"]),
+.adjustment-strategy-card ::deep select {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid #b8c5d6;
+    border-radius: 0.4rem;
+    background: #fff;
+    font: inherit;
+}
+
+.adjustment-strategy-card ::deep .prediction-detail-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    align-items: center;
+}
