@@ -29,7 +29,7 @@
     {
         int rowIndex = index;
         var row = Windows[rowIndex];
-        <div class="prediction-detail-grid" data-testid="@($"match-burning-window-{rowIndex}")">
+        <div class="prediction-detail-grid" @key="row" data-testid="@($"match-burning-window-{rowIndex}")">
             <div>
                 <label for="@($"match-burning-selector-{rowIndex}")">Selector</label>
                 <select id="@($"match-burning-selector-{rowIndex}")" data-testid="@($"match-burning-selector-{rowIndex}")"
@@ -119,7 +119,7 @@
         <button type="button" class="predictions-button"
                 data-testid="match-burning-submit"
                 @onclick="SubmitAsync"
-                disabled="@(isSubmitting || Windows.Count == 0)">
+                disabled="@(isSubmitting || !IsValid)">
             Create match burning adjustment
         </button>
     </div>
@@ -149,6 +149,31 @@
 
     private ApiProblemException? Problem { get; set; }
     private bool isSubmitting;
+
+    /// <summary>
+    /// Blank means "use the default"; text that cannot be parsed means the rider mistyped. Treating the
+    /// second as the first would compute the adjustment from a number they never entered.
+    /// </summary>
+    private static bool IsBlankOrNumber(string? value) =>
+        string.IsNullOrWhiteSpace(value) || ParseDouble(value) is not null;
+
+    private static bool IsBlankOrInteger(string? value) =>
+        string.IsNullOrWhiteSpace(value) || ParseInt(value) is not null;
+
+    private bool IsValid =>
+        Windows.Count > 0
+        && IsBlankOrNumber(CpWattsText)
+        && IsBlankOrNumber(WPrimeJoulesText)
+        && IsBlankOrNumber(ConservationDurationText)
+        && IsBlankOrNumber(ConservationFractionText)
+        && IsBlankOrNumber(RecoveryDurationText)
+        && IsBlankOrNumber(RecoveryFractionText)
+        && Windows.All(row => row.Selector == "sequence"
+            ? IsBlankOrInteger(row.MinText) && IsBlankOrInteger(row.MaxText)
+            : IsBlankOrNumber(row.MinText) && IsBlankOrNumber(row.MaxText))
+        && Windows.All(row => row.Intensity == "cp-zone"
+            ? IsBlankOrInteger(row.ValueText)
+            : IsBlankOrNumber(row.ValueText));
 
     private void AddWindow()
     {

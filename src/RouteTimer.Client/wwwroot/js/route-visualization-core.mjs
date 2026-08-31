@@ -216,9 +216,19 @@ export function downsampleComparisonPoints(points, maximumPoints = 1500) {
     return [...mandatory].sort((left, right) => left - right).map(index => points[index]);
   }
 
+  // Spread the remaining budget over the points that are not already mandatory. Walking evenly over
+  // the whole range instead would stop as soon as the cap was reached, so when mandatory points are
+  // numerous the filler only ever covers the front of the route.
+  const optional = [];
+  for (let index = 0; index < points.length; index++) {
+    if (!mandatory.has(index)) optional.push(index);
+  }
+
   const selected = new Set(mandatory);
-  for (let slot = 0; slot < maximumPoints && selected.size < maximumPoints; slot++) {
-    selected.add(Math.round((slot * (points.length - 1)) / (maximumPoints - 1)));
+  const budget = maximumPoints - mandatory.size;
+  const stride = optional.length / budget;
+  for (let slot = 0; slot < budget; slot++) {
+    selected.add(optional[Math.min(optional.length - 1, Math.floor(slot * stride))]);
   }
 
   return [...selected].sort((left, right) => left - right).map(index => points[index]);

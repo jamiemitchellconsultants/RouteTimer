@@ -45,12 +45,20 @@ All of this is the `PacingStrategies` section. Every flag ships false.
 | `TimeTarget` | `false` | Per-strategy gate |
 | `RpeZoneShift` | `false` | Per-strategy gate |
 | `VariableMatchBurning` | `false` | Per-strategy gate |
-| `MaximumDefinitionBytes` | `65536` | Canonical strategy JSON limit, UTF-8 bytes |
-| `MaximumRules` | `10` | Rules, assignments, or windows per definition |
-| `MaximumPhases` | `10` | Phase entries per definition |
+| `MaximumDefinitionBytes` | `65536` | Advertised limit on canonical strategy JSON, UTF-8 bytes |
+| `MaximumRules` | `10` | Advertised limit on rules, assignments, or windows per definition |
+| `MaximumPhases` | `10` | Advertised only; no strategy currently has a separate phase list |
 
 A strategy is creatable only when the parent flag and its own flag are both true. The flags are an
 availability gate, not a validation boundary: server-side domain validation runs regardless.
+
+**The three limits are advertised metadata, not the enforcement point.** They are reported on
+`GET /api/pacing-strategies` so a client can size its editors, and nothing else reads them. The values
+actually enforced are compile-time domain constants: `PacingStrategyJson.MaximumBytes`,
+`SegmentGainsDefinition.MaximumRules`, `ZoneShiftDefinition.MaximumAssignments`, and
+`MatchBurningDefinition.MaximumWindows`. They agree with the defaults above, and must be kept in step by
+hand — lowering a configured value does not tighten validation, it only makes the capabilities response
+disagree with what the server will accept. `MaximumPhases` has no domain counterpart at all.
 
 ---
 

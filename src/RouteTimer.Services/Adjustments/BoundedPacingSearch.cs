@@ -3,21 +3,20 @@ using System.Collections.Generic;
 
 namespace RouteTimer.Services.Adjustments;
 
-public sealed record PacingSearchOptions(
-    double MinPowerMultiplier,
-    double MaxPowerMultiplier,
-    int CoarseGridPointCount = 9,
-    double ConvergenceToleranceSeconds = 30.0,
-    int MaximumEvaluations = 40);
-
 public static class BoundedPacingSearch
 {
+    /// <summary>
+    /// Drives <paramref name="evaluate"/> over a bounded parameter space and returns the parameter whose
+    /// value came closest to <paramref name="targetValue"/>. Never returns a candidate worse than one it
+    /// already evaluated: <paramref name="tolerance"/> only decides when to stop looking, never which
+    /// answer to keep, and has no default because its unit belongs to the caller.
+    /// </summary>
     public static double FindMultiplier(
         double minMultiplier,
         double maxMultiplier,
         double targetValue,
         Func<double, double> evaluate,
-        double tolerance = 30.0,
+        double tolerance,
         int maximumEvaluations = 40)
     {
         if (evaluate is null) throw new ArgumentNullException(nameof(evaluate));
@@ -70,12 +69,16 @@ public static class BoundedPacingSearch
                     bestDiff = diff;
                     bestMultiplier = m;
                 }
-
-                if (diff <= tolerance)
-                {
-                    return m;
-                }
             }
+        }
+
+        // The coarse grid always runs to completion. Returning the first point inside the tolerance
+        // instead would make a loose tolerance return an arbitrarily worse answer than one already
+        // evaluated - on a short route a 30-second tolerance accepted a scale further from the target
+        // than leaving the baseline alone.
+        if (bestDiff <= tolerance)
+        {
+            return bestMultiplier;
         }
 
         if (evaluatedGrid.Count == 0)

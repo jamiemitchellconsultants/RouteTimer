@@ -81,6 +81,10 @@ public static class WPrimeBalanceCalculator
                 firstInfeasibleSeq = seg.Sequence;
             }
 
+            // Latched deliberately: the raw balance keeps integrating underneath and may recover, but
+            // once a rider has run out mid-effort the rest of the plan is not something they could have
+            // ridden, so the displayed trace stays at zero rather than implying a recovery that never
+            // happened.
             bool isInfeasible = firstInfeasibleSeq is not null;
             double displayBalance = isInfeasible ? 0.0 : Math.Clamp(rawBalance, 0.0, wPrimeJoules);
 

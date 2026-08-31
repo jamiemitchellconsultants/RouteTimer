@@ -118,7 +118,9 @@ public sealed class TimeTargetHandler(IRoutePredictor routePredictor) : IPacingS
         // than leaving the baseline alone. Scale the tolerance to the target instead.
         double toleranceSeconds = ConvergenceToleranceSeconds(timeTargetDef.TargetMovingSeconds);
 
-        double foundScale = BoundedPacingSearch.FindMultiplier(
+        // Discarded deliberately: the search returns its best parameter, but this handler needs the
+        // PredictionResult that produced it, which the closure above already keeps.
+        _ = BoundedPacingSearch.FindMultiplier(
             0.3,
             4.0,
             timeTargetDef.TargetMovingSeconds,

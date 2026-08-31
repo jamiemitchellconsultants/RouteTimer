@@ -464,3 +464,21 @@ test("disposeProfiles destroys every chart it created", async () => {
   assert.ok(created.every(chart => chart.destroyed));
   assert.equal(charts.__profileChartsForTest("disposable"), undefined);
 });
+
+test("downsampleComparisonPoints spreads its filler across the whole route", () => {
+  // Many mandatory boundaries early on: a filler that walks the whole range and stops at the cap
+  // would leave the back of the route represented only by its boundary points.
+  const points = Array.from({ length: 4000 }, (_, index) => ({
+    sequence: index + 1,
+    zoneNumber: index < 1200 && index % 2 === 0 ? 2 : 5,
+    strategyPhase: null
+  }));
+
+  const sampled = downsampleComparisonPoints(points);
+  const secondHalf = sampled.filter(point => point.sequence > 2000).length;
+
+  assert.ok(sampled.length <= 1500);
+  assert.ok(
+    secondHalf > 100,
+    `only ${secondHalf} sampled points fell in the second half of the route`);
+});

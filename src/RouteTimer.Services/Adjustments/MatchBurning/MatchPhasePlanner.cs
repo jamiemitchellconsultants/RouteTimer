@@ -9,6 +9,12 @@ namespace RouteTimer.Services.Adjustments.MatchBurning;
 
 public sealed record MatchPhaseAssignment(int Sequence, MatchPhase Phase, int? BurnWindowIndex);
 
+/// <summary>
+/// <paramref name="WindowMatchCounts"/> counts every segment each window matched, so with overlapping
+/// windows the counts sum to more than the number of burn segments - a segment matched by two windows is
+/// counted by both, while its intensity comes from the first (see
+/// <paramref name="HasOverlappingBurnWindows"/>, which raises the overlap warning).
+/// </summary>
 public sealed record MatchPhasePlan(
     IReadOnlyDictionary<int, MatchPhaseAssignment> BySequence,
     IReadOnlyList<int> WindowMatchCounts,
@@ -97,14 +103,14 @@ public static class MatchPhasePlanner
 
                 if (definition.ConservationDurationSeconds > 0)
                 {
+                    // Stop at the previous burn block rather than walking through it: its segments are
+                    // not conservation candidates, and charging their duration to this block's budget
+                    // would silently shorten the conservation run-in.
                     double accSeconds = 0;
                     int walk = blockStart - 1;
-                    while (walk >= 0 && accSeconds < definition.ConservationDurationSeconds)
+                    while (walk >= 0 && !isBurn[walk] && accSeconds < definition.ConservationDurationSeconds)
                     {
-                        if (!isBurn[walk])
-                        {
-                            isConservationCandidate[walk] = true;
-                        }
+                        isConservationCandidate[walk] = true;
                         accSeconds += timing.Segments[walk].MovingTime.TotalSeconds;
                         walk--;
                     }
@@ -112,14 +118,12 @@ public static class MatchPhasePlanner
 
                 if (definition.RecoveryDurationSeconds > 0)
                 {
+                    // Same for the recovery run-out: the next burn block ends it.
                     double accSeconds = 0;
                     int walk = blockEnd + 1;
-                    while (walk < count && accSeconds < definition.RecoveryDurationSeconds)
+                    while (walk < count && !isBurn[walk] && accSeconds < definition.RecoveryDurationSeconds)
                     {
-                        if (!isBurn[walk])
-                        {
-                            isRecoveryCandidate[walk] = true;
-                        }
+                        isRecoveryCandidate[walk] = true;
                         accSeconds += timing.Segments[walk].MovingTime.TotalSeconds;
                         walk++;
                     }

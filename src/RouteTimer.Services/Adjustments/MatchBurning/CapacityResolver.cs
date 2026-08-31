@@ -16,6 +16,15 @@ public sealed record ResolvedMatchCapacity(
 
 public static class CapacityResolver
 {
+    /// <summary>
+    /// W' is inferred as the work done above critical power before exhaustion. The 0:30 gradient band's
+    /// typical watts is a sustained-effort figure rather than a sprint, so it is treated as holdable for
+    /// fifteen minutes. This is an assumption about the rider, not a measurement: a supplied W' always
+    /// wins, and an inferred one is reported with <see cref="CapacityProvenance.InferredModel"/> so the
+    /// reader knows which they are looking at.
+    /// </summary>
+    private const double InferredTimeToExhaustionSeconds = 900.0;
+
     public static ResolvedMatchCapacity Resolve(MatchBurningDefinition definition, PowerModel model)
     {
         if (definition is null) throw new ArgumentNullException(nameof(definition));
@@ -65,7 +74,7 @@ public static class CapacityResolver
             var shortClimbBand = model.Bands.FirstOrDefault(b => b.GradeKey == "1:3" && b.DurationKey == "0:30");
             if (shortClimbBand is not null && double.IsFinite(shortClimbBand.TypicalWatts) && shortClimbBand.TypicalWatts > cpWatts)
             {
-                double calculatedJoules = (shortClimbBand.TypicalWatts - cpWatts) * 900.0;
+                double calculatedJoules = (shortClimbBand.TypicalWatts - cpWatts) * InferredTimeToExhaustionSeconds;
                 if (double.IsFinite(calculatedJoules) && calculatedJoules > 0)
                 {
                     wPrimeJoules = Math.Clamp(calculatedJoules, 1000.0, 100000.0);

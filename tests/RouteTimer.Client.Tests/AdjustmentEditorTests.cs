@@ -193,6 +193,39 @@ public sealed class AdjustmentEditorTests : BunitContext
         Assert.Null(window.MinDistanceMetres);
     }
 
+    // Break caught: text that cannot be parsed is silently replaced by the field's default, so a
+    // mistyped conservation duration computes the adjustment from a number nobody entered.
+    [Theory]
+    [InlineData("match-burning-conservation-duration", "12O")]
+    [InlineData("match-burning-conservation-fraction", "point eight")]
+    [InlineData("match-burning-recovery-duration", "3OO")]
+    [InlineData("match-burning-recovery-fraction", "~0.7")]
+    [InlineData("match-burning-cp", "two fifty")]
+    [InlineData("match-burning-wprime", "20k")]
+    public void MatchBurning_submit_is_disabled_for_unparseable_input(string testId, string typo)
+    {
+        var cut = Render<MatchBurningEditor>(parameters => parameters.Add(editor => editor.PredictionId, predictionId));
+        Assert.False(cut.Find("[data-testid=match-burning-submit]").HasAttribute("disabled"));
+
+        cut.Find($"[data-testid={testId}]").Input(typo);
+
+        Assert.True(cut.Find("[data-testid=match-burning-submit]").HasAttribute("disabled"));
+    }
+
+    // Break caught: a mistyped gradient bound parses as null and submits an unbounded rule instead.
+    [Fact]
+    public void ZoneShift_submit_is_disabled_for_an_unparseable_gradient_bound()
+    {
+        var cut = Render<ZoneShiftEditor>(parameters => parameters.Add(editor => editor.PredictionId, predictionId));
+        cut.Find("[data-testid=zone-shift-add-assignment]").Click();
+        cut.Find("[data-testid=zone-shift-min-1]").Input("0.05");
+        Assert.False(cut.Find("[data-testid=zone-shift-submit]").HasAttribute("disabled"));
+
+        cut.Find("[data-testid=zone-shift-max-1]").Input("O.1");
+
+        Assert.True(cut.Find("[data-testid=zone-shift-submit]").HasAttribute("disabled"));
+    }
+
     [Fact]
     public void MatchBurning_leaves_capacity_blank_so_the_server_infers_it()
     {

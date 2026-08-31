@@ -35,7 +35,7 @@
     {
         int rowIndex = index;
         var row = Rows[rowIndex];
-        <div class="prediction-detail-grid" data-testid="@($"zone-shift-row-{rowIndex}")">
+        <div class="prediction-detail-grid" @key="row" data-testid="@($"zone-shift-row-{rowIndex}")">
             <div>
                 <label for="@($"zone-shift-selector-{rowIndex}")">Selector</label>
                 <select id="@($"zone-shift-selector-{rowIndex}")" data-testid="@($"zone-shift-selector-{rowIndex}")"
@@ -177,11 +177,15 @@
                 if (r.Zone < 1 || r.Zone > MaxZone) return false;
 
                 // A gradient row with neither bound set is rejected by the domain, so keep submit
-                // disabled rather than round-tripping to a guaranteed 400.
-                if (r.Selector == "gradient" &&
-                    ParseDouble(r.MinGradientText) is null && ParseDouble(r.MaxGradientText) is null)
+                // disabled rather than round-tripping to a guaranteed 400. Text that cannot be parsed
+                // is a mistyped bound, not an absent one: submitting it would silently widen the rule.
+                if (r.Selector == "gradient")
                 {
-                    return false;
+                    var minBlank = string.IsNullOrWhiteSpace(r.MinGradientText);
+                    var maxBlank = string.IsNullOrWhiteSpace(r.MaxGradientText);
+                    if (minBlank && maxBlank) return false;
+                    if (!minBlank && ParseDouble(r.MinGradientText) is null) return false;
+                    if (!maxBlank && ParseDouble(r.MaxGradientText) is null) return false;
                 }
             }
 

@@ -199,7 +199,53 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
         var predictType = JobType.PredictRoute.ToString();
         var adjustType = JobType.AdjustPrediction.ToString();
 
-        // 1. Lock baseline prediction row first to serialize with child adjustment creation.
+        // Lock order across this aggregate is analysis_jobs -> predictions -> prediction_adjustments
+        // -> stored_uploads, and every path that takes more than one of these must follow it.
+        // TryPublishAsync (baseline and child) and PredictionAdjustmentRepository.DeleteAsync all take
+        // their job row first, so acquiring anything else before the jobs here deadlocks against a
+        // worker publishing while a baseline is deleted. Reading the child ids is not a lock, so it can
+        // precede the jobs; only the FOR UPDATE ordering matters.
+        var childAdjustmentIds = await context.PredictionAdjustments.AsNoTracking()
+            .Where(entity => entity.PredictionId == predictionId)
+            .Select(entity => entity.Id)
+            .ToListAsync(cancellationToken);
+
+        // 1. Lock this baseline's own active job and every active job of its children. This serializes
+        //    cancellation/deletion with a worker's owner-guarded publication transaction.
+        List<Guid> jobIds;
+        if (context.Database.IsRelational())
+        {
+            if (childAdjustmentIds.Count > 0)
+            {
+                var adjArray = childAdjustmentIds.ToArray();
+                jobIds = await context.Database.SqlQuery<Guid>($"""
+                    SELECT "Id" AS "Value" FROM analysis_jobs
+                    WHERE ("SubjectId" = {predictionId} AND "Type" = {predictType} AND "State" IN ({queuedState}, {runningState}))
+                       OR ("SubjectId" = ANY({adjArray}) AND "Type" = {adjustType} AND "State" IN ({queuedState}, {runningState}))
+                    ORDER BY "Id"
+                    FOR UPDATE
+                    """).ToListAsync(cancellationToken);
+            }
+            else
+            {
+                jobIds = await context.Database.SqlQuery<Guid>($"""
+                    SELECT "Id" AS "Value" FROM analysis_jobs
+                    WHERE "SubjectId" = {predictionId} AND "Type" = {predictType} AND "State" IN ({queuedState}, {runningState})
+                    ORDER BY "Id"
+                    FOR UPDATE
+                    """).ToListAsync(cancellationToken);
+            }
+        }
+        else
+        {
+            jobIds = await context.Jobs
+                .Where(entity => (entity.SubjectId == predictionId && entity.Type == predictType && (entity.State == queuedState || entity.State == runningState)) ||
+                                 (childAdjustmentIds.Contains(entity.SubjectId) && entity.Type == adjustType && (entity.State == queuedState || entity.State == runningState)))
+                .Select(entity => entity.Id)
+                .ToListAsync(cancellationToken);
+        }
+
+        // 2. Lock the baseline row, which is what serializes against child adjustment creation.
         if (context.Database.IsRelational())
         {
             var matchingPrediction = await context.Database.SqlQuery<Guid>(
@@ -222,53 +268,16 @@ public sealed class PredictionRepository(RouteTimerDbContext context) : IPredict
             return false;
         }
 
-        // 2. Snapshot and lock child adjustment rows and active jobs in the same transaction.
-        List<Guid> childAdjustmentIds;
-        if (context.Database.IsRelational())
+        // 3. Lock the child rows the cascade will remove, so a concurrent child publish that already
+        //    passed its own job check cannot commit underneath the delete.
+        if (context.Database.IsRelational() && childAdjustmentIds.Count > 0)
         {
-            childAdjustmentIds = await context.Database.SqlQuery<Guid>($"""
+            await context.Database.SqlQuery<Guid>($"""
                 SELECT "Id" AS "Value" FROM prediction_adjustments
                 WHERE "PredictionId" = {predictionId}
+                ORDER BY "Id"
                 FOR UPDATE
                 """).ToListAsync(cancellationToken);
-        }
-        else
-        {
-            childAdjustmentIds = await context.PredictionAdjustments
-                .Where(a => a.PredictionId == predictionId)
-                .Select(a => a.Id)
-                .ToListAsync(cancellationToken);
-        }
-
-        List<Guid> jobIds;
-        if (context.Database.IsRelational())
-        {
-            if (childAdjustmentIds.Count > 0)
-            {
-                var adjArray = childAdjustmentIds.ToArray();
-                jobIds = await context.Database.SqlQuery<Guid>($"""
-                    SELECT "Id" AS "Value" FROM analysis_jobs
-                    WHERE ("SubjectId" = {predictionId} AND "Type" = {predictType} AND "State" IN ({queuedState}, {runningState}))
-                       OR ("SubjectId" = ANY({adjArray}) AND "Type" = {adjustType} AND "State" IN ({queuedState}, {runningState}))
-                    FOR UPDATE
-                    """).ToListAsync(cancellationToken);
-            }
-            else
-            {
-                jobIds = await context.Database.SqlQuery<Guid>($"""
-                    SELECT "Id" AS "Value" FROM analysis_jobs
-                    WHERE "SubjectId" = {predictionId} AND "Type" = {predictType} AND "State" IN ({queuedState}, {runningState})
-                    FOR UPDATE
-                    """).ToListAsync(cancellationToken);
-            }
-        }
-        else
-        {
-            jobIds = await context.Jobs
-                .Where(entity => (entity.SubjectId == predictionId && entity.Type == predictType && (entity.State == queuedState || entity.State == runningState)) ||
-                                 (childAdjustmentIds.Contains(entity.SubjectId) && entity.Type == adjustType && (entity.State == queuedState || entity.State == runningState)))
-                .Select(entity => entity.Id)
-                .ToListAsync(cancellationToken);
         }
 
         var uploadId = prediction.UploadId;

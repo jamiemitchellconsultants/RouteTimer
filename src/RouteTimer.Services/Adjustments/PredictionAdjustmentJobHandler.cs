@@ -89,7 +89,13 @@ public sealed class PredictionAdjustmentJobHandler(
         var publication = BuildPublication(route, computation, handler);
         var workerId = job.WorkerId ?? throw new InvalidOperationException("A claimed adjustment job is required.");
         await progress.ReportAsync(job, 90, JobProgressStages.Publishing, cancellationToken);
-        await adjustments.TryPublishAsync(adjustment.Id, job.Id, workerId, publication, cancellationToken);
+        // False means this worker no longer owns the adjustment - its lease expired, the baseline was
+        // deleted underneath it, or the child already reached a terminal state - so the result is
+        // discarded rather than written over whoever does own it. Mirrors PredictionJobHandler.
+        if (!await adjustments.TryPublishAsync(adjustment.Id, job.Id, workerId, publication, cancellationToken))
+        {
+            return;
+        }
     }
 
     private static (PredictionRoute Route, PredictionResult Baseline) MapBaseline(PredictionDetail baseline)

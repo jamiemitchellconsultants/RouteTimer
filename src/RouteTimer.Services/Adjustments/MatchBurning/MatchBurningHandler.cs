@@ -42,7 +42,7 @@ public sealed class MatchBurningHandler(IRoutePredictor routePredictor) : IPacin
         var plan1 = MatchPhasePlanner.Plan(context.Route, context.Baseline, definition);
         var policy1 = new MatchBurningPolicy(definition, capacity, plan1, cpZones);
 
-        var firstAdjusted = routePredictor.Predict(context.Route, context.Profile, context.Model, policy1, cancellationToken);
+        var firstAdjusted = Replay(context, policy1, cancellationToken);
 
         bool refinementRan = false;
         bool refinementChanged = false;
@@ -58,7 +58,7 @@ public sealed class MatchBurningHandler(IRoutePredictor routePredictor) : IPacin
                 refinementChanged = true;
                 finalPlan = plan2;
                 var policy2 = new MatchBurningPolicy(definition, capacity, plan2, cpZones);
-                finalAdjusted = routePredictor.Predict(context.Route, context.Profile, context.Model, policy2, cancellationToken);
+                finalAdjusted = Replay(context, policy2, cancellationToken);
             }
         }
 
@@ -166,6 +166,24 @@ public sealed class MatchBurningHandler(IRoutePredictor routePredictor) : IPacin
             annotations,
             warnings,
             AlgorithmVersion);
+    }
+
+    /// <summary>
+    /// Unlike the searching handlers, match-burning has a single shot: there is no next candidate to
+    /// fall back to. A replay that cannot make progress is almost always a phase target too low to hold
+    /// the gradient, so say which target rather than letting a bare physics error reach the job log.
+    /// </summary>
+    private PredictionResult Replay(PacingStrategyContext context, MatchBurningPolicy policy, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return routePredictor.Predict(context.Route, context.Profile, context.Model, policy, cancellationToken);
+        }
+        catch (PredictionCalculationException exception)
+        {
+            throw new PredictionCalculationException(
+                "Match-burning phase targets are too low to complete this route: " + exception.Message);
+        }
     }
 
     private static bool HasPlanChanged(MatchPhasePlan plan1, MatchPhasePlan plan2)

@@ -98,12 +98,16 @@ public sealed class NpIfTargetHandler(IRoutePredictor routePredictor) : IPacingS
         double minParam = npIfDef.Mode == NpIfScalingMode.Proportional ? 0.1 : -2000.0;
         double maxParam = npIfDef.Mode == NpIfScalingMode.Proportional ? 5.0 : 2000.0;
 
-        double foundParam = BoundedPacingSearch.FindMultiplier(
+        // The search's return value is the best parameter it evaluated; this handler needs the
+        // PredictionResult that went with it, which the closure above already keeps, so the parameter
+        // itself is redundant here.
+        double toleranceWatts = ConvergenceToleranceWatts(targetNp);
+        _ = BoundedPacingSearch.FindMultiplier(
             minParam,
             maxParam,
             targetNp,
             EvaluateParameter,
-            0.5);
+            toleranceWatts);
 
         if (bestResult is null)
         {
@@ -112,7 +116,7 @@ public sealed class NpIfTargetHandler(IRoutePredictor routePredictor) : IPacingS
 
         double achievedSeconds = bestResult.MovingTime.TotalSeconds;
         double absoluteMiss = Math.Abs(bestAchievedNp - targetNp);
-        bool converged = absoluteMiss <= 0.5;
+        bool converged = absoluteMiss <= toleranceWatts;
         bool bracketed = fastestBound is not null && slowestBound is not null;
 
         var warnings = new List<string>();
@@ -167,6 +171,14 @@ public sealed class NpIfTargetHandler(IRoutePredictor routePredictor) : IPacingS
             warnings,
             AlgorithmVersion);
     }
+
+    /// <summary>
+    /// A quarter of a percent of the target, never tighter than half a watt. A flat absolute figure
+    /// would demand 0.017% precision of a 3000 W target and spend the whole evaluation budget failing
+    /// to reach it. Mirrors <c>TimeTargetHandler.ConvergenceToleranceSeconds</c>.
+    /// </summary>
+    internal static double ConvergenceToleranceWatts(double targetNormalizedPowerWatts) =>
+        Math.Max(0.5, targetNormalizedPowerWatts * 0.0025);
 
     private static (double AverageSpeedMetresPerSecond, double AveragePowerWatts) RouteAverages(PredictionRoute route, PredictionResult result)
     {

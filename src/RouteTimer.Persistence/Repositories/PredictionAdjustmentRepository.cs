@@ -90,6 +90,7 @@ public sealed class PredictionAdjustmentRepository(RouteTimerDbContext context) 
                 """).ToListAsync(cancellationToken);
             if (matchingJob.Count == 0)
             {
+                if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
                 return false;
             }
         }
