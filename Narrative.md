@@ -17,6 +17,7 @@ This document records what was asked, what was decided, why, and what followed.
 | [7](#entry-docs-split-pacing-adjustment-plan-into-per-task-files) | 2026-08-29 | docs: split pacing adjustment plan into per-task files | product | Split the plan into a `README.md` (goal, architecture, constraints, target file map, task index, and execution checkpoints) plus one Markdown file per task, each self-contained with its own file list, TDD steps, and commit command. |
 | [8](#entry-docs-add-implementation-ready-pacing-tasks-9-16) | 2026-08-30 | docs: add implementation-ready pacing tasks 9-16 | product | Keep the original plan files unchanged and add a sibling refined-tasks directory. |
 | [9](#entry-complete-pacing-strategy-adjustments-tasks-09-16) | 2026-08-31 | Complete pacing strategy adjustments tasks 09-16 | product | Complete tasks 14-16, restore the jobs-first lock order in baseline deletion, and floor a power-limited segment instead of failing the whole route. |
+| [10](#entry-enable-pacing-adjustments-by-default) | 2026-08-31 | Enable pacing adjustments by default | product | Enable the parent pacing-adjustment gate and all five delivered strategy gates in the default API configuration: segment-specific gains, NP/IF target, time target, RPE/zone shift, and variable match-burning. |
 
 ---
 
@@ -330,3 +331,23 @@ An adjustment is now visible: baseline and adjustment power and speed as two lin
 Two behaviours changed that were not merely untested: a duplicate delivery now returns false, and a request omitting a collection now returns 400. Anything depending on republishing over a succeeded child stops working, which is the intent.
 
 Deliberately left open. The historical evidence rows in `backtesting.md` stay unfilled and marked "Not yet run" — fabricating them as CI would be worse than their absence. The matrix's `flat-long` row asks for both 120 x 100 m and over 30 minutes, which is unreachable at plausible power; `mountainous` carries the duration-band coverage instead and the deviation is recorded. The three configured limits (`MaximumDefinitionBytes`, `MaximumRules`, `MaximumPhases`) remain advertised metadata that must be kept in step with the domain constants by hand, and `MaximumPhases` has no domain counterpart at all.
+
+---
+
+<a id="entry-enable-pacing-adjustments-by-default"></a>
+
+## Entry 10 — 2026-08-31 — Enable pacing adjustments by default
+
+*Kind: product. Status: accepted.*
+
+## Context
+
+The pacing-adjustment architecture, API, five strategy implementations, UI editors, visualization, validation, and backtesting are present, but the checked-in API configuration still disables the parent capability and every individual strategy. As a result, the capability endpoint reports the feature unavailable and the client hides adjustment creation despite the completed vertical slices.
+
+## Decision
+
+Enable the parent pacing-adjustment gate and all five delivered strategy gates in the default API configuration: segment-specific gains, NP/IF target, time target, RPE/zone shift, and variable match-burning. Keep the existing per-strategy override mechanism and request-size, rule-count, and phase-count safety limits unchanged. A partial rollout was rejected because all five strategies are delivered and the requested product state is to enable pacing adjustments rather than expose only a subset.
+
+## Consequences
+
+Default deployments now advertise pacing adjustments and allow riders to create each supported adjustment type from successful baseline predictions. Operators can still disable the entire capability or individual strategies through configuration overrides. Adjustment calculations may increase worker CPU usage when riders submit them; the existing bounds and independent feature flags remain available for operational control. API regression tests now protect the intended default while explicitly testing both parent-level and per-strategy rollback behavior.
