@@ -1,7 +1,7 @@
 # AI-Supported Route-Time Prediction Design
 
 **Date:** 2026-08-31
-**Status:** Approved in design review; awaiting review of this written specification
+**Status:** Approved
 
 ## Purpose
 
