@@ -2,7 +2,7 @@
 date: 2026-08-31
 slug: complete-pacing-strategy-adjustments-tasks-09-16
 title: "Complete pacing strategy adjustments tasks 09-16"
-summary: "Deliver task 14 as specified across its nine files."
+summary: "Complete tasks 14-16, restore the jobs-first lock order in baseline deletion, and floor a power-limited segment instead of failing the whole route."
 kind: product
 status: accepted
 sequence: 2026-08-31T04:46:11.000Z

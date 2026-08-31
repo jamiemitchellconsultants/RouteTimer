@@ -16,7 +16,7 @@ This document records what was asked, what was decided, why, and what followed.
 | [6](#entry-chore-remove-the-open-in-pacetracker-handoff) | 2026-08-29 | chore: remove the Open in PaceTracker handoff | product | Remove the endpoints, options and validator, the relay client, both invocation signers, the QR interop and component, the contracts, the six error codes, and every test covering them. `qrcode` and `esbuild` go with it. |
 | [7](#entry-docs-split-pacing-adjustment-plan-into-per-task-files) | 2026-08-29 | docs: split pacing adjustment plan into per-task files | product | Split the plan into a `README.md` (goal, architecture, constraints, target file map, task index, and execution checkpoints) plus one Markdown file per task, each self-contained with its own file list, TDD steps, and commit command. |
 | [8](#entry-docs-add-implementation-ready-pacing-tasks-9-16) | 2026-08-30 | docs: add implementation-ready pacing tasks 9-16 | product | Keep the original plan files unchanged and add a sibling refined-tasks directory. |
-| [9](#entry-complete-pacing-strategy-adjustments-tasks-09-16) | 2026-08-31 | Complete pacing strategy adjustments tasks 09-16 | product | Deliver task 14 as specified across its nine files. |
+| [9](#entry-complete-pacing-strategy-adjustments-tasks-09-16) | 2026-08-31 | Complete pacing strategy adjustments tasks 09-16 | product | Complete tasks 14-16, restore the jobs-first lock order in baseline deletion, and floor a power-limited segment instead of failing the whole route. |
 
 ---
 
