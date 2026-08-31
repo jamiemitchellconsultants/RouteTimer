@@ -181,7 +181,8 @@ public partial class PredictionAdjustmentEndpointTests
     [Fact]
     public async Task Stored_adjustments_remain_readable_after_their_strategy_flag_is_disabled()
     {
-        await using var app = CreateRiderApp();
+        await using var app = CreateRiderApp()
+            .WithSetting("PacingStrategies:TimeTarget", "false");
         var predictionId = await SeedSucceededBaselineAsync(app.Services);
         var adjustmentId = await SeedAdjustmentAsync(app.Services, predictionId);
         using var client = app.CreateClient();
