@@ -19,6 +19,7 @@ This document records what was asked, what was decided, why, and what followed.
 | [9](#entry-complete-pacing-strategy-adjustments-tasks-09-16) | 2026-08-31 | Complete pacing strategy adjustments tasks 09-16 | product | Complete tasks 14-16, restore the jobs-first lock order in baseline deletion, and floor a power-limited segment instead of failing the whole route. |
 | [10](#entry-enable-pacing-adjustments-by-default) | 2026-08-31 | Enable pacing adjustments by default | product | Enable the parent pacing-adjustment gate and all five delivered strategy gates in the default API configuration: segment-specific gains, NP/IF target, time target, RPE/zone shift, and variable match-burning. |
 | [11](#entry-docs-design-weather-aware-training-interpretation) | 2026-08-31 | docs: design weather-aware training interpretation | product | Use Open-Meteo archive observations for all existing and future training rides, persisted beside immutable activity evidence and resolved by route position and sample time. |
+| [12](#entry-add-granular-climb-focus-and-adjustment-card-grid) | 2026-08-31 | Add granular climb focus and adjustment card grid | product | Expose an integer climb-focus scale from 0 through 5. Level 0 submits the existing proportional mode with no bias; levels 1 through 5 submit climb-focused mode with linear biases of 1.2, 1.4, 1.6, 1.8, and 2.0. |
 
 ---
 
@@ -374,3 +375,23 @@ Rejected alternatives include scaling recorded watts, applying current weather t
 ## Consequences
 
 Representative route coordinates and times are disclosed to the configured Open-Meteo-compatible provider. Model publication waits for otherwise-eligible pending weather evidence while the previous model remains active. Failed or unavailable weather evidence is visible and excluded. Legacy predictions retain baseline downloads but must be recreated before forecast adjustment. The additive weather schema and historical observations require backup and operational monitoring, while forecast results remain ephemeral.
+
+---
+
+<a id="entry-add-granular-climb-focus-and-adjustment-card-grid"></a>
+
+## Entry 12 — 2026-08-31 — Add granular climb focus and adjustment card grid
+
+*Kind: product. Status: accepted.*
+
+## Context
+
+The time-target editor exposed only a binary proportional/climb-focused choice before revealing a technical bias field. Riders need a simpler, more granular control, and the five adjustment editors need clearer visual boundaries so their controls and submit actions are easier to associate.
+
+## Decision
+
+Expose an integer climb-focus scale from 0 through 5. Level 0 submits the existing proportional mode with no bias; levels 1 through 5 submit climb-focused mode with linear biases of 1.2, 1.4, 1.6, 1.8, and 2.0. Keep the existing API and persisted strategy contract unchanged by performing this translation in the client. Render enabled adjustment types as labelled cards in a responsive two-column grid that collapses to one column on narrower screens.
+
+## Consequences
+
+Riders gain six deterministic levels ranging from proportional to the existing maximum climb focus without entering algorithm-specific values. Existing requests and stored adjustments remain compatible, and no migration is required. The UI deliberately abstracts the exact bias values; changing the scale later would require a new product decision because the displayed level now carries stable meaning.
