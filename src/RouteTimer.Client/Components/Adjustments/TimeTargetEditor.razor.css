@@ -1,0 +1,25 @@
+.time-target-climb-focus input[type="range"] {
+    width: 100%;
+    accent-color: #1b6ec2;
+}
+
+.time-target-climb-focus output {
+    color: #10243f;
+    font-weight: 700;
+}
+
+.time-target-climb-focus-scale {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    color: #5b6778;
+    font-size: 0.8rem;
+}
+
+.time-target-climb-focus-scale span:last-child {
+    text-align: right;
+}
+
+.time-target-climb-focus small {
+    color: #5b6778;
+}

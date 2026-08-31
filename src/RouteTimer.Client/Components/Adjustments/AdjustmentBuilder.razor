@@ -15,30 +15,47 @@
     {
         <p data-testid="adjustment-builder-available">Available strategies: @string.Join(", ", EnabledStrategyNames)</p>
 
-        @if (Capabilities.SegmentSpecificGains)
-        {
-            <SegmentGainsEditor PredictionId="PredictionId" OnCreated="submission => OnAdjustmentCreated.InvokeAsync(submission)" />
-        }
+        <div class="adjustment-strategy-grid" data-testid="adjustment-strategy-grid">
+            @if (Capabilities.SegmentSpecificGains)
+            {
+                <section class="adjustment-strategy-card" data-testid="adjustment-card-segment-gains">
+                    <h3>Segment-specific gains</h3>
+                    <SegmentGainsEditor PredictionId="PredictionId" OnCreated="submission => OnAdjustmentCreated.InvokeAsync(submission)" />
+                </section>
+            }
 
-        @if (Capabilities.NpIfTarget)
-        {
-            <NpIfTargetEditor PredictionId="PredictionId" OnCreated="submission => OnAdjustmentCreated.InvokeAsync(submission)" />
-        }
+            @if (Capabilities.NpIfTarget)
+            {
+                <section class="adjustment-strategy-card" data-testid="adjustment-card-np-if">
+                    <h3>NP/IF target</h3>
+                    <NpIfTargetEditor PredictionId="PredictionId" OnCreated="submission => OnAdjustmentCreated.InvokeAsync(submission)" />
+                </section>
+            }
 
-        @if (Capabilities.TimeTarget)
-        {
-            <TimeTargetEditor PredictionId="PredictionId" OnCreated="submission => OnAdjustmentCreated.InvokeAsync(submission)" />
-        }
+            @if (Capabilities.TimeTarget)
+            {
+                <section class="adjustment-strategy-card" data-testid="adjustment-card-time-target">
+                    <h3>Time target</h3>
+                    <TimeTargetEditor PredictionId="PredictionId" OnCreated="submission => OnAdjustmentCreated.InvokeAsync(submission)" />
+                </section>
+            }
 
-        @if (Capabilities.RpeZoneShift)
-        {
-            <ZoneShiftEditor PredictionId="PredictionId" OnCreated="submission => OnAdjustmentCreated.InvokeAsync(submission)" />
-        }
+            @if (Capabilities.RpeZoneShift)
+            {
+                <section class="adjustment-strategy-card" data-testid="adjustment-card-zone-shift">
+                    <h3>RPE/zone shift</h3>
+                    <ZoneShiftEditor PredictionId="PredictionId" OnCreated="submission => OnAdjustmentCreated.InvokeAsync(submission)" />
+                </section>
+            }
 
-        @if (Capabilities.VariableMatchBurning)
-        {
-            <MatchBurningEditor PredictionId="PredictionId" OnCreated="submission => OnAdjustmentCreated.InvokeAsync(submission)" />
-        }
+            @if (Capabilities.VariableMatchBurning)
+            {
+                <section class="adjustment-strategy-card" data-testid="adjustment-card-match-burning">
+                    <h3>Variable match-burning</h3>
+                    <MatchBurningEditor PredictionId="PredictionId" OnCreated="submission => OnAdjustmentCreated.InvokeAsync(submission)" />
+                </section>
+            }
+        </div>
     }
 </section>
 
