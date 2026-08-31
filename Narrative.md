@@ -18,6 +18,7 @@ This document records what was asked, what was decided, why, and what followed.
 | [8](#entry-docs-add-implementation-ready-pacing-tasks-9-16) | 2026-08-30 | docs: add implementation-ready pacing tasks 9-16 | product | Keep the original plan files unchanged and add a sibling refined-tasks directory. |
 | [9](#entry-complete-pacing-strategy-adjustments-tasks-09-16) | 2026-08-31 | Complete pacing strategy adjustments tasks 09-16 | product | Complete tasks 14-16, restore the jobs-first lock order in baseline deletion, and floor a power-limited segment instead of failing the whole route. |
 | [10](#entry-enable-pacing-adjustments-by-default) | 2026-08-31 | Enable pacing adjustments by default | product | Enable the parent pacing-adjustment gate and all five delivered strategy gates in the default API configuration: segment-specific gains, NP/IF target, time target, RPE/zone shift, and variable match-burning. |
+| [11](#entry-docs-design-weather-aware-training-interpretation) | 2026-08-31 | docs: design weather-aware training interpretation | product | Use Open-Meteo archive observations for all existing and future training rides, persisted beside immutable activity evidence and resolved by route position and sample time. |
 
 ---
 
@@ -351,3 +352,25 @@ Enable the parent pacing-adjustment gate and all five delivered strategy gates i
 ## Consequences
 
 Default deployments now advertise pacing adjustments and allow riders to create each supported adjustment type from successful baseline predictions. Operators can still disable the entire capability or individual strategies through configuration overrides. Adjustment calculations may increase worker CPU usage when riders submit them; the existing bounds and independent feature flags remain available for operational control. API regression tests now protect the intended default while explicitly testing both parent-level and per-strategy rollback behavior.
+
+---
+
+<a id="entry-docs-design-weather-aware-training-interpretation"></a>
+
+## Entry 11 — 2026-08-31 — docs: design weather-aware training interpretation
+
+*Kind: product. Status: accepted.*
+
+## Context
+
+Training rides are currently interpreted as though they occurred in calm, dry reference conditions. Wind, air density, and precipitation can therefore bias physical calibration, descent learning, and validation. The feature must correct historical training evidence without changing recorded samples or applying weather automatically to ordinary predictions.
+
+## Decision
+
+Use Open-Meteo archive observations for all existing and future training rides, persisted beside immutable activity evidence and resolved by route position and sample time. Rebuild rider models from dry calm-reference interpretations of wind, temperature, pressure, and precipitation. Keep ordinary predictions calm and dry. Offer current weather only through an opt-in timed-GPX download that performs a transient route-time forecast recomputation and persists nothing.
+
+Rejected alternatives include scaling recorded watts, applying current weather to stored predictions, silently falling back to baseline bytes after forecast failure, and querying weather at every recorded point.
+
+## Consequences
+
+Representative route coordinates and times are disclosed to the configured Open-Meteo-compatible provider. Model publication waits for otherwise-eligible pending weather evidence while the previous model remains active. Failed or unavailable weather evidence is visible and excluded. Legacy predictions retain baseline downloads but must be recreated before forecast adjustment. The additive weather schema and historical observations require backup and operational monitoring, while forecast results remain ephemeral.
