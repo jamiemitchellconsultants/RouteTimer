@@ -72,4 +72,25 @@ public sealed class AdjustmentBuilderTests : BunitContext
         Assert.NotNull(cut.Find("[data-testid=zone-shift-editor]"));
         Assert.NotNull(cut.Find("[data-testid=match-burning-editor]"));
     }
+
+    // Break caught: editor forms run together without a labelled visual boundary, making it unclear
+    // which controls and submit button belong to each adjustment type.
+    [Theory]
+    [InlineData("segment-gains", "Segment-specific gains", "segment-gains-editor")]
+    [InlineData("np-if", "NP/IF target", "np-if-editor")]
+    [InlineData("time-target", "Time target", "time-target-editor")]
+    [InlineData("zone-shift", "RPE/zone shift", "zone-shift-editor")]
+    [InlineData("match-burning", "Variable match-burning", "match-burning-editor")]
+    public void Every_editor_is_rendered_in_its_own_labelled_strategy_card(
+        string cardName,
+        string heading,
+        string editorTestId)
+    {
+        var cut = RenderBuilder(Capabilities(true, true, true, true, true));
+
+        Assert.NotNull(cut.Find("[data-testid=adjustment-strategy-grid]"));
+        var card = cut.Find($"[data-testid=adjustment-card-{cardName}]");
+        Assert.Equal(heading, card.QuerySelector("h3")?.TextContent.Trim());
+        Assert.NotNull(card.QuerySelector($"[data-testid={editorTestId}]"));
+    }
 }

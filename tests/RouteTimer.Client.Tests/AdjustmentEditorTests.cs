@@ -100,7 +100,33 @@ public sealed class AdjustmentEditorTests : BunitContext
     }
 
     [Fact]
-    public void TimeTarget_submits_the_duration_as_seconds_and_omits_climb_bias_when_proportional()
+    public void TimeTarget_renders_a_six_step_climb_focus_scale()
+    {
+        var cut = Render<TimeTargetEditor>(parameters => parameters.Add(editor => editor.PredictionId, predictionId));
+
+        var scale = cut.Find("[data-testid=time-target-climb-focus]");
+
+        Assert.Equal("range", scale.GetAttribute("type"));
+        Assert.Equal("0", scale.GetAttribute("min"));
+        Assert.Equal("5", scale.GetAttribute("max"));
+        Assert.Equal("1", scale.GetAttribute("step"));
+        Assert.Contains("Proportional", cut.Find("[data-testid=time-target-climb-focus-scale]").TextContent);
+        Assert.Contains("Climb focused", cut.Find("[data-testid=time-target-climb-focus-scale]").TextContent);
+    }
+
+    // Break caught: a scale level is translated to the wrong distribution or climb bias, so the
+    // algorithm applies a different amount of climb focus from the value shown to the rider.
+    [Theory]
+    [InlineData("0", "proportional", null)]
+    [InlineData("1", "climb-focused", 1.2)]
+    [InlineData("2", "climb-focused", 1.4)]
+    [InlineData("3", "climb-focused", 1.6)]
+    [InlineData("4", "climb-focused", 1.8)]
+    [InlineData("5", "climb-focused", 2.0)]
+    public void TimeTarget_maps_climb_focus_level_to_the_submitted_bias(
+        string level,
+        string expectedDistribution,
+        double? expectedClimbBias)
     {
         TimeTargetRequest? captured = null;
         api.OnCreatePredictionAdjustmentAsync = (_, request, _) =>
@@ -111,40 +137,14 @@ public sealed class AdjustmentEditorTests : BunitContext
 
         var cut = Render<TimeTargetEditor>(parameters => parameters.Add(editor => editor.PredictionId, predictionId));
         cut.Find("[data-testid=time-target-duration]").Input("02:30:45");
+        cut.Find("[data-testid=time-target-climb-focus]").Input(level);
 
         cut.Find("[data-testid=time-target-submit]").Click();
 
         Assert.NotNull(captured);
         Assert.Equal(9045, captured.TargetMovingSeconds);
-        Assert.Equal("proportional", captured.Distribution);
-        Assert.Null(captured.ClimbBias);
-    }
-
-    // Break caught: switching to climb-focused submits a null bias the server must reject, or leaves a
-    // stale bias behind after switching back.
-    [Fact]
-    public void TimeTarget_carries_a_climb_bias_only_while_climb_focused()
-    {
-        TimeTargetRequest? captured = null;
-        api.OnCreatePredictionAdjustmentAsync = (_, request, _) =>
-        {
-            captured = Assert.IsType<TimeTargetRequest>(request);
-            return Task.FromResult(new PredictionAdjustmentSubmissionResponse(Guid.NewGuid(), Guid.NewGuid(), predictionId));
-        };
-
-        var cut = Render<TimeTargetEditor>(parameters => parameters.Add(editor => editor.PredictionId, predictionId));
-        cut.Find("[data-testid=time-target-distribution]").Change("climb-focused");
-        cut.Find("[data-testid=time-target-submit]").Click();
-
-        Assert.NotNull(captured);
-        Assert.Equal("climb-focused", captured.Distribution);
-        Assert.NotNull(captured.ClimbBias);
-
-        cut.Find("[data-testid=time-target-distribution]").Change("proportional");
-        cut.Find("[data-testid=time-target-submit]").Click();
-
-        Assert.Equal("proportional", captured.Distribution);
-        Assert.Null(captured.ClimbBias);
+        Assert.Equal(expectedDistribution, captured.Distribution);
+        Assert.Equal(expectedClimbBias, captured.ClimbBias);
     }
 
     [Fact]

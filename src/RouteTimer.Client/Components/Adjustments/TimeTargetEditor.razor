@@ -22,22 +22,22 @@
                 <span class="prediction-detail-list" style="color: var(--danger-color, red);">@DurationError</span>
             }
         </div>
-        <div>
-            <label for="time-target-distribution">Distribution</label>
-            <select id="time-target-distribution" data-testid="time-target-distribution"
-                    value="@Distribution" @onchange="OnDistributionChanged">
-                <option value="proportional">Proportional</option>
-                <option value="climb-focused">Climb Focused</option>
-            </select>
-        </div>
-        @if (Distribution == "climb-focused")
-        {
-            <div>
-                <label for="time-target-climb-bias">Climb Bias (1.0 - 2.0)</label>
-                <input id="time-target-climb-bias" data-testid="time-target-climb-bias"
-                       value="@ClimbBiasText" @oninput="e => ClimbBiasText = e.Value?.ToString()" />
+        <div class="time-target-climb-focus">
+            <label for="time-target-climb-focus">
+                Climb focus: <output for="time-target-climb-focus">@ClimbFocusLevel</output>
+            </label>
+            <input type="range" id="time-target-climb-focus" data-testid="time-target-climb-focus"
+                   min="0" max="5" step="1" value="@ClimbFocusLevel"
+                   aria-describedby="time-target-climb-focus-help"
+                   @oninput="OnClimbFocusChanged" />
+            <div class="time-target-climb-focus-scale" data-testid="time-target-climb-focus-scale" aria-hidden="true">
+                <span>0 · Proportional</span>
+                <span>5 · Climb focused</span>
             </div>
-        }
+            <small id="time-target-climb-focus-help">
+                Higher values shift more of the effort towards climbs.
+            </small>
+        </div>
         <div>
             <label for="time-target-feasibility">Include Feasibility Report</label>
             <input type="checkbox" id="time-target-feasibility" data-testid="time-target-feasibility"
@@ -63,8 +63,7 @@
     public EventCallback<PredictionAdjustmentSubmissionResponse> OnCreated { get; set; }
 
     private string TargetDurationText { get; set; } = "01:00:00";
-    private string Distribution { get; set; } = "proportional";
-    private string? ClimbBiasText { get; set; }
+    private int ClimbFocusLevel { get; set; }
     private bool IncludeFeasibility { get; set; } = true;
 
     private ApiProblemException? Problem { get; set; }
@@ -94,16 +93,12 @@
         }
     }
 
-    private void OnDistributionChanged(ChangeEventArgs e)
+    private void OnClimbFocusChanged(ChangeEventArgs e)
     {
-        Distribution = e.Value?.ToString() ?? "proportional";
-        if (Distribution == "proportional")
+        if (int.TryParse(e.Value?.ToString(), NumberStyles.None, CultureInfo.InvariantCulture, out var level) &&
+            level is >= 0 and <= 5)
         {
-            ClimbBiasText = null;
-        }
-        else if (string.IsNullOrWhiteSpace(ClimbBiasText))
-        {
-            ClimbBiasText = "1.5";
+            ClimbFocusLevel = level;
         }
     }
 
@@ -116,21 +111,24 @@
             return;
         }
 
-        double? climbBias = null;
-        if (Distribution == "climb-focused")
+        var distribution = ClimbFocusLevel == 0 ? "proportional" : "climb-focused";
+        double? climbBias = ClimbFocusLevel switch
         {
-            if (double.TryParse(ClimbBiasText, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedBias))
-            {
-                climbBias = parsedBias;
-            }
-        }
+            0 => null,
+            1 => 1.2,
+            2 => 1.4,
+            3 => 1.6,
+            4 => 1.8,
+            5 => 2.0,
+            _ => null,
+        };
 
         isSubmitting = true;
         try
         {
             var request = new TimeTargetRequest(
                 totalSeconds,
-                Distribution,
+                distribution,
                 climbBias,
                 IncludeFeasibility);
 
