@@ -4,11 +4,14 @@ using Bunit;
 using Bunit.JSInterop;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Time.Testing;
 using RouteTimer.Client.Api;
+using RouteTimer.Client.Jobs;
 using RouteTimer.Client.Pages;
 using RouteTimer.Client.RouteBuilder;
 using RouteTimer.Client.Tests.Fakes;
 using RouteTimer.Contracts.Adjustments;
+using RouteTimer.Contracts.Jobs;
 using RouteTimer.Contracts.Predictions;
 
 namespace RouteTimer.Client.Tests;
@@ -16,10 +19,12 @@ namespace RouteTimer.Client.Tests;
 public sealed class PredictionAdjustmentShellTests : BunitContext
 {
     private readonly FakeRouteTimerApiClient api = new();
+    private readonly FakeTimeProvider time = new();
 
     public PredictionAdjustmentShellTests()
     {
         Services.AddSingleton<IRouteTimerApiClient>(api);
+        Services.AddScoped<JobPoller>();
         Services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -28,7 +33,7 @@ public sealed class PredictionAdjustmentShellTests : BunitContext
             })
             .Build());
         Services.AddSingleton(new BrowserInterop(JSInterop.JSRuntime));
-        Services.AddSingleton<TimeProvider>(TimeProvider.System);
+        Services.AddSingleton<TimeProvider>(time);
         var qr = JSInterop.SetupModule("./js/pace-tracker-qr.mjs");
         qr.SetupVoid("render", _ => true).SetVoidResult();
         qr.SetupVoid("clear", _ => true).SetVoidResult();
@@ -217,6 +222,42 @@ public sealed class PredictionAdjustmentShellTests : BunitContext
         Assert.NotNull(cut.Find($"[data-testid=adjustment-card-{sibling.Id}]"));
     }
 
+    // Break caught: a freshly created adjustment stays frozen on "Queued" in the UI until the page is
+    // manually reloaded, because nothing ever polls its job to a terminal state.
+    [Fact]
+    public void Newly_created_adjustment_updates_from_queued_to_succeeded_without_a_manual_reload()
+    {
+        var predictionId = Guid.NewGuid();
+        var adjustmentId = Guid.NewGuid();
+        var jobId = Guid.NewGuid();
+        var queued = AdjustmentSummary(predictionId, "SegmentSpecificGains") with { Id = adjustmentId, State = "Queued" };
+        var summaries = new List<PredictionAdjustmentSummaryResponse> { queued };
+        api.OnGetPredictionAsync = (_, _) => Task.FromResult<PredictionDetailResponse?>(SucceededPrediction(predictionId));
+        api.OnGetPacingStrategiesAsync = _ => Task.FromResult(EnabledCapabilities with { SegmentSpecificGains = true });
+        api.OnGetPredictionAdjustmentsAsync = (_, _) => Task.FromResult<IReadOnlyList<PredictionAdjustmentSummaryResponse>>(summaries.ToList());
+        api.OnGetPredictionAdjustmentAsync = (_, id, _) => Task.FromResult<PredictionAdjustmentDetailResponse?>(
+            AdjustmentDetail(summaries.Single(item => item.Id == id)));
+        api.OnCreatePredictionAdjustmentAsync = (_, _, _) =>
+            Task.FromResult(new PredictionAdjustmentSubmissionResponse(adjustmentId, jobId, predictionId));
+        api.Jobs.Enqueue(Job(jobId, "Queued", 0, "queued"));
+
+        var cut = Render<PredictionDetail>(parameters => parameters.Add(page => page.Id, predictionId));
+        cut.Find("[data-testid=segment-gains-add-rule]").Click();
+        cut.Find("[data-testid=segment-gains-min-0]").Input("0.02");
+        cut.Find("[data-testid=segment-gains-value-0]").Input("1.1");
+        cut.Find("[data-testid=segment-gains-submit]").Click();
+
+        cut.WaitForAssertion(() => Assert.Contains(
+            "Queued", cut.Find($"[data-testid=adjustment-card-state-{adjustmentId}]").TextContent, StringComparison.OrdinalIgnoreCase));
+
+        summaries[0] = queued with { State = "Succeeded", MovingSeconds = 6300 };
+        api.Jobs.Enqueue(Job(jobId, "Succeeded", 100, "completed"));
+        time.Advance(TimeSpan.FromSeconds(2));
+
+        cut.WaitForAssertion(() => Assert.Contains(
+            "Succeeded", cut.Find($"[data-testid=adjustment-card-state-{adjustmentId}]").TextContent, StringComparison.OrdinalIgnoreCase));
+    }
+
     // Break caught: the visualization keeps comparing a previously selected adjustment, or keeps
     // comparing at all once the selection is cleared.
     [Fact]
@@ -266,6 +307,24 @@ public sealed class PredictionAdjustmentShellTests : BunitContext
         PredictionAdjustmentSummaryResponse summary,
         IReadOnlyList<PredictionAdjustmentSegmentResponse> segments) => new(
         summary, JsonDocument.Parse("{}").RootElement, null, segments);
+
+    private static JobResponse Job(Guid jobId, string state, int progressPercent, string stage) => new(
+        jobId,
+        "AdjustPrediction",
+        Guid.NewGuid(),
+        state,
+        progressPercent,
+        stage,
+        1,
+        DateTimeOffset.Parse("2026-08-25T10:00:00Z", CultureInfo.InvariantCulture),
+        DateTimeOffset.Parse("2026-08-25T10:01:00Z", CultureInfo.InvariantCulture),
+        DateTimeOffset.Parse("2026-08-25T10:02:00Z", CultureInfo.InvariantCulture),
+        state.Equals("Succeeded", StringComparison.OrdinalIgnoreCase)
+            ? DateTimeOffset.Parse("2026-08-25T10:03:00Z", CultureInfo.InvariantCulture)
+            : null,
+        null,
+        null,
+        null);
 
     private static PredictionDetailResponse SucceededPrediction(Guid predictionId) => new(
         new PredictionSummaryResponse(

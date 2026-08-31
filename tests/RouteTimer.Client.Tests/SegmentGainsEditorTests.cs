@@ -81,7 +81,7 @@ public sealed class SegmentGainsEditorTests : BunitContext
             captured = Assert.IsType<SegmentSpecificGainsRequest>(request);
             return Task.FromResult(new PredictionAdjustmentSubmissionResponse(createdAdjustmentId, Guid.NewGuid(), id));
         };
-        Guid? notified = null;
+        PredictionAdjustmentSubmissionResponse? notified = null;
 
         var cut = Render<SegmentGainsEditor>(parameters => parameters
             .Add(editor => editor.PredictionId, predictionId)
@@ -97,7 +97,7 @@ public sealed class SegmentGainsEditorTests : BunitContext
         Assert.Equal(.02, rule.MinGradient);
         Assert.Equal(1.2, rule.Factor);
         Assert.Null(rule.DeltaWatts);
-        Assert.Equal(createdAdjustmentId, notified);
+        Assert.Equal(createdAdjustmentId, notified?.AdjustmentId);
     }
 
     // Break caught: a server field error for one rule is rendered against every rule, or none at all.

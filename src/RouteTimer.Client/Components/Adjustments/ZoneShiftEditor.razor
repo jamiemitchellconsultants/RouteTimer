@@ -107,7 +107,7 @@
     public Guid PredictionId { get; set; }
 
     [Parameter]
-    public EventCallback<Guid> OnCreated { get; set; }
+    public EventCallback<PredictionAdjustmentSubmissionResponse> OnCreated { get; set; }
 
     private string ThresholdMode { get; set; } = "model-inferred";
     private string? FtpWattsText { get; set; }
@@ -216,7 +216,7 @@
         {
             var request = new RpeZoneShiftRequest(ThresholdMode, ftpWatts, reqAssignments);
             var submission = await Api.CreatePredictionAdjustmentAsync(PredictionId, request, CancellationToken.None);
-            await OnCreated.InvokeAsync(submission.AdjustmentId);
+            await OnCreated.InvokeAsync(submission);
         }
         catch (ApiProblemException problem)
         {

@@ -47,7 +47,7 @@ public sealed class AdjustmentEditorTests : BunitContext
             captured = Assert.IsType<NpIfTargetRequest>(request);
             return Task.FromResult(new PredictionAdjustmentSubmissionResponse(createdId, Guid.NewGuid(), predictionId));
         };
-        Guid? notified = null;
+        PredictionAdjustmentSubmissionResponse? notified = null;
 
         var cut = Render<NpIfTargetEditor>(parameters => parameters
             .Add(editor => editor.PredictionId, predictionId)
@@ -62,7 +62,7 @@ public sealed class AdjustmentEditorTests : BunitContext
         Assert.Equal(0.92, captured.TargetIntensityFactor);
         Assert.Equal(275, captured.FtpWatts);
         Assert.Equal("additive", captured.Mode);
-        Assert.Equal(createdId, notified);
+        Assert.Equal(createdId, notified?.AdjustmentId);
     }
 
     [Fact]

@@ -102,7 +102,7 @@
     public Guid PredictionId { get; set; }
 
     [Parameter]
-    public EventCallback<Guid> OnCreated { get; set; }
+    public EventCallback<PredictionAdjustmentSubmissionResponse> OnCreated { get; set; }
 
     private List<RuleRow> Rules { get; } = [];
     private ApiProblemException? Problem { get; set; }
@@ -151,7 +151,7 @@
             var requests = Rules.Select(ToRequest).ToList();
             var submission = await Api.CreatePredictionAdjustmentAsync(PredictionId, new SegmentSpecificGainsRequest(requests), CancellationToken.None);
             Rules.Clear();
-            await OnCreated.InvokeAsync(submission.AdjustmentId);
+            await OnCreated.InvokeAsync(submission);
         }
         catch (ApiProblemException problem)
         {

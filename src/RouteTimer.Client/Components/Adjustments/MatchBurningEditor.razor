@@ -130,7 +130,7 @@
     public Guid PredictionId { get; set; }
 
     [Parameter]
-    public EventCallback<Guid> OnCreated { get; set; }
+    public EventCallback<PredictionAdjustmentSubmissionResponse> OnCreated { get; set; }
 
     private string? CpWattsText { get; set; }
     private string? WPrimeJoulesText { get; set; }
@@ -236,7 +236,7 @@
                 EnableRefinement);
 
             var submission = await Api.CreatePredictionAdjustmentAsync(PredictionId, request, CancellationToken.None);
-            await OnCreated.InvokeAsync(submission.AdjustmentId);
+            await OnCreated.InvokeAsync(submission);
         }
         catch (ApiProblemException problem)
         {

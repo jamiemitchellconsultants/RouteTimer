@@ -17,27 +17,27 @@
 
         @if (Capabilities.SegmentSpecificGains)
         {
-            <SegmentGainsEditor PredictionId="PredictionId" OnCreated="id => OnAdjustmentCreated.InvokeAsync(id)" />
+            <SegmentGainsEditor PredictionId="PredictionId" OnCreated="submission => OnAdjustmentCreated.InvokeAsync(submission)" />
         }
 
         @if (Capabilities.NpIfTarget)
         {
-            <NpIfTargetEditor PredictionId="PredictionId" OnCreated="id => OnAdjustmentCreated.InvokeAsync(id)" />
+            <NpIfTargetEditor PredictionId="PredictionId" OnCreated="submission => OnAdjustmentCreated.InvokeAsync(submission)" />
         }
 
         @if (Capabilities.TimeTarget)
         {
-            <TimeTargetEditor PredictionId="PredictionId" OnCreated="id => OnAdjustmentCreated.InvokeAsync(id)" />
+            <TimeTargetEditor PredictionId="PredictionId" OnCreated="submission => OnAdjustmentCreated.InvokeAsync(submission)" />
         }
 
         @if (Capabilities.RpeZoneShift)
         {
-            <ZoneShiftEditor PredictionId="PredictionId" OnCreated="id => OnAdjustmentCreated.InvokeAsync(id)" />
+            <ZoneShiftEditor PredictionId="PredictionId" OnCreated="submission => OnAdjustmentCreated.InvokeAsync(submission)" />
         }
 
         @if (Capabilities.VariableMatchBurning)
         {
-            <MatchBurningEditor PredictionId="PredictionId" OnCreated="id => OnAdjustmentCreated.InvokeAsync(id)" />
+            <MatchBurningEditor PredictionId="PredictionId" OnCreated="submission => OnAdjustmentCreated.InvokeAsync(submission)" />
         }
     }
 </section>
@@ -50,7 +50,7 @@
     public Guid PredictionId { get; set; }
 
     [Parameter]
-    public EventCallback<Guid> OnAdjustmentCreated { get; set; }
+    public EventCallback<PredictionAdjustmentSubmissionResponse> OnAdjustmentCreated { get; set; }
 
     private IReadOnlyList<string> EnabledStrategyNames => Capabilities is null
         ? []

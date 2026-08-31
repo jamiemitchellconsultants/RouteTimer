@@ -5,9 +5,11 @@
 @using RouteTimer.Client.Components
 @using RouteTimer.Client.Components.Adjustments
 @using RouteTimer.Client.Formatting
+@using RouteTimer.Client.Jobs
 @using RouteTimer.Contracts.Adjustments
 @using RouteTimer.Contracts.Predictions
 @inject IRouteTimerApiClient Api
+@inject JobPoller JobPoller
 
 <PageTitle>Prediction detail | RouteTimer</PageTitle>
 
@@ -452,10 +454,37 @@ else
         }
     }
 
-    private async Task AdjustmentCreatedAsync(Guid adjustmentId)
+    private async Task AdjustmentCreatedAsync(PredictionAdjustmentSubmissionResponse submission)
     {
         await LoadAdjustmentsAsync();
-        await SelectAdjustmentAsync(adjustmentId);
+        await SelectAdjustmentAsync(submission.AdjustmentId);
+        _ = PollAdjustmentJobAsync(submission.AdjustmentId, submission.JobId);
+    }
+
+    /// <summary>
+    /// Fire-and-forget, mirroring Predictions.razor's own PollPredictionJobAsync: without this, a
+    /// freshly created adjustment's card and comparison view would stay frozen on "Queued" until the
+    /// user manually reloads the page, because AdjustmentList/AdjustmentComparison never poll on their
+    /// own - only a prediction/adjustment this session itself just created has a job id to poll.
+    /// </summary>
+    private async Task PollAdjustmentJobAsync(Guid adjustmentId, Guid jobId)
+    {
+        try
+        {
+            await JobPoller.PollAsync(jobId, _ => Task.CompletedTask, pageCancellation.Token);
+        }
+        catch (OperationCanceledException) when (pageCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+
+        await LoadAdjustmentsAsync();
+        if (selectedAdjustmentId == adjustmentId)
+        {
+            await SelectAdjustmentAsync(adjustmentId);
+        }
+
+        await InvokeAsync(StateHasChanged);
     }
 
     private void BackToBaseline()

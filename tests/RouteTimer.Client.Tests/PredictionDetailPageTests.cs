@@ -4,6 +4,7 @@ using Bunit.JSInterop;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using RouteTimer.Client.Api;
+using RouteTimer.Client.Jobs;
 using RouteTimer.Client.Pages;
 using RouteTimer.Client.RouteBuilder;
 using RouteTimer.Client.Tests.Fakes;
@@ -19,6 +20,7 @@ public sealed class PredictionDetailPageTests : BunitContext
     public PredictionDetailPageTests()
     {
         Services.AddSingleton<IRouteTimerApiClient>(api);
+        Services.AddScoped<JobPoller>();
         Services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
