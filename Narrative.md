@@ -19,6 +19,7 @@ This document records what was asked, what was decided, why, and what followed.
 | [9](#entry-complete-pacing-strategy-adjustments-tasks-09-16) | 2026-08-31 | Complete pacing strategy adjustments tasks 09-16 | product | Complete tasks 14-16, restore the jobs-first lock order in baseline deletion, and floor a power-limited segment instead of failing the whole route. |
 | [10](#entry-enable-pacing-adjustments-by-default) | 2026-08-31 | Enable pacing adjustments by default | product | Enable the parent pacing-adjustment gate and all five delivered strategy gates in the default API configuration: segment-specific gains, NP/IF target, time target, RPE/zone shift, and variable match-burning. |
 | [11](#entry-docs-design-weather-aware-training-interpretation) | 2026-08-31 | docs: design weather-aware training interpretation | product | Use Open-Meteo archive observations for all existing and future training rides, persisted beside immutable activity evidence and resolved by route position and sample time. |
+| [12](#entry-docs-plan-ai-supported-route-predictions) | 2026-08-31 | docs: plan AI-supported route predictions | product | Adopt a local hybrid model that learns a bounded route-level effort multiplier in log space and then reruns the existing physics predictor. Keep the deterministic result as the permanent baseline and fallback. |
 
 ---
 
@@ -374,3 +375,23 @@ Rejected alternatives include scaling recorded watts, applying current weather t
 ## Consequences
 
 Representative route coordinates and times are disclosed to the configured Open-Meteo-compatible provider. Model publication waits for otherwise-eligible pending weather evidence while the previous model remains active. Failed or unavailable weather evidence is visible and excluded. Legacy predictions retain baseline downloads but must be recreated before forecast adjustment. The additive weather schema and historical observations require backup and operational monitoring, while forecast results remain ephemeral.
+
+---
+
+<a id="entry-docs-plan-ai-supported-route-predictions"></a>
+
+## Entry 12 — 2026-08-31 — docs: plan AI-supported route predictions
+
+*Kind: product. Status: accepted.*
+
+## Context
+
+RouteTimer currently predicts route time from a deterministic rider profile and cycling-physics model. With enough varied, weather-ready training rides, it can add rider-specific learning, but only if chronological validation, route-specific support, history freshness, fallback behaviour, privacy, and prediction provenance are designed together. The implementation sequence also needs enough explicit contracts and test boundaries for a smaller coding model to execute safely one task at a time.
+
+## Decision
+
+Adopt a local hybrid model that learns a bounded route-level effort multiplier in log space and then reruns the existing physics predictor. Keep the deterministic result as the permanent baseline and fallback. Gate publication through nested chronological whole-ride validation, gate serving through route similarity, and let Today fall back to AI Typical before deterministic prediction. Deliver the work as 15 ordered, independently committed and pushed tasks after the weather-aware training plan is complete. Reject hosted or opaque models, direct end-to-end time correction, random ride splitting, and a user-facing AI enable switch.
+
+## Consequences
+
+No runtime behaviour changes in this PR. The repository gains an executable implementation sequence with fixed feature/version contracts, immutable model and prediction provenance, local-only training, staged rollout, restrained readiness feedback, and explicit review checkpoints. Implementation becomes deliberately incremental and will create more small commits and migrations. AI support may remain unavailable for riders or routes without enough varied evidence, while deterministic prediction remains available. Algorithm thresholds are fixed for the first version and can be revised later only through a new recorded decision.
