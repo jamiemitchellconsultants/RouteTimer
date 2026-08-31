@@ -16,9 +16,6 @@ This document records what was asked, what was decided, why, and what followed.
 | [6](#entry-chore-remove-the-open-in-pacetracker-handoff) | 2026-08-29 | chore: remove the Open in PaceTracker handoff | product | Remove the endpoints, options and validator, the relay client, both invocation signers, the QR interop and component, the contracts, the six error codes, and every test covering them. `qrcode` and `esbuild` go with it. |
 | [7](#entry-docs-split-pacing-adjustment-plan-into-per-task-files) | 2026-08-29 | docs: split pacing adjustment plan into per-task files | product | Split the plan into a `README.md` (goal, architecture, constraints, target file map, task index, and execution checkpoints) plus one Markdown file per task, each self-contained with its own file list, TDD steps, and commit command. |
 | [8](#entry-docs-add-implementation-ready-pacing-tasks-9-16) | 2026-08-30 | docs: add implementation-ready pacing tasks 9-16 | product | Keep the original plan files unchanged and add a sibling refined-tasks directory. |
-| [9](#entry-fix-review-findings-in-pacing-tasks-9-16) | 2026-08-30 | fix: resolve review findings in pacing tasks 9-16 | correction | Fix the nine findings from the review of tasks 9-16 on the branch itself and close the pull request unmerged. |
-| [10](#entry-implement-adjustment-visualization-and-lifecycle-hardening) | 2026-08-30 | feat: add adjustment visualization overlays and lifecycle hardening | product | Deliver Task 14, which had not been started, and Task 15's missing verification; a published adjustment could be overwritten by a duplicate delivery. |
-| [11](#entry-complete-pacing-rollout-evidence-and-backtesting) | 2026-08-30 | docs: complete pacing rollout evidence and backtesting | product | Rewrite the rollout plan against the delivered append-only architecture and make the backtesting harness exercise a dense power model. |
 
 ---
 
@@ -292,89 +289,3 @@ Rejected alternatives were overwriting the historical task files, leaving algori
 ## Consequences
 
 A smaller local model can execute one checkpoint with explicit inputs, outputs, tests, files, commands, and stop conditions, reducing architectural drift and invented behavior. The refined plan is longer and records implementation choices that future code should either follow or deliberately correct. Original planning history remains available for comparison, and no production code or feature flag changes in this PR.
-
----
-
-<a id="entry-fix-review-findings-in-pacing-tasks-9-16"></a>
-
-## Entry 9 — 2026-08-30 — fix: resolve review findings in pacing tasks 9-16
-
-*Kind: correction. Status: accepted.*
-
-## Context
-
-A review of the tasks 9-16 delivery found nine problems. Three were unrelated to the feature and would have broken the repository on merge: `global.json` was downgraded from SDK 10.0.302 to 10.0.103, which with `rollForward: latestPatch` matches neither the SDK CI installs nor the `sdk:10.0.302` image the Dockerfile builds on; and narrative entry 8 was deleted from both `Narrative.md` and `narrative/entries/`.
-
-Four were behavioral. The four new Blazor editors were never referenced by `AdjustmentBuilder`, so every strategy except segment gains was listed as available but unreachable. `ZoneShiftDefinition` reordered its assignments so the all-segments fallback matched last, and the policy counted matches against that reordered list, so `AssignmentMatchCounts` was addressed by a different index than the caller submitted. Zone 1's lower-bound target resolved to a flat 5 W, a power the physics cannot hold above walking pace, so a Zone 1 / lower-bound request threw out of the replay and failed the whole adjustment. `BoundedPacingSearch` re-evaluated both bracket endpoints on every bisection pass, tripling the number of full route simulations.
-
-The last two were verification. `docs/pacing-strategies/backtesting.md` documented a five-fixture matrix as rollout evidence when only `flat-short` existed, and neither the NP/IF nor the match-burning handler was executed by any test - the two tests named for them asserted arithmetic performed in the test body.
-
-## Decision
-
-Fix all nine on the branch and close the pull request rather than iterate on it.
-
-Precedence and reporting are now separate concerns: `ZoneShiftDefinition` keeps assignments in submitted order and exposes `MatchOrder`, the evaluation sequence the policy walks, so counts stay addressable by the submitted index while the fallback still matches last. Zone targets are floored at `MinimumTargetWatts` - 30% of threshold, never below the 10 W floor the rest of the adjustment stack uses - which is reachable on a climb and only ever binds on zone 1. `BoundedPacingSearch` carries each endpoint's evaluated value forward from the grid sweep, so a bisection pass costs one evaluation instead of three.
-
-The fixture matrix is defined once in `PacingFixtures` and every strategy now runs on every fixture, with the two tautological tests replaced by ones that exercise the handlers. The zone-1 and match-count fixes each carry a regression test that was confirmed to fail against the previous behavior.
-
-## Consequences
-
-The branch builds against the SDK CI and the Dockerfile actually install, the narrative history is intact, and the four strategies are reachable from the prediction detail page. Backtesting is 5 strategies x 5 fixtures rather than 1 x 1, and the documented rollout evidence describes tests that exist. Zone 1's reported lower boundary stays 0 W for classification while its *target* is floored, so a rider coasting below the floor is still classified in zone 1 - the floor governs what the strategy asks for, not how power is banded.
-
----
-
-<a id="entry-implement-adjustment-visualization-and-lifecycle-hardening"></a>
-
-## Entry 10 — 2026-08-30 — feat: add adjustment visualization overlays and lifecycle hardening
-
-*Kind: product. Status: accepted.*
-
-## Context
-
-The tasks 9-16 delivery claimed the whole range. Tasks 9 through 13 were there. Task 14 was not started at all: no visualization file was touched, so an adjustment could be created and stored but never seen against its baseline. Task 15 had its three production changes - the stored-JSON byte guard, annotation validation at the job boundary, and cancelling child jobs when a baseline is deleted - but none of its verification: the failure-test file was never created and all five listed test files were untouched.
-
-Writing that verification turned up two defects the production code still had. `SegmentGainsRequestMapper` dereferenced a null `rules` collection, so a request that simply omitted it returned 500 rather than a field error - the one mapper that had not been given the null guard its siblings carry. And `TryPublishAsync` guarded only on the job still being Running with a matching worker, which is exactly the state a duplicate delivery arrives in, so a second delivery overwrote an already-succeeded child. That contradicts Task 15's own acceptance criterion that completed children are never mutated.
-
-## Decision
-
-Implement Task 14 as specified, in its three checkpoints, touching only the nine files it lists. Alignment happens once in C#: `PredictionVisualization` sorts the adjustment, requires exact sequence equality, and builds one dictionary, so the readout and the charts never join inside a render loop. A mismatch keeps the baseline map, charts, and readout and passes an empty list on, so no comparison interop runs. The baseline-only interop call keeps its four arguments byte-for-byte and comparison uses a new five-argument export.
-
-Comparison downsampling keeps the ends and both sides of every zone or phase change, and keeps all mandatory points even when they exceed the 1500-point cap - a semantic boundary is worth more than the display limit. Because downsampling can drop the selected sequence, the chart cursor now falls back to the nearest surviving point rather than snapping to the route start.
-
-For Task 15, add the verification and fix what it exposed: null and null-entried collections become field errors, and a terminal child rejects republication instead of being overwritten. Two rows of the required-state table were already covered by Tasks 1-8 tests and were left alone. `PredictionDeletionService` is a pass-through with full coverage, so the deletion behaviour is pinned in the repository where it lives rather than duplicated at the service.
-
-## Consequences
-
-An adjustment is now visible: baseline and adjustment power and speed as two lines, with deltas, segment-time deltas, and zone, phase, and W-prime annotations in one tooltip block, and the same figures in the selected-segment readout. Elevation, gradient, geometry, exports, and the map stay baseline-primary.
-
-The lifecycle is pinned where it was only asserted: a stored strategy that no longer parses, is too large, or fails its constructor is a strategy problem; a search with no candidate is a result problem; cancellation stays a cancellation. A baseline delete cancels every active child job and leaves completed ones for audit. A baseline that succeeded before the adjustments migration existed can still be adjusted from its retained segments.
-
-Two behaviours changed that were not merely untested: a duplicate delivery now returns false, and a request omitting a collection now gets a 400. Anything that depended on republishing over a succeeded child will stop working, which is the intent.
-
----
-
-<a id="entry-complete-pacing-rollout-evidence-and-backtesting"></a>
-
-## Entry 11 — 2026-08-30 — docs: complete pacing rollout evidence and backtesting
-
-*Kind: product. Status: accepted.*
-
-## Context
-
-Task 16 had produced its two new files but neither was finished, and the file it was meant to correct was untouched. `06-cross-cutting-rollout.md` still described the design that the accepted append-only correction replaced: a strategy carried on prediction submission, a `POST /api/predictions/paced` endpoint, an `IncludeBaseline` flag, a `prediction_adjusted_segments` table, and strategy columns on `predictions`. An operator following it would have looked for endpoints and columns that do not exist.
-
-The backtesting harness had a worse problem than being incomplete. Its rider model was `new PowerModel([], 200)` - an empty band list. `PowerLookup.GetWatts` short-circuits to a single global figure when a model has no bands, so every fixture rode at a flat 200 W on a 9% climb and a -5% descent alike, every segment was flagged extrapolated, and every route's confidence collapsed to Low. Gradient-dependent power, band interpolation, and confidence blending were never exercised by any backtest, on any fixture.
-
-## Decision
-
-Rewrite the rollout document against what shipped, and say plainly at the top that it replaced its own earlier contents so the superseded design is not mistaken for a live option. Record the seven-stage enable and rollback order, the operational signals with their units and stable diagnostic codes, and an explicit split of what may and may not be logged - the principle being that an operator needs to know which adjustment behaved how, never what the rider asked for.
-
-Give the fixtures a dense 40-cell grid where watts rise with gradient and fall with elapsed duration, and add a test asserting the grid is dense and behaves that way, so the harness cannot quietly degenerate again. Add the invariants the plan named but the harness did not check: rerun determinism compared field-by-field, an unchanged baseline, a report that canonicalizes without NaN or Infinity, stable algorithm versions, both search evaluation caps, match-burning's two-replay refinement cap, and the direction cases for each strategy.
-
-The matrix's `flat-long` row asked for both 120 x 100 m and a duration over 30 minutes. Those are not simultaneously reachable: 12 km in over 30 minutes needs an average under 6.7 m/s, which no plausible typical power produces for this rider. The purpose of that row was to reach past the model's first duration band, so `mountainous` carries it instead - its segment count and profile are as specified and its segment length, which the matrix does not constrain, is set to 250 m. The deviation is recorded in `backtesting.md` rather than resolved by quietly weakening either constraint.
-
-## Consequences
-
-The rollout document can be followed. The backtesting matrix is 5 strategies x 5 route shapes against a model that actually varies with the terrain, and the documented fixture table is asserted by tests, so evidence and harness cannot drift apart.
-
-Two things this deliberately does not do. The historical gates stay unfilled rows marked "Not yet run" - fabricating them as CI would be worse than their absence, so the evidence table names a reviewer and a commit and waits. And the checkpoint's own `git diff --exit-code main...HEAD -- Narrative.md narrative/entries` gate now fails, because this branch adds narrative entries: the task asked for those files to stay untouched, while the repository's standing instruction is to record each session that changes behaviour. The standing instruction won; this entry is part of why the gate trips.
