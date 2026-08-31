@@ -37,7 +37,8 @@ public sealed partial class PredictionAdjustmentEndpointTests
     {
         await using var app = CreateRiderApp()
             .WithSetting("PacingStrategies:Enabled", "true")
-            .WithSetting("PacingStrategies:TimeTarget", "true");
+            .WithSetting("PacingStrategies:TimeTarget", "true")
+            .WithSetting("PacingStrategies:NpIfTarget", "false");
         using var client = app.CreateClient();
 
         var response = await client.GetFromJsonAsync<PacingStrategyCapabilityResponse>("/api/pacing-strategies");
@@ -49,11 +50,31 @@ public sealed partial class PredictionAdjustmentEndpointTests
         Assert.Equal(65536, response.MaximumDefinitionBytes);
     }
 
-    // Break caught: the parent flag defaulting off is not actually enforced by the endpoint.
+    // Break caught: the default deployment configuration leaves pacing adjustments or one of its
+    // delivered strategies unavailable, so the UI continues to hide part of the feature.
     [Fact]
-    public async Task Create_rejects_every_strategy_when_the_parent_flag_is_disabled_by_default()
+    public async Task Capabilities_enable_every_delivered_pacing_strategy_by_default()
     {
         await using var app = CreateRiderApp();
+        using var client = app.CreateClient();
+
+        var response = await client.GetFromJsonAsync<PacingStrategyCapabilityResponse>("/api/pacing-strategies");
+
+        Assert.NotNull(response);
+        Assert.True(response.Enabled);
+        Assert.True(response.SegmentSpecificGains);
+        Assert.True(response.NpIfTarget);
+        Assert.True(response.TimeTarget);
+        Assert.True(response.RpeZoneShift);
+        Assert.True(response.VariableMatchBurning);
+    }
+
+    // Break caught: explicitly disabling the parent flag is not actually enforced by the endpoint.
+    [Fact]
+    public async Task Create_rejects_every_strategy_when_the_parent_flag_is_disabled()
+    {
+        await using var app = CreateRiderApp()
+            .WithSetting("PacingStrategies:Enabled", "false");
         var predictionId = await SeedSucceededBaselineAsync(app.Services);
         using var client = app.CreateClient();
 
@@ -70,7 +91,8 @@ public sealed partial class PredictionAdjustmentEndpointTests
     public async Task Create_rejects_a_strategy_disabled_individually_even_when_the_parent_is_enabled()
     {
         await using var app = CreateRiderApp()
-            .WithSetting("PacingStrategies:Enabled", "true");
+            .WithSetting("PacingStrategies:Enabled", "true")
+            .WithSetting("PacingStrategies:TimeTarget", "false");
         var predictionId = await SeedSucceededBaselineAsync(app.Services);
         using var client = app.CreateClient();
 
